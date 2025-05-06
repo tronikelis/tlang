@@ -131,11 +131,7 @@ impl Lexer {
     }
 
     fn peek_char(&mut self) -> Option<char> {
-        if self.i >= self.code.len() {
-            return None;
-        }
-
-        Some(self.code[self.i])
+        self.code.get(self.i).map(|v| *v)
     }
 
     fn skip_whitespace(&mut self) {
