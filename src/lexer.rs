@@ -19,7 +19,7 @@ pub enum Token {
     POpen,
     Plus,
     Type(Type),
-    Immediate(Type),
+    Literal(Type),
 }
 
 const CONTROL_CHAR: [char; 5] = [')', '(', '}', '{', ','];
@@ -111,7 +111,7 @@ impl Lexer {
                 if let Some(ch) = identifier.chars().next() {
                     if ch >= '0' && ch <= '9' {
                         let int: isize = identifier.parse()?;
-                        tokens.push(Token::Immediate(Type::Int(Some(int))));
+                        tokens.push(Token::Literal(Type::Int(Some(int))));
                         continue;
                     }
                 }
@@ -197,12 +197,12 @@ mod tests {
             Token::Identifier(String::from("a")),
             Token::Type(Type::Int(None)),
             Token::Equals,
-            Token::Immediate(Type::Int(Some(0))),
+            Token::Literal(Type::Int(Some(0))),
             Token::Let,
             Token::Identifier(String::from("b")),
             Token::Type(Type::Int(None)),
             Token::Equals,
-            Token::Immediate(Type::Int(Some(1))),
+            Token::Literal(Type::Int(Some(1))),
             Token::Let,
             Token::Identifier(String::from("c")),
             Token::Type(Type::Int(None)),
