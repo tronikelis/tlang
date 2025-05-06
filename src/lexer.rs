@@ -1,9 +1,13 @@
+use std::num::ParseIntError;
+
 use anyhow::Result;
 
+#[derive(Debug, PartialEq)]
 enum Type {
     Int(Option<isize>),
 }
 
+#[derive(Debug, PartialEq)]
 enum Token {
     Return,
     CClose,
@@ -19,6 +23,8 @@ enum Token {
     Type(Type),
     Immediate(Type),
 }
+
+const CONTROL_CHAR: [char; 5] = [')', '(', '}', '{', ','];
 
 pub struct Lexer {
     code: Vec<char>,
@@ -37,7 +43,7 @@ impl Lexer {
         let mut tokens: Vec<Token> = Vec::new();
 
         while self.i < self.code.len() {
-            self.skip_whitespace();
+            dbg!(self.i, self.code[self.i]);
 
             match self.peek_next_word().as_str() {
                 "fn" => {
@@ -51,63 +57,96 @@ impl Lexer {
                     continue;
                 }
                 "int" => {
-                    let int: isize = self.read_next_word().parse()?;
-                    tokens.push(Token::Type(Type::Int(Some(int))));
+                    let int: Result<isize, ParseIntError> = self.read_next_word().parse();
+                    tokens.push(Token::Type(Type::Int(int.ok())));
+                    continue;
+                }
+                "return" => {
+                    tokens.push(Token::Return);
+                    self.read_next_word();
                     continue;
                 }
                 _ => {}
             }
 
-            match self.peek_char() {
-                '(' => {
-                    tokens.push(Token::POpen);
-                    self.read_char();
-                    continue;
+            if let Some(ch) = self.peek_char() {
+                match ch {
+                    '(' => {
+                        tokens.push(Token::POpen);
+                        self.next();
+                        continue;
+                    }
+                    ')' => {
+                        tokens.push(Token::PClose);
+                        self.next();
+                        continue;
+                    }
+                    '=' => {
+                        tokens.push(Token::Equals);
+                        self.next();
+                        continue;
+                    }
+                    '+' => {
+                        tokens.push(Token::Plus);
+                        self.next();
+                        continue;
+                    }
+                    ',' => {
+                        tokens.push(Token::Comma);
+                        self.next();
+                        continue;
+                    }
+                    '{' => {
+                        tokens.push(Token::COpen);
+                        self.next();
+                        continue;
+                    }
+                    '}' => {
+                        tokens.push(Token::CClose);
+                        self.next();
+                        continue;
+                    }
+                    _ => {}
                 }
-                ')' => {
-                    tokens.push(Token::PClose);
-                    self.read_char();
-                    continue;
-                }
-                '=' => {
-                    tokens.push(Token::Equals);
-                    self.read_char();
-                    continue;
-                }
-                '+' => {
-                    tokens.push(Token::Plus);
-                    self.read_char();
-                    continue;
-                }
-                _ => {}
             }
 
-            tokens.push(Token::Identifier(self.read_next_word()));
+            let identifier = self.read_next_word();
+            if identifier.len() > 0 {
+                tokens.push(Token::Identifier(identifier));
+                continue;
+            }
+
+            self.next();
         }
 
         Ok(tokens)
     }
 
-    fn read_char(&mut self) -> char {
-        let ch = self.code[self.i];
+    fn next(&mut self) {
         self.i += 1;
-        ch
     }
 
-    fn peek_char(&mut self) -> char {
-        let ch = self.read_char();
-        self.i -= 1;
-        ch
+    fn peek_char(&mut self) -> Option<char> {
+        if self.i >= self.code.len() {
+            return None;
+        }
+
+        Some(self.code[self.i])
     }
 
     fn skip_whitespace(&mut self) {
-        while self.read_char().is_whitespace() {}
-        self.i -= 1;
+        while let Some(ch) = self.peek_char() {
+            if !ch.is_whitespace() {
+                break;
+            }
+
+            self.next();
+        }
     }
 
     fn peek_next_word(&mut self) -> String {
         let w = self.read_next_word();
-        self.i -= w.len() + 1;
+        self.i -= w.len();
         w
     }
 
@@ -116,15 +155,60 @@ impl Lexer {
         self.skip_whitespace();
 
         loop {
-            let ch = self.read_char();
+            if let Some(ch) = self.peek_char() {
+                if ch.is_whitespace() || CONTROL_CHAR.contains(&ch) {
+                    break;
+                }
 
-            if ch.is_whitespace() {
+                self.next();
+                word.push(ch);
+            } else {
                 break;
             }
-
-            word.push(ch);
         }
 
         word
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple() {
+        let code = String::from(
+            "
+                fn add(a int, b int) int {
+                    return a + b
+                }
+
+                fn main() {
+                    let a int = 0
+                    let b int = 1
+
+                    let c int = add(a, b) + b
+                }
+            ",
+        );
+
+        let tokens = Vec::from([
+            Token::Function,
+            Token::Identifier(String::from("add")),
+            Token::POpen,
+            Token::Identifier(String::from("a")),
+            Token::Type(Type::Int(None)),
+            Token::Comma,
+            Token::Identifier(String::from("b")),
+            Token::PClose,
+            Token::Type(Type::Int(None)),
+            Token::COpen,
+            Token::Return,
+            Token::Identifier(String::from("a")),
+            Token::Plus,
+            Token::Identifier(String::from("b")),
+        ]);
+
+        assert_eq!(Lexer::new(&code).run().unwrap(), tokens);
     }
 }
