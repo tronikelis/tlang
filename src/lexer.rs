@@ -1,14 +1,12 @@
-use std::num::ParseIntError;
-
 use anyhow::Result;
 
 #[derive(Debug, PartialEq)]
-enum Type {
+pub enum Type {
     Int(Option<isize>),
 }
 
 #[derive(Debug, PartialEq)]
-enum Token {
+pub enum Token {
     Return,
     CClose,
     COpen,
@@ -43,8 +41,6 @@ impl Lexer {
         let mut tokens: Vec<Token> = Vec::new();
 
         while self.i < self.code.len() {
-            dbg!(self.i, self.code[self.i]);
-
             match self.peek_next_word().as_str() {
                 "fn" => {
                     tokens.push(Token::Function);
@@ -57,8 +53,8 @@ impl Lexer {
                     continue;
                 }
                 "int" => {
-                    let int: Result<isize, ParseIntError> = self.read_next_word().parse();
-                    tokens.push(Token::Type(Type::Int(int.ok())));
+                    tokens.push(Token::Type(Type::Int(None)));
+                    self.read_next_word();
                     continue;
                 }
                 "return" => {
@@ -112,6 +108,14 @@ impl Lexer {
 
             let identifier = self.read_next_word();
             if identifier.len() > 0 {
+                if let Some(ch) = identifier.chars().next() {
+                    if ch >= '0' && ch <= '9' {
+                        let int: isize = identifier.parse()?;
+                        tokens.push(Token::Immediate(Type::Int(Some(int))));
+                        continue;
+                    }
+                }
+
                 tokens.push(Token::Identifier(identifier));
                 continue;
             }
@@ -179,34 +183,38 @@ mod tests {
     fn simple() {
         let code = String::from(
             "
-                fn add(a int, b int) int {
-                    return a + b
-                }
-
                 fn main() {
                     let a int = 0
                     let b int = 1
-
-                    let c int = add(a, b) + b
+                    let c int = a + b
                 }
             ",
         );
 
         let tokens = Vec::from([
             Token::Function,
-            Token::Identifier(String::from("add")),
+            Token::Identifier(String::from("main")),
             Token::POpen,
+            Token::PClose,
+            Token::COpen,
+            Token::Let,
             Token::Identifier(String::from("a")),
             Token::Type(Type::Int(None)),
-            Token::Comma,
+            Token::Equals,
+            Token::Immediate(Type::Int(Some(0))),
+            Token::Let,
             Token::Identifier(String::from("b")),
-            Token::PClose,
             Token::Type(Type::Int(None)),
-            Token::COpen,
-            Token::Return,
+            Token::Equals,
+            Token::Immediate(Type::Int(Some(1))),
+            Token::Let,
+            Token::Identifier(String::from("c")),
+            Token::Type(Type::Int(None)),
+            Token::Equals,
             Token::Identifier(String::from("a")),
             Token::Plus,
             Token::Identifier(String::from("b")),
+            Token::CClose,
         ]);
 
         assert_eq!(Lexer::new(&code).run().unwrap(), tokens);
