@@ -1,6 +1,7 @@
 mod vm;
 use vm::Instruction;
 
+mod ast;
 mod lexer;
 
 fn main() {

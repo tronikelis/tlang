@@ -2,7 +2,13 @@ use anyhow::Result;
 
 #[derive(Debug, PartialEq)]
 pub enum Type {
-    Int(Option<isize>),
+    Int,
+    Void,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Literal {
+    Int(isize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -19,7 +25,7 @@ pub enum Token {
     POpen,
     Plus,
     Type(Type),
-    Literal(Type),
+    Literal(Literal),
 }
 
 const CONTROL_CHAR: [char; 5] = [')', '(', '}', '{', ','];
@@ -40,7 +46,7 @@ impl Lexer {
     pub fn run(&mut self) -> Result<Vec<Token>> {
         let mut tokens: Vec<Token> = Vec::new();
 
-        while self.i < self.code.len() {
+        while let Some(_) = self.peek_char() {
             match self.peek_next_word().as_str() {
                 "fn" => {
                     tokens.push(Token::Function);
@@ -53,7 +59,7 @@ impl Lexer {
                     continue;
                 }
                 "int" => {
-                    tokens.push(Token::Type(Type::Int(None)));
+                    tokens.push(Token::Type(Type::Int));
                     self.read_next_word();
                     continue;
                 }
@@ -111,7 +117,7 @@ impl Lexer {
                 if let Some(ch) = identifier.chars().next() {
                     if ch >= '0' && ch <= '9' {
                         let int: isize = identifier.parse()?;
-                        tokens.push(Token::Literal(Type::Int(Some(int))));
+                        tokens.push(Token::Literal(Literal::Int(int)));
                         continue;
                     }
                 }
@@ -195,17 +201,17 @@ mod tests {
             Token::COpen,
             Token::Let,
             Token::Identifier(String::from("a")),
-            Token::Type(Type::Int(None)),
+            Token::Type(Type::Int),
             Token::Equals,
-            Token::Literal(Type::Int(Some(0))),
+            Token::Literal(Literal::Int(0)),
             Token::Let,
             Token::Identifier(String::from("b")),
-            Token::Type(Type::Int(None)),
+            Token::Type(Type::Int),
             Token::Equals,
-            Token::Literal(Type::Int(Some(1))),
+            Token::Literal(Literal::Int(1)),
             Token::Let,
             Token::Identifier(String::from("c")),
-            Token::Type(Type::Int(None)),
+            Token::Type(Type::Int),
             Token::Equals,
             Token::Identifier(String::from("a")),
             Token::Plus,
