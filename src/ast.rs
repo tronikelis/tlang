@@ -179,18 +179,24 @@ impl<'a> AstCreator<'a> {
 
         while let Some(token) = self.peek_token(0) {
             if let lexer::Token::PClose = token {
+                self.next();
                 break;
             }
 
             arguments.push(self.parse_expression()?);
 
             match self.peek_token_err(0)? {
-                lexer::Token::Comma => continue,
-                lexer::Token::PClose => break,
+                lexer::Token::PClose => {
+                    self.next();
+                    break;
+                }
+                lexer::Token::Comma => {
+                    self.next();
+                    continue;
+                }
                 _ => return Err(anyhow!("parse_function_call: unexpected token")),
             }
         }
-        self.next();
 
         Ok(FunctionCall {
             arguments,
@@ -238,23 +244,18 @@ impl<'a> AstCreator<'a> {
         self.expect_next_token(lexer::Token::Let)?;
         self.next();
 
-        let identifier: String;
-        let _type: lexer::Type;
-        let expression: Expression;
-
-        if let lexer::Token::Identifier(v) = self.peek_token_err(0)? {
-            identifier = v.clone();
-        } else {
-            return Err(anyhow!("parse_variable_declaration: expected Identifier"));
-        }
+        let identifier = match self.peek_token_err(0)? {
+            lexer::Token::Identifier(v) => v.clone(),
+            _ => return Err(anyhow!("parse_variable_declaration: expected Identifier")),
+        };
         self.next();
 
-        _type = self.parse_type()?;
+        let _type = self.parse_type()?;
 
         self.expect_next_token(lexer::Token::Equals)?;
         self.next();
 
-        expression = self.parse_expression()?;
+        let expression = self.parse_expression()?;
 
         Ok(VariableDeclaration {
             identifier,
