@@ -84,9 +84,7 @@ impl<'a> AstCreator<'a> {
     fn parse_block(&mut self) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
 
-        if *self.peek_token_err(0)? != lexer::Token::COpen {
-            return Err(anyhow!("parse_block: expected COpen"));
-        }
+        self.expect_next_token(lexer::Token::COpen)?;
         self.next();
 
         while let Some(token) = self.peek_token(0) {
@@ -132,16 +130,12 @@ impl<'a> AstCreator<'a> {
     }
 
     fn parse_function(&mut self) -> Result<Function> {
-        if *self.peek_token_err(0)? != lexer::Token::Function {
-            return Err(anyhow!("parse_function: called on non Function token"));
-        }
+        self.expect_next_token(lexer::Token::Function)?;
         self.next();
 
         let identifier = self.parse_identifier()?;
 
-        if *self.peek_token_err(0)? != lexer::Token::POpen {
-            return Err(anyhow!("parse_function: expected POpen"));
-        }
+        self.expect_next_token(lexer::Token::POpen)?;
         self.next();
 
         let mut function_arguments: Vec<FunctionArgument> = Vec::new();
@@ -244,11 +238,7 @@ impl<'a> AstCreator<'a> {
         self.expect_next_token(lexer::Token::Let)?;
         self.next();
 
-        let identifier = match self.peek_token_err(0)? {
-            lexer::Token::Identifier(v) => v.clone(),
-            _ => return Err(anyhow!("parse_variable_declaration: expected Identifier")),
-        };
-        self.next();
+        let identifier = self.parse_identifier()?;
 
         let _type = self.parse_type()?;
 
