@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     Int,
     Void,
@@ -11,7 +11,7 @@ pub enum Literal {
     Int(isize),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Return,
     CClose,

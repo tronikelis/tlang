@@ -7,15 +7,6 @@ struct VariableDeclaration {
     expression: Expression,
 }
 
-impl VariableDeclaration {
-    fn new(identifier: String, expression: Expression) -> Self {
-        Self {
-            identifier,
-            expression,
-        }
-    }
-}
-
 struct FunctionArgument {
     identifier: String,
     _type: lexer::Type,
@@ -57,61 +48,136 @@ impl<'a> AstCreator<'a> {
 
         while let Some(_) = self.peek_token() {
             nodes.push(self.parse_token()?);
-            self.next();
         }
 
         Ok(Ast { nodes })
     }
 
     fn parse_token(&mut self) -> Result<Node> {
-        if let Some(token) = self.peek_token() {
-            match token {
-                lexer::Token::Let => Ok(Node::VariableDeclaration(
-                    self.parse_variable_declaration()?,
-                )),
-                lexer::Token::Function => Ok(Node::Function(self.parse_function()?)),
-                _ => Err(anyhow!("todo")),
+        match self.peek_token_err()? {
+            lexer::Token::Let => Ok(Node::VariableDeclaration(
+                self.parse_variable_declaration()?,
+            )),
+            lexer::Token::Function => Ok(Node::Function(self.parse_function()?)),
+            _ => return Err(anyhow!("parse_token: token not supported")),
+        }
+    }
+
+    fn parse_block(&mut self) -> Result<Vec<Node>> {
+        let mut nodes = Vec::new();
+
+        if *self.peek_token_err()? != lexer::Token::COpen {
+            return Err(anyhow!("parse_block: expected COpen"));
+        }
+        self.next();
+
+        while let Some(token) = self.peek_token() {
+            if let lexer::Token::CClose = token {
+                self.next();
+                break;
             }
-        } else {
-            Err(anyhow!("todo"))
+
+            nodes.push(self.parse_token()?);
+        }
+
+        Ok(nodes)
+    }
+
+    fn parse_identifier(&mut self) -> Result<String> {
+        match self.peek_token_err()?.clone() {
+            lexer::Token::Identifier(v) => {
+                self.next();
+                Ok(v.clone())
+            }
+            _ => Err(anyhow!("parse_identifier: expected Identifier")),
+        }
+    }
+
+    fn parse_type(&mut self) -> Result<lexer::Type> {
+        match self.peek_token_err()?.clone() {
+            lexer::Token::Type(v) => {
+                self.next();
+                Ok(v.clone())
+            }
+            _ => Err(anyhow!("parse_type: expected Type")),
         }
     }
 
     fn parse_function(&mut self) -> Result<Function> {
-        todo!()
+        if *self.peek_token_err()? != lexer::Token::Function {
+            return Err(anyhow!("parse_function: called on non Function token"));
+        }
+        self.next();
+
+        let identifier = self.parse_identifier()?;
+
+        if *self.peek_token_err()? != lexer::Token::POpen {
+            return Err(anyhow!("parse_function: expected POpen"));
+        }
+        self.next();
+
+        let mut function_arguments: Vec<FunctionArgument> = Vec::new();
+
+        while let Some(token) = self.peek_token() {
+            if let lexer::Token::PClose = token {
+                self.next();
+                break;
+            }
+
+            function_arguments.push(FunctionArgument {
+                identifier: self.parse_identifier()?,
+                _type: self.parse_type()?,
+            });
+        }
+
+        let return_type = self.parse_type()?;
+        let body = self.parse_block()?;
+
+        Ok(Function {
+            identifier,
+            arguments: function_arguments,
+            return_type,
+            body,
+        })
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
-        if let Some(token) = self.peek_token() {
-            match token {
-                lexer::Token::Identifier(v) => Ok(Expression::Identifier(v.clone())),
-                lexer::Token::Literal(v) => Ok(Expression::Literal(v.clone())),
-                _ => Err(anyhow!("todo")),
+        match self.peek_token_err()?.clone() {
+            lexer::Token::Identifier(v) => {
+                self.next();
+                Ok(Expression::Identifier(v.clone()))
             }
-        } else {
-            Err(anyhow!("todo"))
+            lexer::Token::Literal(v) => {
+                self.next();
+                Ok(Expression::Literal(v.clone()))
+            }
+            _ => Err(anyhow!("parse_expression: wrong token")),
         }
     }
 
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration> {
-        self.next();
+        if *self.peek_token_err()? != lexer::Token::Let {
+            return Err(anyhow!("parse_variable_declaration: expected Let token"));
+        }
 
         let identifier: String;
         let expression: Expression;
 
-        if let Some(token) = self.peek_token() {
-            match token {
-                lexer::Token::Identifier(v) => identifier = v.clone(),
-                _ => return Err(anyhow!("variable declaration, expected Identifier")),
-            }
+        if let lexer::Token::Identifier(v) = self.peek_token_err()? {
+            identifier = v.clone();
         } else {
-            return Err(anyhow!("variable declaration expected next token to exist"));
+            return Err(anyhow!("parse_variable_declaration: expected Identifier"));
         }
 
         self.next();
         expression = self.parse_expression()?;
 
-        Ok(VariableDeclaration::new(identifier, expression))
+        self.next();
+
+        Ok(VariableDeclaration {
+            identifier,
+            expression,
+        })
     }
 
     fn next(&mut self) {
@@ -120,6 +186,11 @@ impl<'a> AstCreator<'a> {
 
     fn peek_token(&self) -> Option<&lexer::Token> {
         self.tokens.get(self.i)
+    }
+
+    fn peek_token_err(&self) -> Result<&lexer::Token> {
+        self.peek_token()
+            .ok_or(anyhow!("peek_token_err: expected Some"))
     }
 }
 
