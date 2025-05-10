@@ -2,17 +2,20 @@ use anyhow::{anyhow, Result};
 
 use super::lexer;
 
+#[derive(Debug)]
 struct VariableDeclaration {
     identifier: String,
     expression: Expression,
     _type: lexer::Type,
 }
 
+#[derive(Debug)]
 struct FunctionArgument {
     identifier: String,
     _type: lexer::Type,
 }
 
+#[derive(Debug)]
 struct Function {
     identifier: String,
     arguments: Vec<FunctionArgument>,
@@ -20,16 +23,19 @@ struct Function {
     body: Vec<Node>,
 }
 
+#[derive(Debug)]
 struct Addition {
     left: Expression,
     right: Expression,
 }
 
+#[derive(Debug)]
 struct FunctionCall {
     identifier: String,
     arguments: Vec<Expression>,
 }
 
+#[derive(Debug)]
 enum Expression {
     Literal(lexer::Literal),
     Identifier(String),
@@ -37,12 +43,14 @@ enum Expression {
     FunctionCall(FunctionCall),
 }
 
+#[derive(Debug)]
 enum Node {
     VariableDeclaration(VariableDeclaration),
     Function(Function),
     Return(Expression),
 }
 
+#[derive(Debug)]
 struct Ast {
     pub nodes: Vec<Node>,
 }
@@ -60,8 +68,8 @@ impl<'a> AstCreator<'a> {
     fn parse(&mut self) -> Result<Ast> {
         let mut nodes: Vec<Node> = Vec::new();
 
-        while let Ok(token) = self.parse_token() {
-            nodes.push(token);
+        while let Some(_) = self.peek_token(0) {
+            nodes.push(self.parse_token()?);
         }
 
         Ok(Ast { nodes })
@@ -77,7 +85,7 @@ impl<'a> AstCreator<'a> {
                 self.next();
                 Ok(Node::Return(self.parse_expression()?))
             }
-            _ => return Err(anyhow!("parse_token: token not supported")),
+            token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
         }
     }
 
@@ -141,9 +149,15 @@ impl<'a> AstCreator<'a> {
         let mut function_arguments: Vec<FunctionArgument> = Vec::new();
 
         while let Some(token) = self.peek_token(0) {
-            if let lexer::Token::PClose = token {
-                self.next();
-                break;
+            match token {
+                lexer::Token::PClose => {
+                    self.next();
+                    break;
+                }
+                lexer::Token::Comma => {
+                    self.next();
+                }
+                _ => {}
             }
 
             function_arguments.push(FunctionArgument {
@@ -172,24 +186,18 @@ impl<'a> AstCreator<'a> {
         let mut arguments = Vec::new();
 
         while let Some(token) = self.peek_token(0) {
-            if let lexer::Token::PClose = token {
-                self.next();
-                break;
-            }
-
-            arguments.push(self.parse_expression()?);
-
-            match self.peek_token_err(0)? {
+            match token {
                 lexer::Token::PClose => {
                     self.next();
                     break;
                 }
                 lexer::Token::Comma => {
                     self.next();
-                    continue;
                 }
-                _ => return Err(anyhow!("parse_function_call: unexpected token")),
+                _ => {}
             }
+
+            arguments.push(self.parse_expression()?);
         }
 
         Ok(FunctionCall {
@@ -198,13 +206,13 @@ impl<'a> AstCreator<'a> {
         })
     }
 
-    fn parse_expression_identifier(&mut self, identifier: String) -> Result<Expression> {
+    fn parse_expression_identifier(&mut self) -> Result<Expression> {
         // follow a function call
         if let lexer::Token::POpen = self.peek_token_err(1)? {
             return Ok(Expression::FunctionCall(self.parse_function_call()?));
         }
 
-        return Ok(Expression::Identifier(identifier));
+        return Ok(Expression::Identifier(self.parse_identifier()?));
     }
 
     // for now this is a useless abstraction, but kept for consistency,
@@ -215,7 +223,7 @@ impl<'a> AstCreator<'a> {
 
     fn parse_expression(&mut self) -> Result<Expression> {
         let expression = match self.peek_token_err(0)?.clone() {
-            lexer::Token::Identifier(v) => self.parse_expression_identifier(v)?,
+            lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
             lexer::Token::Literal(_) => self.parse_expression_literal()?,
             _ => return Err(anyhow!("parse_expression: wrong token")),
         };
@@ -279,5 +287,31 @@ impl<'a> AstCreator<'a> {
 impl Ast {
     pub fn new(tokens: &Vec<lexer::Token>) -> Result<Self> {
         AstCreator::new(tokens).parse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple() {
+        let code = String::from(
+            "
+                fn add(a int, b int) int {
+                    return a + b
+                }
+                fn main() void {
+                    let a int = 0
+                    let b int = 1
+                    let c int = a + b + 37 + 200
+                    let d int = b + add(a, b)
+                }
+            ",
+        );
+
+        let tokens = lexer::Lexer::new(&code).run().unwrap();
+        let ast = Ast::new(&tokens).unwrap();
+        println!("{ast:#?}");
     }
 }

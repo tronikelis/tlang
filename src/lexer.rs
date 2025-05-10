@@ -63,6 +63,11 @@ impl Lexer {
                     self.read_next_word();
                     continue;
                 }
+                "void" => {
+                    tokens.push(Token::Type(Type::Void));
+                    self.read_next_word();
+                    continue;
+                }
                 "return" => {
                     tokens.push(Token::Return);
                     self.read_next_word();
@@ -160,17 +165,13 @@ impl Lexer {
         let mut word = String::new();
         self.skip_whitespace();
 
-        loop {
-            if let Some(ch) = self.peek_char() {
-                if ch.is_whitespace() || CONTROL_CHAR.contains(&ch) {
-                    break;
-                }
-
-                self.next();
-                word.push(ch);
-            } else {
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() || CONTROL_CHAR.contains(&ch) {
                 break;
             }
+
+            self.next();
+            word.push(ch);
         }
 
         word
@@ -185,7 +186,10 @@ mod tests {
     fn simple() {
         let code = String::from(
             "
-                fn main() {
+                fn add(a int, b int) int {
+                    return a + b
+                }
+                fn main() void {
                     let a int = 0
                     let b int = 1
                     let c int = a + b
@@ -195,9 +199,26 @@ mod tests {
 
         let tokens = Vec::from([
             Token::Function,
+            Token::Identifier(String::from("add")),
+            Token::POpen,
+            Token::Identifier(String::from("a")),
+            Token::Type(Type::Int),
+            Token::Comma,
+            Token::Identifier(String::from("b")),
+            Token::Type(Type::Int),
+            Token::PClose,
+            Token::Type(Type::Int),
+            Token::COpen,
+            Token::Return,
+            Token::Identifier(String::from("a")),
+            Token::Plus,
+            Token::Identifier(String::from("b")),
+            Token::CClose,
+            Token::Function,
             Token::Identifier(String::from("main")),
             Token::POpen,
             Token::PClose,
+            Token::Type(Type::Void),
             Token::COpen,
             Token::Let,
             Token::Identifier(String::from("a")),
