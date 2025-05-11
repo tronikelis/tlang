@@ -3,40 +3,40 @@ use anyhow::{anyhow, Result};
 use super::lexer;
 
 #[derive(Debug)]
-struct VariableDeclaration {
-    identifier: String,
-    expression: Expression,
-    _type: lexer::Type,
+pub struct VariableDeclaration {
+    pub identifier: String,
+    pub expression: Expression,
+    pub _type: lexer::Type,
 }
 
 #[derive(Debug)]
-struct FunctionArgument {
-    identifier: String,
-    _type: lexer::Type,
+pub struct FunctionArgument {
+    pub identifier: String,
+    pub _type: lexer::Type,
 }
 
 #[derive(Debug)]
-struct Function {
-    identifier: String,
-    arguments: Vec<FunctionArgument>,
-    return_type: lexer::Type,
-    body: Vec<Node>,
+pub struct Function {
+    pub identifier: String,
+    pub arguments: Vec<FunctionArgument>,
+    pub return_type: lexer::Type,
+    pub body: Vec<Node>,
 }
 
 #[derive(Debug)]
-struct Addition {
-    left: Expression,
-    right: Expression,
+pub struct Addition {
+    pub left: Expression,
+    pub right: Expression,
 }
 
 #[derive(Debug)]
-struct FunctionCall {
-    identifier: String,
-    arguments: Vec<Expression>,
+pub struct FunctionCall {
+    pub identifier: String,
+    pub arguments: Vec<Expression>,
 }
 
 #[derive(Debug)]
-enum Expression {
+pub enum Expression {
     Literal(lexer::Literal),
     Identifier(String),
     Addition(Box<Addition>),
@@ -44,28 +44,28 @@ enum Expression {
 }
 
 #[derive(Debug)]
-enum Node {
+pub enum Node {
     VariableDeclaration(VariableDeclaration),
     Function(Function),
     Return(Expression),
 }
 
 #[derive(Debug)]
-struct Ast {
+pub struct Ast {
     pub nodes: Vec<Node>,
 }
 
-struct AstCreator<'a> {
-    tokens: &'a Vec<lexer::Token>,
+struct AstCreator {
+    tokens: Vec<lexer::Token>,
     i: usize,
 }
 
-impl<'a> AstCreator<'a> {
-    fn new(tokens: &'a Vec<lexer::Token>) -> Self {
+impl AstCreator {
+    fn new(tokens: Vec<lexer::Token>) -> Self {
         Self { tokens, i: 0 }
     }
 
-    fn parse(&mut self) -> Result<Ast> {
+    fn parse(mut self) -> Result<Ast> {
         let mut nodes: Vec<Node> = Vec::new();
 
         while let Some(_) = self.peek_token(0) {
@@ -285,7 +285,7 @@ impl<'a> AstCreator<'a> {
 }
 
 impl Ast {
-    pub fn new(tokens: &Vec<lexer::Token>) -> Result<Self> {
+    pub fn new(tokens: Vec<lexer::Token>) -> Result<Self> {
         AstCreator::new(tokens).parse()
     }
 }
@@ -311,7 +311,7 @@ mod tests {
         );
 
         let tokens = lexer::Lexer::new(&code).run().unwrap();
-        let ast = Ast::new(&tokens).unwrap();
+        let ast = Ast::new(tokens).unwrap();
         println!("{ast:#?}");
     }
 }

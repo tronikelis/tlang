@@ -2,6 +2,7 @@ mod vm;
 use vm::Instruction;
 
 mod ast;
+mod compiler;
 mod lexer;
 
 fn main() {
@@ -19,5 +20,5 @@ fn main() {
         Instruction::Return,
     ];
 
-    vm::Vm::new(&instructions).run();
+    vm::Vm::new(instructions.to_vec()).run();
 }

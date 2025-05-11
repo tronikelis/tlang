@@ -43,7 +43,7 @@ impl Lexer {
         }
     }
 
-    pub fn run(&mut self) -> Result<Vec<Token>> {
+    pub fn run(mut self) -> Result<Vec<Token>> {
         let mut tokens: Vec<Token> = Vec::new();
 
         while let Some(_) = self.peek_char() {

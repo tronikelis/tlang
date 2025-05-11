@@ -1,8 +1,12 @@
 use std::alloc::{alloc, dealloc, Layout};
 
+#[derive(Debug, Clone)]
 pub enum Instruction {
+    Increment(usize),
     PushI(isize),
     AddI(usize, usize),
+    // dst = src * len
+    Copy(usize, usize, usize),
     Exit,
     Debug,
     Reset(usize),
@@ -19,7 +23,12 @@ pub struct Stack {
 
 impl Drop for Stack {
     fn drop(&mut self) {
-        unsafe { dealloc(self.data, Layout::new::<u8>()) };
+        unsafe {
+            dealloc(
+                self.data,
+                Layout::from_size_align(self.size, Layout::new::<u8>().align()).unwrap(),
+            )
+        };
     }
 }
 
@@ -40,6 +49,12 @@ impl Stack {
             self.sp = self.sp.byte_offset(-(size_of::<T>() as isize));
             *self.sp.cast() = item;
         };
+    }
+
+    fn increment(&mut self, by: usize) {
+        unsafe {
+            self.sp = self.sp.byte_offset(-(by as isize));
+        }
     }
 
     fn pop<T: Copy>(&mut self) -> T {
@@ -76,22 +91,32 @@ impl Stack {
             }
         }
     }
+
+    fn copy(&mut self, dst: usize, src: usize, len: usize) {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.sp.byte_offset(src as isize),
+                self.sp.byte_offset(dst as isize),
+                len,
+            );
+        }
+    }
 }
 
-pub struct Vm<'a> {
+pub struct Vm {
     stack: Stack,
-    instructions: &'a [Instruction],
+    instructions: Vec<Instruction>,
 }
 
-impl<'a> Vm<'a> {
-    pub fn new(instructions: &'a [Instruction]) -> Self {
+impl Vm {
+    pub fn new(instructions: Vec<Instruction>) -> Self {
         return Self {
             stack: Stack::new(4096),
             instructions,
         };
     }
 
-    pub fn run(&mut self) {
+    pub fn run(mut self) {
         let mut pc = 0;
 
         loop {
@@ -123,6 +148,12 @@ impl<'a> Vm<'a> {
                 }
                 Instruction::Reset(offset) => {
                     self.stack.reset(offset);
+                }
+                Instruction::Copy(dst, src, len) => {
+                    self.stack.copy(dst, src, len);
+                }
+                Instruction::Increment(by) => {
+                    self.stack.increment(by);
                 }
             }
 
