@@ -33,6 +33,7 @@ pub struct Addition {
 pub struct FunctionCall {
     pub identifier: String,
     pub arguments: Vec<Expression>,
+    pub return_type: lexer::Type,
 }
 
 #[derive(Debug)]

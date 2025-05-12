@@ -5,6 +5,7 @@ use super::{ast, lexer, vm};
 struct EnvironmentVariable {
     offset: usize,
     size: usize,
+    _type: lexer::Type,
 }
 
 struct Environment {
@@ -20,7 +21,7 @@ impl Environment {
         }
     }
 
-    fn add<T>(&mut self, identifier: String) {
+    fn add<T>(&mut self, identifier: String, _type: lexer::Type) {
         let size = size_of::<T>();
         self.sp += size;
         self.variables.insert(
@@ -28,6 +29,7 @@ impl Environment {
             EnvironmentVariable {
                 offset: self.sp,
                 size,
+                _type,
             },
         );
     }
@@ -40,32 +42,48 @@ impl Environment {
 fn compile_addition(
     environment: &mut Environment,
     addition: &ast::Addition,
+    expected_type: lexer::Type,
 ) -> (Vec<vm::Instruction>, usize) {
     let mut instructions = Vec::new();
 
-    let (mut l_instructions, l_size) = compile_expression(environment, &addition.left);
+    let (mut l_instructions, l_size) =
+        compile_expression(environment, &addition.left, expected_type.clone());
     instructions.append(&mut l_instructions);
 
-    let (mut r_instructions, _) = compile_expression(environment, &addition.right);
+    let (mut r_instructions, r_size) =
+        compile_expression(environment, &addition.right, expected_type);
     instructions.append(&mut r_instructions);
 
-    instructions.push(vm::Instruction::AddI(0, l_size));
-    instructions.push(vm::Instruction::Reset(l_size));
+    instructions.push(vm::Instruction::AddI(0, r_size));
+    instructions.push(vm::Instruction::Reset(r_size));
 
     (instructions, l_size)
 }
 
-fn compile_literal(literal: &lexer::Literal) -> (vm::Instruction, usize) {
+fn compile_literal(
+    literal: &lexer::Literal,
+    expected_type: lexer::Type,
+) -> (vm::Instruction, usize) {
     match literal {
-        lexer::Literal::Int(int) => (vm::Instruction::PushI(*int), size_of::<isize>()),
+        lexer::Literal::Int(int) => {
+            if expected_type != lexer::Type::Int {
+                panic!("expected type dont match");
+            }
+
+            (vm::Instruction::PushI(*int), size_of::<isize>())
+        }
     }
 }
 
 fn compile_identifier(
     environment: &Environment,
     identifier: &String,
+    expected_type: lexer::Type,
 ) -> (Vec<vm::Instruction>, usize) {
     let variable = environment.variables.get(identifier).unwrap();
+    if variable._type != expected_type {
+        panic!("variable does not match expected type");
+    }
 
     let mut instructions = Vec::new();
 
@@ -100,39 +118,43 @@ fn compile_function(function: &ast::Function) -> Vec<vm::Instruction> {
 fn compile_expression(
     environment: &mut Environment,
     expression: &ast::Expression,
+    expected_type: lexer::Type,
 ) -> (Vec<vm::Instruction>, usize) {
-    let instructions: Vec<vm::Instruction>;
-    let size: usize;
-
     match expression {
         ast::Expression::Literal(v) => {
-            let (instruction, s) = compile_literal(v);
-            instructions = Vec::from([instruction]);
-            size = s;
+            let (instruction, size) = compile_literal(v, expected_type);
+            (Vec::from([instruction]), size)
         }
         ast::Expression::Addition(v) => {
-            let (addition_instructions, s) = compile_addition(environment, v);
-            instructions = addition_instructions;
-            size = s;
+            let (instructions, size) = compile_addition(environment, v, expected_type);
+            (instructions, size)
         }
         ast::Expression::Identifier(v) => {
-            let (identifier_instructions, s) = compile_identifier(environment, v);
-            instructions = identifier_instructions;
-            size = s;
+            let (instructions, size) = compile_identifier(environment, v, expected_type);
+            (instructions, size)
         }
         ast::Expression::FunctionCall(v) => {
             todo!();
         }
     }
-
-    (instructions, size)
 }
 
+// pushes variable into the stack, and adds it into environment
 fn compile_local_variable_declaration(
     environment: &mut Environment,
     variable: &ast::VariableDeclaration,
 ) -> Vec<vm::Instruction> {
-    todo!();
+    match variable._type {
+        lexer::Type::Int => {
+            environment.add::<isize>(variable.identifier.clone(), lexer::Type::Int);
+            let (instructions, _) =
+                compile_expression(environment, &variable.expression, variable._type.clone());
+            instructions
+        }
+        lexer::Type::Void => {
+            panic!("cant declare void variable");
+        }
+    }
 }
 
 pub fn compile(ast: ast::Ast) -> HashMap<String, Vec<vm::Instruction>> {
