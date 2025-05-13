@@ -3,41 +3,40 @@ use std::collections::HashMap;
 
 use super::lexer;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VariableDeclaration {
     pub identifier: String,
     pub expression: Expression,
     pub _type: lexer::Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub identifier: String,
     pub _type: lexer::Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub identifier: String,
     pub arguments: Vec<FunctionArgument>,
     pub return_type: lexer::Type,
-    pub body: Vec<Node>,
+    pub body: Option<Vec<Node>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Addition {
     pub left: Expression,
     pub right: Expression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionCall {
-    pub identifier: String,
+    pub function: Function,
     pub arguments: Vec<Expression>,
-    pub return_type: lexer::Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expression {
     Literal(lexer::Literal),
     Identifier(String),
@@ -45,7 +44,7 @@ pub enum Expression {
     FunctionCall(FunctionCall),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
     Function(Function),
@@ -219,7 +218,7 @@ impl<'a> TokenParser<'a> {
             identifier,
             arguments: function_arguments,
             return_type,
-            body: Vec::new(),
+            body: None,
         })
     }
 
@@ -227,7 +226,10 @@ impl<'a> TokenParser<'a> {
         let function = self.parse_function_declaration()?;
         let body = self.parse_block()?;
 
-        Ok(Function { body, ..function })
+        Ok(Function {
+            body: Some(body),
+            ..function
+        })
     }
 
     fn parse_function_call(&mut self) -> Result<FunctionCall> {
@@ -253,20 +255,18 @@ impl<'a> TokenParser<'a> {
             arguments.push(self.parse_expression()?);
         }
 
-        let return_type = self
+        let function = self
             .context
             .function_declarations
             .get(&identifier)
             .ok_or(anyhow!(
                 "parse_function_call: context function declaration does not exist"
             ))?
-            .return_type
             .clone();
 
         Ok(FunctionCall {
             arguments,
-            identifier,
-            return_type,
+            function,
         })
     }
 

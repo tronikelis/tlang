@@ -10,7 +10,6 @@ pub enum Instruction {
     Exit,
     Debug,
     Reset(usize),
-    Jump(usize),
     JumpAndLink(usize),
     Return,
 }
