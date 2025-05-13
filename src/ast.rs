@@ -47,19 +47,18 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
-    Function(Function),
     Return(Expression),
 }
 
 #[derive(Debug)]
 pub struct Ast {
-    pub nodes: Vec<Node>,
+    pub functions: Vec<Function>,
 }
 
 impl Ast {
     pub fn new(tokens: &Vec<lexer::Token>) -> Result<Self> {
         Ok(Self {
-            nodes: TokenParser::new(tokens).parse()?,
+            functions: TokenParser::new(tokens).parse_functions()?,
         })
     }
 }
@@ -109,16 +108,19 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse(mut self) -> Result<Vec<Node>> {
+    fn parse_functions(mut self) -> Result<Vec<Function>> {
         self.context = self.parse_context()?;
 
-        let mut nodes: Vec<Node> = Vec::new();
+        let mut functions = Vec::<Function>::new();
 
-        while let Some(_) = self.peek_token(0) {
-            nodes.push(self.parse_token()?);
+        while let Some(token) = self.peek_token(0) {
+            match token {
+                lexer::Token::Function => functions.push(self.parse_function()?),
+                v => return Err(anyhow!("parse_functions: {v:#?} token not supported")),
+            };
         }
 
-        Ok(nodes)
+        Ok(functions)
     }
 
     fn parse_token(&mut self) -> Result<Node> {
@@ -126,7 +128,6 @@ impl<'a> TokenParser<'a> {
             lexer::Token::Let => Ok(Node::VariableDeclaration(
                 self.parse_variable_declaration()?,
             )),
-            lexer::Token::Function => Ok(Node::Function(self.parse_function()?)),
             lexer::Token::Return => {
                 self.next();
                 Ok(Node::Return(self.parse_expression()?))

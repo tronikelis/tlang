@@ -1,8 +1,9 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
 use super::{ast, lexer, vm};
 
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Real(vm::Instruction),
     JumpAndLink(String),
@@ -115,22 +116,17 @@ fn compile_expression(
             let (instruction, size) = compile_literal(v, expected_type);
             (Vec::from([instruction]), size)
         }
-        ast::Expression::Addition(v) => {
-            let (instructions, size) = compile_addition(environment, v, expected_type);
-            (instructions, size)
-        }
-        ast::Expression::Identifier(v) => {
-            let (instructions, size) = compile_identifier(environment, v, expected_type);
-            (instructions, size)
-        }
-        ast::Expression::FunctionCall(v) => {
-            todo!();
-        }
+        ast::Expression::Addition(v) => compile_addition(environment, v, expected_type),
+        ast::Expression::Identifier(v) => compile_identifier(environment, v, expected_type),
+        ast::Expression::FunctionCall(v) => compile_function_call(environment, v),
     }
 }
 
-fn compile_function_call(environment: &Environment, call: &ast::FunctionCall) -> Vec<Instruction> {
-    let mut instructions: Vec<Instruction> = call
+fn compile_function_call(
+    environment: &Environment,
+    call: &ast::FunctionCall,
+) -> (Vec<Instruction>, usize) {
+    let expressions: Vec<(Vec<Instruction>, usize)> = call
         .arguments
         .iter()
         .enumerate()
@@ -142,17 +138,42 @@ fn compile_function_call(environment: &Environment, call: &ast::FunctionCall) ->
                 .ok_or(anyhow!("compile_function_call: expected argument"))
                 .unwrap();
 
-            let (instructions, _) = compile_expression(environment, v, expected_type._type.clone());
-
-            instructions
+            compile_expression(environment, v, expected_type._type.clone())
         })
-        .flatten()
         .collect();
 
-    // todo: linker
+    // push all arguments into the stack
+    let mut instructions: Vec<Instruction> =
+        expressions.iter().map(|v| v.0.clone()).flatten().collect();
+
+    let return_size = match call.function.return_type {
+        lexer::Type::Int => size_of::<isize>(),
+        lexer::Type::Void => 0,
+    };
+
+    let argument_size = expressions.iter().fold(0, |acc, curr| acc + curr.1);
+
+    let reset_size: usize;
+    if argument_size < return_size {
+        // the whole argument section will be used for return value
+        // do not need to reset
+        reset_size = 0;
+        instructions.push(Instruction::Real(vm::Instruction::Increment(
+            return_size - argument_size,
+        )));
+    } else {
+        // reset the argument section to the return size
+        reset_size = argument_size - return_size;
+    }
+
+    // linker will save us all
     instructions.push(Instruction::JumpAndLink(call.function.identifier.clone()));
 
-    instructions
+    if reset_size != 0 {
+        instructions.push(Instruction::Real(vm::Instruction::Reset(reset_size)));
+    }
+
+    (instructions, return_size)
 }
 
 // pushes variable into the stack, and adds it into environment
@@ -189,6 +210,26 @@ fn compile_variable_declaration(
 // jump and link foo
 // foo wrote return into arguments
 // reset 8 <- we are now at "a" -> return argument
-pub fn compile_function(function: &ast::Function) -> Vec<Instruction> {
-    todo!();
+pub fn compile_function(function: &ast::Function) -> Result<Vec<Instruction>> {
+    let mut env = Environment::new();
+
+    let instructions = function
+        .body
+        .as_ref()
+        .ok_or(anyhow!("compile_function: empty function body"))?
+        .iter()
+        .map(|v| match v {
+            ast::Node::VariableDeclaration(var) => compile_variable_declaration(&mut env, var),
+            ast::Node::Return(exp) => {
+                let (mut instructions, _) =
+                    compile_expression(&mut env, exp, function.return_type.clone());
+                instructions.push(Instruction::Real(vm::Instruction::Return));
+
+                instructions
+            }
+        })
+        .flatten()
+        .collect();
+
+    Ok(instructions)
 }
