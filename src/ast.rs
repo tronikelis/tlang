@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 
 use super::lexer;
 
@@ -56,24 +57,69 @@ pub struct Ast {
     pub nodes: Vec<Node>,
 }
 
-struct AstCreator {
-    tokens: Vec<lexer::Token>,
-    i: usize,
+impl Ast {
+    pub fn new(tokens: &Vec<lexer::Token>) -> Result<Self> {
+        Ok(Self {
+            nodes: TokenParser::new(tokens).parse()?,
+        })
+    }
 }
 
-impl AstCreator {
-    fn new(tokens: Vec<lexer::Token>) -> Self {
-        Self { tokens, i: 0 }
+struct TokenParser<'a> {
+    tokens: &'a Vec<lexer::Token>,
+    i: usize,
+    context: TokenParserContext,
+}
+
+struct TokenParserContext {
+    function_declarations: HashMap<String, Function>,
+}
+
+impl<'a> TokenParser<'a> {
+    fn new(tokens: &'a Vec<lexer::Token>) -> Self {
+        Self {
+            tokens,
+            i: 0,
+            context: TokenParserContext {
+                function_declarations: HashMap::new(),
+            },
+        }
     }
 
-    fn parse(mut self) -> Result<Ast> {
+    fn parse_context_function_declarations(&self) -> Result<HashMap<String, Function>> {
+        let mut declarations = HashMap::<String, Function>::new();
+        let mut temp_parser = TokenParser::new(self.tokens);
+
+        for (i, token) in self.tokens.iter().enumerate() {
+            temp_parser.i = i;
+            match token {
+                lexer::Token::Function => {
+                    let function = temp_parser.parse_function_declaration()?;
+                    declarations.insert(function.identifier.clone(), function);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(declarations)
+    }
+
+    fn parse_context(&self) -> Result<TokenParserContext> {
+        Ok(TokenParserContext {
+            function_declarations: self.parse_context_function_declarations()?,
+        })
+    }
+
+    fn parse(mut self) -> Result<Vec<Node>> {
+        self.context = self.parse_context()?;
+
         let mut nodes: Vec<Node> = Vec::new();
 
         while let Some(_) = self.peek_token(0) {
             nodes.push(self.parse_token()?);
         }
 
-        Ok(Ast { nodes })
+        Ok(nodes)
     }
 
     fn parse_token(&mut self) -> Result<Node> {
@@ -138,7 +184,7 @@ impl AstCreator {
         }
     }
 
-    fn parse_function(&mut self) -> Result<Function> {
+    fn parse_function_declaration(&mut self) -> Result<Function> {
         self.expect_next_token(lexer::Token::Function)?;
         self.next();
 
@@ -168,14 +214,20 @@ impl AstCreator {
         }
 
         let return_type = self.parse_type()?;
-        let body = self.parse_block()?;
 
         Ok(Function {
             identifier,
             arguments: function_arguments,
             return_type,
-            body,
+            body: Vec::new(),
         })
+    }
+
+    fn parse_function(&mut self) -> Result<Function> {
+        let function = self.parse_function_declaration()?;
+        let body = self.parse_block()?;
+
+        Ok(Function { body, ..function })
     }
 
     fn parse_function_call(&mut self) -> Result<FunctionCall> {
@@ -201,9 +253,20 @@ impl AstCreator {
             arguments.push(self.parse_expression()?);
         }
 
+        let return_type = self
+            .context
+            .function_declarations
+            .get(&identifier)
+            .ok_or(anyhow!(
+                "parse_function_call: context function declaration does not exist"
+            ))?
+            .return_type
+            .clone();
+
         Ok(FunctionCall {
             arguments,
             identifier,
+            return_type,
         })
     }
 
@@ -285,12 +348,6 @@ impl AstCreator {
     }
 }
 
-impl Ast {
-    pub fn new(tokens: Vec<lexer::Token>) -> Result<Self> {
-        AstCreator::new(tokens).parse()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,7 +369,7 @@ mod tests {
         );
 
         let tokens = lexer::Lexer::new(&code).run().unwrap();
-        let ast = Ast::new(tokens).unwrap();
+        let ast = Ast::new(&tokens).unwrap();
         println!("{ast:#?}");
     }
 }
