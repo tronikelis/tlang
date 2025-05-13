@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::{cmp, collections::HashMap};
 
 use super::{ast, lexer, vm};
 
@@ -173,7 +173,7 @@ fn compile_function_call(
         instructions.push(Instruction::Real(vm::Instruction::Reset(reset_size)));
     }
 
-    (instructions, return_size)
+    (instructions, cmp::max(return_size, argument_size))
 }
 
 // pushes variable into the stack, and adds it into environment
