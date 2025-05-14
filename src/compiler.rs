@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{cmp, collections::HashMap};
 
-use super::{ast, lexer, vm};
+use crate::{ast, lexer, vm};
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -9,9 +9,17 @@ pub enum Instruction {
     JumpAndLink(String),
 }
 
+#[derive(Debug, Clone)]
 enum VarStackItem {
     Empty(usize),
-    Var(ast::VariableDeclaration),
+    Var(VarStackItemVar),
+}
+
+#[derive(Debug, Clone)]
+struct VarStackItemVar {
+    identifier: String,
+    _type: lexer::Type,
+    size: usize,
 }
 
 struct VarStack {
@@ -34,14 +42,14 @@ impl VarStack {
         })
     }
 
-    fn get_var(&self, identifier: &str) -> Option<(&ast::VariableDeclaration, usize)> {
+    fn get_var(&self, identifier: &str) -> Option<(VarStackItemVar, usize)> {
         let mut offset = 0;
 
         for item in self.stack.iter().rev() {
             match item {
                 VarStackItem::Var(var) => {
                     if var.identifier == identifier {
-                        return Some((var, offset));
+                        return Some((var.clone(), offset));
                     }
                     offset += var.size;
                 }
@@ -185,7 +193,11 @@ impl FunctionCompiler {
         match variable._type {
             lexer::Type::Int => {
                 self.compile_expression(&variable.expression, lexer::Type::Int);
-                self.var_stack.push(VarStackItem::Var(variable.clone()));
+                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                    identifier: variable.identifier.clone(),
+                    size: variable.size,
+                    _type: variable._type.clone(),
+                }));
             }
             lexer::Type::Void => {
                 panic!("cant declare void variable");
@@ -193,15 +205,26 @@ impl FunctionCompiler {
         };
     }
 
-    pub fn compile(mut self, function: ast::Function) -> Result<Vec<Instruction>> {
+    pub fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
+        for arg in &function.arguments {
+            self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                _type: arg._type.clone(),
+                identifier: arg.identifier.clone(),
+                size: 8,
+            }));
+        }
+
         for v in function
             .body
+            .as_ref()
             .ok_or(anyhow!("compile_function: empty function body"))?
         {
             match v {
                 ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(&var),
                 ast::Node::Return(exp) => {
-                    self.compile_expression(&exp, function.return_type.clone());
+                    // write expression into arguments
+                    // reset local vars
+                    // return
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Return));
@@ -210,5 +233,37 @@ impl FunctionCompiler {
         }
 
         Ok(self.instructions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::Ast;
+
+    use super::*;
+
+    #[test]
+    fn simple() {
+        let code = String::from(
+            "
+                fn add(a int, b int) int {
+                    return a + b
+                }
+                fn main() void {
+                    let a int = 0
+                    let b int = 1
+                    let c int = a + b + 37 + 200
+                    let d int = b + add(a, b)
+                }
+            ",
+        );
+
+        let tokens = lexer::Lexer::new(&code).run().unwrap();
+        let ast = Ast::new(&tokens).unwrap();
+
+        for v in &ast.functions {
+            println!("{}", v.identifier);
+            println!("{:#?}", FunctionCompiler::new().compile(v).unwrap());
+        }
     }
 }

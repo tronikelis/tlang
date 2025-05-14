@@ -4,6 +4,12 @@ use std::collections::HashMap;
 use super::lexer;
 
 #[derive(Debug, Clone)]
+pub struct Type {
+    size: usize,
+    _type: lexer::Type,
+}
+
+#[derive(Debug, Clone)]
 pub struct VariableDeclaration {
     pub identifier: String,
     pub expression: Expression,
