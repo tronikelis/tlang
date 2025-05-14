@@ -8,6 +8,7 @@ pub struct VariableDeclaration {
     pub identifier: String,
     pub expression: Expression,
     pub _type: lexer::Type,
+    pub size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -320,10 +321,16 @@ impl<'a> TokenParser<'a> {
 
         let expression = self.parse_expression()?;
 
+        let size = match &_type {
+            lexer::Type::Int => size_of::<isize>(),
+            lexer::Type::Void => 0,
+        };
+
         Ok(VariableDeclaration {
             identifier,
             expression,
             _type,
+            size,
         })
     }
 

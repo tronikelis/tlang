@@ -11,6 +11,7 @@ pub enum Instruction {
     Debug,
     Reset(usize),
     JumpAndLink(usize),
+    Jump(usize),
     Return,
 }
 
