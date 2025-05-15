@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use std::{cmp, collections::HashMap};
 
 use crate::{ast, lexer, vm};
 
@@ -18,8 +17,7 @@ enum VarStackItem {
 #[derive(Debug, Clone)]
 struct VarStackItemVar {
     identifier: String,
-    _type: lexer::Type,
-    size: usize,
+    _type: ast::Type,
 }
 
 struct VarStack {
@@ -41,7 +39,7 @@ impl VarStack {
 
     fn size(&self) -> usize {
         self.stack.iter().fold(0, |acc, curr| match curr {
-            VarStackItem::Var(var) => acc + var.size,
+            VarStackItem::Var(var) => acc + var._type.size,
             VarStackItem::Anon(size) => acc + size,
         })
     }
@@ -55,7 +53,7 @@ impl VarStack {
                     if var.identifier == identifier {
                         return Some((var.clone(), offset));
                     }
-                    offset += var.size;
+                    offset += var._type.size;
                 }
                 VarStackItem::Anon(size) => offset += size,
             };
@@ -81,7 +79,7 @@ impl FunctionCompiler {
     fn compile_function_call(
         &mut self,
         call: &ast::FunctionCall,
-        expected_type: lexer::Type,
+        expected_type: ast::Type,
     ) -> usize {
         if expected_type != call.function.return_type {
             panic!("compile_function_call: expected_type does not match")
@@ -99,10 +97,7 @@ impl FunctionCompiler {
             acc + self.compile_expression(curr.1, expected_type.clone())
         });
 
-        let return_size = match call.function.return_type {
-            lexer::Type::Int => size_of::<isize>(),
-            lexer::Type::Void => 0,
-        };
+        let return_size = call.function.return_type.size;
 
         let reset_size: usize;
         if argument_size < return_size {
@@ -129,10 +124,10 @@ impl FunctionCompiler {
         return_size
     }
 
-    fn compile_literal(&mut self, literal: &lexer::Literal, expected_type: lexer::Type) -> usize {
+    fn compile_literal(&mut self, literal: &lexer::Literal, expected_type: ast::Type) -> usize {
         match literal {
             lexer::Literal::Int(int) => {
-                if expected_type != lexer::Type::Int {
+                if expected_type != ast::INT {
                     panic!("expected type dont match");
                 }
 
@@ -144,7 +139,7 @@ impl FunctionCompiler {
         }
     }
 
-    fn compile_identifier(&mut self, identifier: &str, expected_type: lexer::Type) -> usize {
+    fn compile_identifier(&mut self, identifier: &str, expected_type: ast::Type) -> usize {
         let (variable, offset) = self.var_stack.get_var(identifier).unwrap();
 
         if variable._type != expected_type {
@@ -152,40 +147,46 @@ impl FunctionCompiler {
         }
 
         self.instructions
-            .push(Instruction::Real(vm::Instruction::Increment(variable.size)));
+            .push(Instruction::Real(vm::Instruction::Increment(
+                variable._type.size,
+            )));
         self.instructions
             .push(Instruction::Real(vm::Instruction::Copy(
                 0,
-                offset + variable.size, // we incremented by this above
-                variable.size,
+                offset + variable._type.size, // we incremented by this above
+                variable._type.size,
             )));
 
-        variable.size
+        variable._type.size
     }
 
-    fn compile_addition(&mut self, addition: &ast::Addition, expected_type: lexer::Type) -> usize {
+    fn compile_addition(&mut self, addition: &ast::Addition, expected_type: ast::Type) -> usize {
         self.compile_expression(&addition.left, expected_type.clone());
         self.compile_expression(&addition.right, expected_type.clone());
         self.var_stack.pop();
         self.var_stack.pop();
 
-        let size = match expected_type {
-            lexer::Type::Int => size_of::<isize>(),
-            lexer::Type::Void => panic!("can't add void type"),
-        };
+        if expected_type == ast::VOID {
+            panic!("can't add void type");
+        }
 
         self.instructions
-            .push(Instruction::Real(vm::Instruction::AddI(0, size)));
+            .push(Instruction::Real(vm::Instruction::AddI(
+                0,
+                expected_type.size,
+            )));
         self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(size)));
+            .push(Instruction::Real(vm::Instruction::Reset(
+                expected_type.size,
+            )));
 
-        size
+        expected_type.size
     }
 
     fn compile_expression(
         &mut self,
         expression: &ast::Expression,
-        expected_type: lexer::Type,
+        expected_type: ast::Type,
     ) -> usize {
         let size = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v, expected_type),
@@ -200,14 +201,13 @@ impl FunctionCompiler {
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) {
-        match variable._type {
+        match variable._type._type {
             lexer::Type::Int => {
-                self.compile_expression(&variable.expression, lexer::Type::Int);
+                self.compile_expression(&variable.expression, ast::INT);
 
                 self.var_stack.pop();
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
-                    size: variable.size,
                     _type: variable._type.clone(),
                 }));
             }
@@ -226,7 +226,6 @@ impl FunctionCompiler {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
                 identifier: arg.identifier.clone(),
-                size: 8,
             }));
         }
         // return address

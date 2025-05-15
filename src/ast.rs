@@ -3,31 +3,40 @@ use std::collections::HashMap;
 
 use super::lexer;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Type {
-    size: usize,
-    _type: lexer::Type,
+    pub size: usize,
+    pub _type: lexer::Type,
 }
+
+pub const INT: Type = Type {
+    size: size_of::<isize>(),
+    _type: lexer::Type::Int,
+};
+
+pub const VOID: Type = Type {
+    size: 0,
+    _type: lexer::Type::Void,
+};
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
     pub identifier: String,
     pub expression: Expression,
-    pub _type: lexer::Type,
-    pub size: usize,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub identifier: String,
-    pub _type: lexer::Type,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub identifier: String,
     pub arguments: Vec<FunctionArgument>,
-    pub return_type: lexer::Type,
+    pub return_type: Type,
     pub body: Option<Vec<Node>>,
 }
 
@@ -181,11 +190,20 @@ impl<'a> TokenParser<'a> {
         }
     }
 
-    fn parse_type(&mut self) -> Result<lexer::Type> {
+    fn parse_type(&mut self) -> Result<Type> {
         match self.peek_token_err(0)?.clone() {
             lexer::Token::Type(v) => {
                 self.next();
-                Ok(v.clone())
+
+                let size = match &v {
+                    lexer::Type::Void => 0,
+                    lexer::Type::Int => size_of::<isize>(),
+                };
+
+                Ok(Type {
+                    size,
+                    _type: v.clone(),
+                })
             }
             _ => Err(anyhow!("parse_type: expected Type")),
         }
@@ -327,16 +345,10 @@ impl<'a> TokenParser<'a> {
 
         let expression = self.parse_expression()?;
 
-        let size = match &_type {
-            lexer::Type::Int => size_of::<isize>(),
-            lexer::Type::Void => 0,
-        };
-
         Ok(VariableDeclaration {
             identifier,
             expression,
             _type,
-            size,
         })
     }
 
