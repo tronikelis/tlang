@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Error, Result};
 
 use crate::{ast, lexer, vm};
 
@@ -87,23 +87,16 @@ impl FunctionCompiler {
             ));
         }
 
-        let argument_size = call
-            .arguments
-            .iter()
-            .enumerate()
-            .map(|(i, arg)| {
-                let expected_type = &call
-                    .function
-                    .arguments
-                    .get(i)
-                    .ok_or(anyhow!("compile_function_call: expected_argument"))?
-                    ._type;
+        let argument_size = call.arguments.iter().enumerate().try_fold(0, |acc, curr| {
+            let expected_type = &call
+                .function
+                .arguments
+                .get(curr.0)
+                .ok_or(anyhow!("compile_function_call: expected_argument"))?
+                ._type;
 
-                Ok(self.compile_expression(arg, expected_type.clone())?)
-            })
-            .collect::<Result<Vec<usize>>>()?
-            .iter()
-            .fold(0, |acc, curr| acc + curr);
+            Ok::<usize, Error>(acc + self.compile_expression(curr.1, expected_type.clone())?)
+        })?;
 
         let return_size = call.function.return_type.size;
 
