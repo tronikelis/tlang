@@ -71,7 +71,7 @@ pub struct FunctionCompiler {
 }
 
 impl FunctionCompiler {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             var_stack: VarStack::new(),
             instructions: Vec::new(),
@@ -217,7 +217,11 @@ impl FunctionCompiler {
         };
     }
 
-    pub fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
+    pub fn compile_fn(function: &ast::Function) -> Result<Vec<Instruction>> {
+        Self::new().compile(function)
+    }
+
+    fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
         for arg in &function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
@@ -245,7 +249,9 @@ impl FunctionCompiler {
                     let size = self.compile_expression(exp, function.return_type.clone());
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Copy(
-                            self.var_stack.size(),
+                            // -size because .size() gets you total stack size,
+                            // while we want to index into first item
+                            self.var_stack.size() - size,
                             0,
                             size,
                         )));
@@ -291,7 +297,7 @@ mod tests {
 
         for v in &ast.functions {
             println!("{}", v.identifier);
-            println!("{:#?}", FunctionCompiler::new().compile(v).unwrap());
+            println!("{:#?}", FunctionCompiler::compile_fn(v).unwrap());
         }
     }
 }
