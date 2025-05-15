@@ -11,7 +11,7 @@ pub enum Instruction {
 
 #[derive(Debug, Clone)]
 enum VarStackItem {
-    Empty(usize),
+    Anon(usize),
     Var(VarStackItemVar),
 }
 
@@ -35,10 +35,14 @@ impl VarStack {
         self.stack.push(item);
     }
 
-    fn size(self) -> usize {
+    fn pop(&mut self) -> Option<VarStackItem> {
+        self.stack.pop()
+    }
+
+    fn size(&self) -> usize {
         self.stack.iter().fold(0, |acc, curr| match curr {
             VarStackItem::Var(var) => acc + var.size,
-            VarStackItem::Empty(size) => acc + size,
+            VarStackItem::Anon(size) => acc + size,
         })
     }
 
@@ -53,7 +57,7 @@ impl VarStack {
                     }
                     offset += var.size;
                 }
-                VarStackItem::Empty(size) => offset += size,
+                VarStackItem::Anon(size) => offset += size,
             };
         }
 
@@ -162,6 +166,8 @@ impl FunctionCompiler {
     fn compile_addition(&mut self, addition: &ast::Addition, expected_type: lexer::Type) -> usize {
         self.compile_expression(&addition.left, expected_type.clone());
         self.compile_expression(&addition.right, expected_type.clone());
+        self.var_stack.pop();
+        self.var_stack.pop();
 
         let size = match expected_type {
             lexer::Type::Int => size_of::<isize>(),
@@ -181,18 +187,24 @@ impl FunctionCompiler {
         expression: &ast::Expression,
         expected_type: lexer::Type,
     ) -> usize {
-        match expression {
+        let size = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v, expected_type),
             ast::Expression::Addition(v) => self.compile_addition(v, expected_type),
             ast::Expression::Identifier(v) => self.compile_identifier(&v, expected_type),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v, expected_type),
-        }
+        };
+
+        self.var_stack.push(VarStackItem::Anon(size));
+
+        size
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) {
         match variable._type {
             lexer::Type::Int => {
                 self.compile_expression(&variable.expression, lexer::Type::Int);
+
+                self.var_stack.pop();
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     size: variable.size,
@@ -213,6 +225,10 @@ impl FunctionCompiler {
                 size: 8,
             }));
         }
+        // return address
+        self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
+
+        let fn_arg_size = self.var_stack.size();
 
         for v in function
             .body
@@ -225,6 +241,18 @@ impl FunctionCompiler {
                     // write expression into arguments
                     // reset local vars
                     // return
+
+                    let size = self.compile_expression(exp, function.return_type.clone());
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::Copy(
+                            self.var_stack.size(),
+                            0,
+                            size,
+                        )));
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::Reset(
+                            self.var_stack.size() - fn_arg_size,
+                        )));
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Return));
