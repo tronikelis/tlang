@@ -80,22 +80,30 @@ impl FunctionCompiler {
         &mut self,
         call: &ast::FunctionCall,
         expected_type: ast::Type,
-    ) -> usize {
+    ) -> Result<usize> {
         if expected_type != call.function.return_type {
-            panic!("compile_function_call: expected_type does not match")
+            return Err(anyhow!(
+                "compile_function_call: expected_type does not match"
+            ));
         }
 
-        let argument_size = call.arguments.iter().enumerate().fold(0, |acc, curr| {
-            let expected_type = &call
-                .function
-                .arguments
-                .get(curr.0)
-                .ok_or(anyhow!("compile_function_call: expected argument"))
-                .unwrap()
-                ._type;
+        let argument_size = call
+            .arguments
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                let expected_type = &call
+                    .function
+                    .arguments
+                    .get(i)
+                    .ok_or(anyhow!("compile_function_call: expected_argument"))?
+                    ._type;
 
-            acc + self.compile_expression(curr.1, expected_type.clone())
-        });
+                Ok(self.compile_expression(arg, expected_type.clone())?)
+            })
+            .collect::<Result<Vec<usize>>>()?
+            .iter()
+            .fold(0, |acc, curr| acc + curr);
 
         let return_size = call.function.return_type.size;
 
@@ -121,29 +129,33 @@ impl FunctionCompiler {
                 .push(Instruction::Real(vm::Instruction::Reset(reset_size)));
         }
 
-        return_size
+        Ok(return_size)
     }
 
-    fn compile_literal(&mut self, literal: &lexer::Literal, expected_type: ast::Type) -> usize {
+    fn compile_literal(
+        &mut self,
+        literal: &lexer::Literal,
+        expected_type: ast::Type,
+    ) -> Result<usize> {
         match literal {
             lexer::Literal::Int(int) => {
                 if expected_type != ast::INT {
-                    panic!("expected type dont match");
+                    return Err(anyhow!("expected type dont match"));
                 }
 
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::PushI(*int)));
 
-                size_of::<isize>()
+                Ok(ast::INT.size)
             }
         }
     }
 
-    fn compile_identifier(&mut self, identifier: &str, expected_type: ast::Type) -> usize {
+    fn compile_identifier(&mut self, identifier: &str, expected_type: ast::Type) -> Result<usize> {
         let (variable, offset) = self.var_stack.get_var(identifier).unwrap();
 
         if variable._type != expected_type {
-            panic!("variable does not match expected type");
+            return Err(anyhow!("variable does not match expected type"));
         }
 
         self.instructions
@@ -157,17 +169,21 @@ impl FunctionCompiler {
                 variable._type.size,
             )));
 
-        variable._type.size
+        Ok(variable._type.size)
     }
 
-    fn compile_addition(&mut self, addition: &ast::Addition, expected_type: ast::Type) -> usize {
-        self.compile_expression(&addition.left, expected_type.clone());
-        self.compile_expression(&addition.right, expected_type.clone());
+    fn compile_addition(
+        &mut self,
+        addition: &ast::Addition,
+        expected_type: ast::Type,
+    ) -> Result<usize> {
+        self.compile_expression(&addition.left, expected_type.clone())?;
+        self.compile_expression(&addition.right, expected_type.clone())?;
         self.var_stack.pop();
         self.var_stack.pop();
 
         if expected_type == ast::VOID {
-            panic!("can't add void type");
+            return Err(anyhow!("can't add void type"));
         }
 
         self.instructions
@@ -180,41 +196,41 @@ impl FunctionCompiler {
                 expected_type.size,
             )));
 
-        expected_type.size
+        Ok(expected_type.size)
     }
 
     fn compile_expression(
         &mut self,
         expression: &ast::Expression,
         expected_type: ast::Type,
-    ) -> usize {
+    ) -> Result<usize> {
         let size = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v, expected_type),
             ast::Expression::Addition(v) => self.compile_addition(v, expected_type),
-            ast::Expression::Identifier(v) => self.compile_identifier(&v, expected_type),
+            ast::Expression::Identifier(v) => self.compile_identifier(v, expected_type),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v, expected_type),
-        };
+        }?;
 
         self.var_stack.push(VarStackItem::Anon(size));
 
-        size
+        Ok(size)
     }
 
-    fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) {
+    fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
         match variable._type._type {
             lexer::Type::Int => {
-                self.compile_expression(&variable.expression, ast::INT);
+                self.compile_expression(&variable.expression, ast::INT)?;
 
                 self.var_stack.pop();
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
                 }));
+
+                Ok(())
             }
-            lexer::Type::Void => {
-                panic!("cant declare void variable");
-            }
-        };
+            lexer::Type::Void => Err(anyhow!("cant declare void variable")),
+        }
     }
 
     pub fn compile_fn(function: &ast::Function) -> Result<Vec<Instruction>> {
@@ -239,13 +255,13 @@ impl FunctionCompiler {
             .ok_or(anyhow!("compile_function: empty function body"))?
         {
             match v {
-                ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(&var),
+                ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(&var)?,
                 ast::Node::Return(exp) => {
                     // write expression into arguments
                     // reset local vars
                     // return
 
-                    let size = self.compile_expression(exp, function.return_type.clone());
+                    let size = self.compile_expression(exp, function.return_type.clone())?;
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Copy(
                             // -size because .size() gets you total stack size,
