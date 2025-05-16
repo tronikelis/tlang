@@ -36,7 +36,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    pub fn new(code: &String) -> Self {
+    pub fn new(code: &str) -> Self {
         Self {
             code: code.chars().collect(),
             i: 0,

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Error, Result};
+use std::collections::HashMap;
 
 use crate::{ast, lexer, vm};
 
@@ -145,7 +146,10 @@ impl FunctionCompiler {
     }
 
     fn compile_identifier(&mut self, identifier: &str, expected_type: ast::Type) -> Result<usize> {
-        let (variable, offset) = self.var_stack.get_var(identifier).unwrap();
+        let (variable, offset) = self
+            .var_stack
+            .get_var(identifier)
+            .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
         if variable._type != expected_type {
             return Err(anyhow!("variable does not match expected type"));
@@ -226,8 +230,13 @@ impl FunctionCompiler {
         }
     }
 
-    pub fn compile_fn(function: &ast::Function) -> Result<Vec<Instruction>> {
-        Self::new().compile(function)
+    pub fn compile_functions(
+        functions: &[ast::Function],
+    ) -> Result<HashMap<String, Vec<Instruction>>> {
+        functions
+            .iter()
+            .map(|v| Ok((v.identifier.clone(), Self::new().compile(v)?)))
+            .collect()
     }
 
     fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
@@ -250,9 +259,18 @@ impl FunctionCompiler {
             match v {
                 ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(&var)?,
                 ast::Node::Return(exp) => {
+                    if function.identifier == "main" {
+                        self.instructions
+                            .push(Instruction::Real(vm::Instruction::Exit));
+
+                        continue;
+                    }
+
                     // write expression into arguments
                     // reset local vars
                     // return
+
+                    // todo: deal with empty arguments, empty returns
 
                     let size = self.compile_expression(exp, function.return_type.clone())?;
                     self.instructions
@@ -274,15 +292,22 @@ impl FunctionCompiler {
             };
         }
 
+        if function.identifier == "main" {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Exit));
+        } else {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Return));
+        }
+
         Ok(self.instructions)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::Ast;
-
     use super::*;
+    use crate::ast::Ast;
 
     #[test]
     fn simple() {
@@ -296,6 +321,10 @@ mod tests {
                     let b int = 1
                     let c int = a + b + 37 + 200
                     let d int = b + add(a, b)
+                }
+                fn add3(a int, b int, c int) int {
+                    let abc int = a + b + c
+                    return abc
                 }
             ",
         );

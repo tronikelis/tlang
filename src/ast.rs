@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
-use super::lexer;
+use crate::lexer;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
