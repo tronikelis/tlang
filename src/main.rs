@@ -8,6 +8,9 @@ mod linker;
 fn main() {
     let code = String::from(
         "
+                fn voidfn() void {
+                    return
+                }
                 fn add(a int, b int) int {
                     return a + b
                 }
@@ -29,6 +32,7 @@ fn main() {
     {
         let tokens = lexer::Lexer::new(&code).run().unwrap();
         let ast = ast::Ast::new(&tokens).unwrap();
+        println!("{:#?}", ast);
         let functions = compiler::FunctionCompiler::compile_functions(&ast.functions).unwrap();
         instructions = linker::link(&functions).unwrap();
     }

@@ -270,17 +270,18 @@ impl FunctionCompiler {
                     // reset local vars
                     // return
 
-                    // todo: deal with empty arguments, empty returns
+                    if let Some(exp) = exp {
+                        let size = self.compile_expression(exp, function.return_type.clone())?;
+                        self.instructions
+                            .push(Instruction::Real(vm::Instruction::Copy(
+                                // -size because .size() gets you total stack size,
+                                // while we want to index into first item
+                                self.var_stack.size() - size,
+                                0,
+                                size,
+                            )));
+                    }
 
-                    let size = self.compile_expression(exp, function.return_type.clone())?;
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Copy(
-                            // -size because .size() gets you total stack size,
-                            // while we want to index into first item
-                            self.var_stack.size() - size,
-                            0,
-                            size,
-                        )));
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Reset(
                             self.var_stack.size() - fn_arg_size,

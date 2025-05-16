@@ -63,7 +63,7 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
-    Return(Expression),
+    Return(Option<Expression>),
 }
 
 #[derive(Debug)]
@@ -146,7 +146,7 @@ impl<'a> TokenParser<'a> {
             )),
             lexer::Token::Return => {
                 self.next();
-                Ok(Node::Return(self.parse_expression()?))
+                Ok(Node::Return(self.parse_expression().ok()))
             }
             token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
         }
