@@ -250,6 +250,8 @@ impl FunctionCompiler {
         self.instructions
             .push(Instruction::Real(vm::Instruction::Reset(size)));
 
+        self.var_stack.pop();
+
         Ok(())
     }
 
