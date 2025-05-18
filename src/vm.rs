@@ -4,7 +4,7 @@ use std::alloc::{alloc, dealloc, Layout};
 pub enum Instruction {
     Increment(usize),
     PushI(isize),
-    AddI(usize, usize),
+    AddI,
     // dst = src * len
     Copy(usize, usize, usize),
     Exit,
@@ -13,6 +13,10 @@ pub enum Instruction {
     JumpAndLink(usize),
     Jump(usize),
     Return,
+    BranchIfTrue(usize),
+    ToBool,
+    NegateBool,
+    MinusInt,
 }
 
 pub struct Stack {
@@ -121,10 +125,10 @@ impl Vm {
 
         loop {
             match self.instructions[pc] {
-                Instruction::AddI(a_offset, b_offset) => {
-                    let a = self.stack.offset::<isize>(a_offset);
-                    let b = self.stack.offset::<isize>(b_offset);
-                    self.stack.offset_write(b_offset, a + b);
+                Instruction::AddI => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a + b);
                 }
                 Instruction::Exit => return,
                 Instruction::PushI(v) => {
@@ -154,6 +158,33 @@ impl Vm {
                 }
                 Instruction::Increment(by) => {
                     self.stack.increment(by);
+                }
+                Instruction::BranchIfTrue(i) => {
+                    let boolean = self.stack.pop::<isize>();
+                    if boolean == 1 {
+                        pc = i;
+                        continue;
+                    }
+                }
+                Instruction::ToBool => {
+                    let int = self.stack.pop::<isize>();
+                    if int > 0 {
+                        self.stack.push::<isize>(1);
+                    } else {
+                        self.stack.push::<isize>(0);
+                    }
+                }
+                Instruction::NegateBool => {
+                    let int = self.stack.pop::<isize>();
+                    if int == 1 {
+                        self.stack.push::<isize>(0);
+                    } else {
+                        self.stack.push::<isize>(1);
+                    }
+                }
+                Instruction::MinusInt => {
+                    let int = self.stack.pop::<isize>();
+                    self.stack.push(-int);
                 }
             }
 

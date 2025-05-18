@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     Int,
     Void,
+    Bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -26,9 +27,17 @@ pub enum Token {
     Plus,
     Type(Type),
     Literal(Literal),
+    Lt,
+    Gt,
+    If,
+    ElseIf,
+    Else,
+    AmperAmper,
+    PipePipe,
+    EqualsEquals,
 }
 
-const CONTROL_CHAR: [char; 5] = [')', '(', '}', '{', ','];
+const CONTROL_CHAR: [char; 11] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+'];
 
 pub struct Lexer {
     code: Vec<char>,
@@ -46,8 +55,23 @@ impl Lexer {
     pub fn run(mut self) -> Result<Vec<Token>> {
         let mut tokens: Vec<Token> = Vec::new();
 
-        while let Some(_) = self.peek_char() {
+        while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "elseif" => {
+                    tokens.push(Token::ElseIf);
+                    self.read_next_word();
+                    continue;
+                }
+                "else" => {
+                    tokens.push(Token::Else);
+                    self.read_next_word();
+                    continue;
+                }
+                "if" => {
+                    tokens.push(Token::If);
+                    self.read_next_word();
+                    continue;
+                }
                 "fn" => {
                     tokens.push(Token::Function);
                     self.read_next_word();
@@ -68,6 +92,11 @@ impl Lexer {
                     self.read_next_word();
                     continue;
                 }
+                "bool" => {
+                    tokens.push(Token::Type(Type::Bool));
+                    self.read_next_word();
+                    continue;
+                }
                 "return" => {
                     tokens.push(Token::Return);
                     self.read_next_word();
@@ -76,8 +105,40 @@ impl Lexer {
                 _ => {}
             }
 
-            if let Some(ch) = self.peek_char() {
+            if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    '&' => {
+                        match self.peek_char(1).ok_or(anyhow!("todo: amper"))? {
+                            '&' => {
+                                tokens.push(Token::AmperAmper);
+                                self.next();
+                            }
+                            _ => return Err(anyhow!("todo: unexpected token")),
+                        };
+                        self.next();
+                        continue;
+                    }
+                    '|' => {
+                        match self.peek_char(1).ok_or(anyhow!("todo: pipe"))? {
+                            '|' => {
+                                tokens.push(Token::PipePipe);
+                                self.next();
+                            }
+                            _ => return Err(anyhow!("todo: unexpected token")),
+                        };
+                        self.next();
+                        continue;
+                    }
+                    '>' => {
+                        tokens.push(Token::Gt);
+                        self.next();
+                        continue;
+                    }
+                    '<' => {
+                        tokens.push(Token::Lt);
+                        self.next();
+                        continue;
+                    }
                     '(' => {
                         tokens.push(Token::POpen);
                         self.next();
@@ -89,7 +150,13 @@ impl Lexer {
                         continue;
                     }
                     '=' => {
-                        tokens.push(Token::Equals);
+                        match self.peek_char(1).ok_or(anyhow!("todo: equals"))? {
+                            '=' => {
+                                tokens.push(Token::EqualsEquals);
+                                self.next();
+                            }
+                            _ => tokens.push(Token::Equals),
+                        };
                         self.next();
                         continue;
                     }
@@ -141,12 +208,12 @@ impl Lexer {
         self.i += 1;
     }
 
-    fn peek_char(&mut self) -> Option<char> {
-        self.code.get(self.i).map(|v| *v)
+    fn peek_char(&mut self, offset: usize) -> Option<char> {
+        self.code.get(self.i + offset).map(|v| *v)
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(ch) = self.peek_char() {
+        while let Some(ch) = self.peek_char(0) {
             if !ch.is_whitespace() {
                 break;
             }
@@ -165,7 +232,7 @@ impl Lexer {
         let mut word = String::new();
         self.skip_whitespace();
 
-        while let Some(ch) = self.peek_char() {
+        while let Some(ch) = self.peek_char(0) {
             if ch.is_whitespace() || CONTROL_CHAR.contains(&ch) {
                 break;
             }

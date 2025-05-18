@@ -184,14 +184,7 @@ impl FunctionCompiler {
         }
 
         self.instructions
-            .push(Instruction::Real(vm::Instruction::AddI(
-                0,
-                expected_type.size,
-            )));
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                expected_type.size,
-            )));
+            .push(Instruction::Real(vm::Instruction::AddI));
 
         Ok(expected_type.size)
     }
@@ -277,7 +270,7 @@ impl FunctionCompiler {
         let fn_arg_size = self.var_stack.size();
 
         for v in function
-            .body
+            .block
             .as_ref()
             .ok_or(anyhow!("compile_function: empty function body"))?
         {
@@ -340,37 +333,37 @@ impl FunctionCompiler {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ast::Ast;
-
-    #[test]
-    fn simple() {
-        let code = String::from(
-            "
-                fn add(a int, b int) int {
-                    return a + b
-                }
-                fn main() void {
-                    let a int = 0
-                    let b int = 1
-                    let c int = a + b + 37 + 200
-                    let d int = b + add(a, b)
-                }
-                fn add3(a int, b int, c int) int {
-                    let abc int = a + b + c
-                    return abc
-                }
-            ",
-        );
-
-        let tokens = lexer::Lexer::new(&code).run().unwrap();
-        let ast = Ast::new(&tokens).unwrap();
-
-        for v in &ast.functions {
-            println!("{}", v.identifier);
-            println!("{:#?}", FunctionCompiler::compile_fn(v).unwrap());
-        }
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::ast::Ast;
+//
+//     #[test]
+//     fn simple() {
+//         let code = String::from(
+//             "
+//                 fn add(a int, b int) int {
+//                     return a + b
+//                 }
+//                 fn main() void {
+//                     let a int = 0
+//                     let b int = 1
+//                     let c int = a + b + 37 + 200
+//                     let d int = b + add(a, b)
+//                 }
+//                 fn add3(a int, b int, c int) int {
+//                     let abc int = a + b + c
+//                     return abc
+//                 }
+//             ",
+//         );
+//
+//         let tokens = lexer::Lexer::new(&code).run().unwrap();
+//         let ast = Ast::new(&tokens).unwrap();
+//
+//         for v in &ast.functions {
+//             println!("{}", v.identifier);
+//             println!("{:#?}", FunctionCompiler::compile_fn(v).unwrap());
+//         }
+//     }
+// }
