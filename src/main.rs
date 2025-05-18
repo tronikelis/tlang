@@ -8,6 +8,11 @@ mod linker;
 fn main() {
     let code = String::from(
         "
+                fn withAdd(a int, b int) int {
+                    a = 20
+                    b = 35
+                    return a + b
+                }
                 fn voidfn() void {
                     return
                 }
@@ -17,6 +22,8 @@ fn main() {
                 fn main() void {
                     let a int = 0
                     let b int = 1
+                    a = 20
+                    b = 30
                     let c int = a + b + 37 + 200
                     let d int = b + add(a, b)
                 }

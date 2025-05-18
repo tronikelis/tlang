@@ -230,6 +230,29 @@ impl FunctionCompiler {
         }
     }
 
+    fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
+        // push expression
+        // copy into assignment
+        // reset expression
+        let size =
+            self.compile_expression(&assignment.expression, assignment.variable._type.clone())?;
+
+        let (variable, offset) = self
+            .var_stack
+            .get_var(&assignment.variable.identifier)
+            .ok_or(anyhow!("compile_variable_assignment: variable not found"))?;
+        if variable._type != assignment.variable._type {
+            return Err(anyhow!("compile_variable_assignment: types don't match"));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Copy(offset, 0, size)));
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(size)));
+
+        Ok(())
+    }
+
     pub fn compile_functions(
         functions: &[ast::Function],
     ) -> Result<HashMap<String, Vec<Instruction>>> {
@@ -289,6 +312,16 @@ impl FunctionCompiler {
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Return));
+                }
+                ast::Node::FunctionCall(fn_call) => {
+                    self.compile_function_call(fn_call, fn_call.function.return_type.clone())?;
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::Reset(
+                            fn_call.function.return_type.size,
+                        )));
+                }
+                ast::Node::VariableAssignment(assignment) => {
+                    self.compile_variable_assignment(assignment)?;
                 }
             };
         }
