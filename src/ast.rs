@@ -61,9 +61,17 @@ pub enum Expression {
 }
 
 #[derive(Debug, Clone)]
+pub struct VariableAssignment {
+    pub variable: ContextVariable,
+    pub expression: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
+    VariableAssignment(VariableAssignment),
     Return(Option<Expression>),
+    FunctionCall(FunctionCall),
 }
 
 #[derive(Debug)]
@@ -85,8 +93,15 @@ struct TokenParser<'a> {
     context: TokenParserContext,
 }
 
+#[derive(Debug, Clone)]
+pub struct ContextVariable {
+    pub _type: Type,
+    pub identifier: String,
+}
+
 struct TokenParserContext {
-    function_declarations: HashMap<String, Function>,
+    functions: HashMap<String, Function>,
+    variables: HashMap<String, ContextVariable>,
 }
 
 impl<'a> TokenParser<'a> {
@@ -95,7 +110,8 @@ impl<'a> TokenParser<'a> {
             tokens,
             i: 0,
             context: TokenParserContext {
-                function_declarations: HashMap::new(),
+                functions: HashMap::new(),
+                variables: HashMap::new(),
             },
         }
     }
@@ -120,7 +136,8 @@ impl<'a> TokenParser<'a> {
 
     fn parse_context(&self) -> Result<TokenParserContext> {
         Ok(TokenParserContext {
-            function_declarations: self.parse_context_function_declarations()?,
+            functions: self.parse_context_function_declarations()?,
+            variables: HashMap::new(),
         })
     }
 
@@ -148,8 +165,34 @@ impl<'a> TokenParser<'a> {
                 self.next();
                 Ok(Node::Return(self.parse_expression().ok()))
             }
+            lexer::Token::Identifier(_) => match self.peek_token_err(1)? {
+                lexer::Token::Equals => {
+                    Ok(Node::VariableAssignment(self.parse_variable_assignment()?))
+                }
+                lexer::Token::POpen => Ok(Node::FunctionCall(self.parse_function_call()?)),
+                _ => return Err(anyhow!("parse_token: token not supported")),
+            },
             token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
         }
+    }
+
+    fn parse_variable_assignment(&mut self) -> Result<VariableAssignment> {
+        let identifier = self.parse_identifier()?;
+
+        self.expect_next_token(lexer::Token::Equals)?;
+        self.next();
+
+        let expression = self.parse_expression()?;
+
+        Ok(VariableAssignment {
+            variable: self
+                .context
+                .variables
+                .get(&identifier)
+                .ok_or(anyhow!("parse_variable_assignment: variable not found"))?
+                .clone(),
+            expression,
+        })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Node>> {
@@ -240,6 +283,16 @@ impl<'a> TokenParser<'a> {
 
         let return_type = self.parse_type()?;
 
+        for v in &function_arguments {
+            self.context.variables.insert(
+                v.identifier.clone(),
+                ContextVariable {
+                    identifier: v.identifier.clone(),
+                    _type: v._type.clone(),
+                },
+            );
+        }
+
         Ok(Function {
             identifier,
             arguments: function_arguments,
@@ -249,6 +302,8 @@ impl<'a> TokenParser<'a> {
     }
 
     fn parse_function(&mut self) -> Result<Function> {
+        self.context.variables = HashMap::new();
+
         let function = self.parse_function_declaration()?;
         let body = self.parse_block()?;
 
@@ -283,7 +338,7 @@ impl<'a> TokenParser<'a> {
 
         let function = self
             .context
-            .function_declarations
+            .functions
             .get(&identifier)
             .ok_or(anyhow!(
                 "parse_function_call: context function declaration does not exist"
@@ -344,6 +399,14 @@ impl<'a> TokenParser<'a> {
         self.next();
 
         let expression = self.parse_expression()?;
+
+        self.context.variables.insert(
+            identifier.clone(),
+            ContextVariable {
+                _type: _type.clone(),
+                identifier: identifier.clone(),
+            },
+        );
 
         Ok(VariableDeclaration {
             identifier,
