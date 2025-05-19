@@ -35,28 +35,19 @@ impl VarStack {
         self.stack.push(Vec::new());
     }
 
-    fn pop_frame(&mut self) -> Option<usize> {
-        if let Some(last) = self.stack.last() {
-            let size = Self::size_for(last.iter());
-            self.stack.pop();
-            Some(size)
-        } else {
-            None
-        }
+    fn pop_frame(&mut self) -> usize {
+        let last = self.stack.last().unwrap();
+        let size = Self::size_for(last.iter());
+        self.stack.pop();
+        size
     }
 
     fn push(&mut self, item: VarStackItem) {
-        if let Some(v) = self.stack.last_mut() {
-            v.push(item);
-        } else {
-            self.stack.push(Vec::from([item]));
-        }
+        self.stack.last_mut().unwrap().push(item);
     }
 
     fn pop(&mut self) {
-        if let Some(v) = self.stack.last_mut() {
-            v.pop();
-        }
+        self.stack.last_mut().unwrap().pop();
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -96,13 +87,9 @@ struct LabelInstructions {
 
 impl LabelInstructions {
     fn new() -> Self {
-        let mut instructions = Vec::new();
-        instructions.push(Vec::new());
-        let mut index = Vec::new();
-        index.push(0);
         Self {
-            index,
-            instructions,
+            index: Vec::new(),
+            instructions: Vec::new(),
         }
     }
 
@@ -110,7 +97,7 @@ impl LabelInstructions {
         self.instructions[*self.index.last().unwrap()].push(instruction);
     }
 
-    fn push_frame(&mut self) {
+    fn push_label(&mut self) {
         self.index.push(self.instructions.len());
         self.instructions.push(Vec::new());
     }
@@ -139,7 +126,7 @@ impl FunctionCompiler {
     fn new(label: usize) -> Self {
         Self {
             var_stack: VarStack::new(),
-            instructions: Vec::new(),
+            instructions: LabelInstructions::new(),
             label,
         }
     }
@@ -316,6 +303,9 @@ impl FunctionCompiler {
     }
 
     fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
+        self.instructions.push_label();
+        self.var_stack.push_frame();
+
         for arg in &function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
@@ -350,7 +340,7 @@ impl FunctionCompiler {
                         let size = self.compile_expression(exp, function.return_type.clone())?;
                         self.instructions
                             .push(Instruction::Real(vm::Instruction::Copy(
-                                // -size because .size() gets you total stack size,
+                                // -size because .total_size() gets you total stack size,
                                 // while we want to index into first item
                                 self.var_stack.total_size() - size,
                                 0,
@@ -381,6 +371,8 @@ impl FunctionCompiler {
                 }
             };
         }
+
+        // todo: here have to reset local vars as well
 
         if function.identifier == "main" {
             self.instructions
