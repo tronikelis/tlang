@@ -7,6 +7,7 @@ use crate::{ast, lexer, vm};
 pub enum Instruction {
     Real(vm::Instruction),
     JumpAndLink(String),
+    Jump(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ struct VarStackItemVar {
 }
 
 struct VarStack {
-    stack: Vec<VarStackItem>,
+    stack: Vec<Vec<VarStackItem>>,
 }
 
 impl VarStack {
@@ -30,25 +31,49 @@ impl VarStack {
         Self { stack: Vec::new() }
     }
 
+    fn push_frame(&mut self) {
+        self.stack.push(Vec::new());
+    }
+
+    fn pop_frame(&mut self) -> Option<usize> {
+        if let Some(last) = self.stack.last() {
+            let size = Self::size_for(last.iter());
+            self.stack.pop();
+            Some(size)
+        } else {
+            None
+        }
+    }
+
     fn push(&mut self, item: VarStackItem) {
-        self.stack.push(item);
+        if let Some(v) = self.stack.last_mut() {
+            v.push(item);
+        } else {
+            self.stack.push(Vec::from([item]));
+        }
     }
 
-    fn pop(&mut self) -> Option<VarStackItem> {
-        self.stack.pop()
+    fn pop(&mut self) {
+        if let Some(v) = self.stack.last_mut() {
+            v.pop();
+        }
     }
 
-    fn size(&self) -> usize {
-        self.stack.iter().fold(0, |acc, curr| match curr {
+    fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
+        items.fold(0, |acc, curr| match curr {
             VarStackItem::Var(var) => acc + var._type.size,
             VarStackItem::Anon(size) => acc + size,
         })
     }
 
+    fn total_size(&self) -> usize {
+        Self::size_for(self.stack.iter().flatten())
+    }
+
     fn get_var(&self, identifier: &str) -> Option<(VarStackItemVar, usize)> {
         let mut offset = 0;
 
-        for item in self.stack.iter().rev() {
+        for item in self.stack.iter().flatten().rev() {
             match item {
                 VarStackItem::Var(var) => {
                     if var.identifier == identifier {
@@ -64,16 +89,56 @@ impl VarStack {
     }
 }
 
+struct LabelInstructions {
+    instructions: Vec<Vec<Instruction>>,
+    index: Vec<usize>,
+}
+
+impl LabelInstructions {
+    fn new() -> Self {
+        let mut instructions = Vec::new();
+        instructions.push(Vec::new());
+        Self {
+            index: Vec::new(),
+            instructions,
+        }
+    }
+
+    fn insert(&mut self, instruction: Instruction) {
+        self.instructions[*self.index.last().unwrap()].push(instruction);
+    }
+
+    fn insert_frame(&mut self) {
+        self.index.push(self.instructions.len());
+        self.instructions.push(Vec::new());
+    }
+
+    fn jump(&mut self) {
+        let new_index = self.instructions.len();
+        self.insert(Instruction::Jump(new_index));
+        self.index.push(new_index);
+
+        self.instructions.push(Vec::new());
+    }
+
+    fn back(&mut self) {
+        self.insert(Instruction::Jump(*self.index.last().unwrap() - 1));
+        self.index.pop();
+    }
+}
+
 pub struct FunctionCompiler {
     var_stack: VarStack,
-    instructions: Vec<Instruction>,
+    instructions: LabelInstructions,
+    label: usize,
 }
 
 impl FunctionCompiler {
-    fn new() -> Self {
+    fn new(label: usize) -> Self {
         Self {
             var_stack: VarStack::new(),
             instructions: Vec::new(),
+            label,
         }
     }
 
@@ -248,15 +313,6 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    pub fn compile_functions(
-        functions: &[ast::Function],
-    ) -> Result<HashMap<String, Vec<Instruction>>> {
-        functions
-            .iter()
-            .map(|v| Ok((v.identifier.clone(), Self::new().compile(v)?)))
-            .collect()
-    }
-
     fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
         for arg in &function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
@@ -267,10 +323,10 @@ impl FunctionCompiler {
         // return address
         self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
 
-        let fn_arg_size = self.var_stack.size();
+        let fn_arg_size = self.var_stack.total_size();
 
         for v in function
-            .block
+            .body
             .as_ref()
             .ok_or(anyhow!("compile_function: empty function body"))?
         {
@@ -294,7 +350,7 @@ impl FunctionCompiler {
                             .push(Instruction::Real(vm::Instruction::Copy(
                                 // -size because .size() gets you total stack size,
                                 // while we want to index into first item
-                                self.var_stack.size() - size,
+                                self.var_stack.total_size() - size,
                                 0,
                                 size,
                             )));
@@ -302,7 +358,7 @@ impl FunctionCompiler {
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Reset(
-                            self.var_stack.size() - fn_arg_size,
+                            self.var_stack.total_size() - fn_arg_size,
                         )));
 
                     self.instructions
@@ -317,6 +373,9 @@ impl FunctionCompiler {
                 }
                 ast::Node::VariableAssignment(assignment) => {
                     self.compile_variable_assignment(assignment)?;
+                }
+                ast::Node::If(v) => {
+                    self.compile_if(v)?;
                 }
             };
         }
