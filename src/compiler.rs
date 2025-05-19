@@ -98,31 +98,33 @@ impl LabelInstructions {
     fn new() -> Self {
         let mut instructions = Vec::new();
         instructions.push(Vec::new());
+        let mut index = Vec::new();
+        index.push(0);
         Self {
-            index: Vec::new(),
+            index,
             instructions,
         }
     }
 
-    fn insert(&mut self, instruction: Instruction) {
+    fn push(&mut self, instruction: Instruction) {
         self.instructions[*self.index.last().unwrap()].push(instruction);
     }
 
-    fn insert_frame(&mut self) {
+    fn push_frame(&mut self) {
         self.index.push(self.instructions.len());
         self.instructions.push(Vec::new());
     }
 
     fn jump(&mut self) {
         let new_index = self.instructions.len();
-        self.insert(Instruction::Jump(new_index));
+        self.push(Instruction::Jump(new_index));
         self.index.push(new_index);
 
         self.instructions.push(Vec::new());
     }
 
     fn back(&mut self) {
-        self.insert(Instruction::Jump(*self.index.last().unwrap() - 1));
+        self.push(Instruction::Jump(*self.index.last().unwrap() - 1));
         self.index.pop();
     }
 }
