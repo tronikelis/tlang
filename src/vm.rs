@@ -13,7 +13,7 @@ pub enum Instruction {
     JumpAndLink(usize),
     Jump(usize),
     Return,
-    BranchIfTrue(usize),
+    JumpIfTrue(usize),
     ToBool,
     NegateBool,
     MinusInt,
@@ -159,7 +159,7 @@ impl Vm {
                 Instruction::Increment(by) => {
                     self.stack.increment(by);
                 }
-                Instruction::BranchIfTrue(i) => {
+                Instruction::JumpIfTrue(i) => {
                     let boolean = self.stack.pop::<isize>();
                     if boolean == 1 {
                         pc = i;

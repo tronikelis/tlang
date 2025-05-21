@@ -8,6 +8,7 @@ pub enum Instruction {
     Real(vm::Instruction),
     JumpAndLink(String),
     Jump(usize),
+    JumpIfTrue(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -110,21 +111,35 @@ impl LabelInstructions {
         self.instructions.push(Vec::new());
     }
 
+    fn jump_if_true(&mut self) {
+        let new_index = self.instructions.len();
+        self.push(Instruction::JumpIfTrue(new_index));
+        self.index.push(new_index);
+
+        self.instructions.push(Vec::new());
+    }
+
+    fn back_no_pop(&mut self) {
+        self.push(Instruction::Jump(*self.index.last().unwrap() - 1));
+    }
+
     fn back(&mut self) {
         self.push(Instruction::Jump(*self.index.last().unwrap() - 1));
         self.index.pop();
     }
 }
 
-pub struct FunctionCompiler {
+pub struct FunctionCompiler<'a> {
     var_stack: VarStack,
     instructions: LabelInstructions,
     label: usize,
+    function: &'a ast::Function,
 }
 
-impl FunctionCompiler {
-    fn new(label: usize) -> Self {
+impl<'a> FunctionCompiler<'a> {
+    fn new(label: usize, function: &'a ast::Function) -> Self {
         Self {
+            function,
             var_stack: VarStack::new(),
             instructions: LabelInstructions::new(),
             label,
@@ -302,14 +317,49 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &[ast::Node], function: &ast::Function) -> Result<()> {
+    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
+        self.compile_expression(expression, ast::BOOL)?;
+
+        self.instructions.jump_if_true();
+        self.var_stack.pop();
+
+        self.compile_body(body);
+        self.instructions.back();
+        self.instructions.back_no_pop();
+
+        Ok(())
+    }
+
+    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+        self.instructions.push_label(); // will contain after if instructions
+        self.instructions.push_label(); // will contain jump if true instructions
+
+        self.compile_if_block(&_if.expression, &_if.body)?;
+
+        for v in &_if.elseif {
+            self.compile_if_block(&v.expression, &v.body)?;
+        }
+
+        if let Some(v) = &_if._else {
+            self.instructions.jump_if_true();
+            self.compile_body(&v.body);
+            self.instructions.back();
+            self.instructions.back_no_pop();
+        }
+
+        self.instructions.back();
+
+        Ok(())
+    }
+
+    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
         self.var_stack.push_frame();
 
         for item in body {
             match item {
                 ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
                 ast::Node::Return(exp) => {
-                    if function.identifier == "main" {
+                    if self.function.identifier == "main" {
                         self.instructions
                             .push(Instruction::Real(vm::Instruction::Exit));
 
@@ -321,7 +371,8 @@ impl FunctionCompiler {
                     // return
 
                     if let Some(exp) = exp {
-                        let size = self.compile_expression(exp, function.return_type.clone())?;
+                        let size =
+                            self.compile_expression(exp, self.function.return_type.clone())?;
                         self.instructions
                             .push(Instruction::Real(vm::Instruction::Copy(
                                 // -size because .total_size() gets you total stack size,
@@ -365,11 +416,11 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
+    fn compile(mut self) -> Result<Vec<Instruction>> {
         self.instructions.push_label();
         self.var_stack.push_frame();
 
-        for arg in &function.arguments {
+        for arg in self.function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
                 identifier: arg.identifier.clone(),
@@ -379,13 +430,13 @@ impl FunctionCompiler {
         self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
 
         self.compile_body(
-            &function
+            &self
+                .function
                 .body
                 .ok_or(anyhow!("compile: function body empty"))?,
-            function,
         );
 
-        if function.identifier == "main" {
+        if self.function.identifier == "main" {
             self.instructions
                 .push(Instruction::Real(vm::Instruction::Exit));
         } else {

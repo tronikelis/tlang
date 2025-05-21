@@ -97,8 +97,14 @@ pub struct Compare {
 pub struct If {
     pub expression: Expression,
     pub body: Vec<Node>,
-    pub elseif: Vec<If>,
+    pub elseif: Vec<ElseIf>,
     pub _else: Option<Else>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElseIf {
+    pub expression: Expression,
+    pub body: Vec<Node>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,13 +238,18 @@ impl<'a> TokenParser<'a> {
 
         let body = self.parse_body()?;
 
-        let mut elseif = Vec::new();
+        let mut elseif = Vec::<ElseIf>::new();
         while let lexer::Token::ElseIf = self.peek_token_err(0)? {
-            elseif.push(self.parse_if()?);
+            self.next();
+            elseif.push(ElseIf {
+                expression: self.parse_expression()?,
+                body: self.parse_body()?,
+            });
         }
 
         let mut _else = None;
         if let lexer::Token::Else = self.peek_token_err(0)? {
+            self.next();
             _else = Some(Else {
                 body: self.parse_body()?,
             });
