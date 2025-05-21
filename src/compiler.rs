@@ -302,28 +302,12 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
-        self.instructions.push_label();
+    fn compile_body(&mut self, body: &[ast::Node], function: &ast::Function) -> Result<()> {
         self.var_stack.push_frame();
 
-        for arg in &function.arguments {
-            self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                _type: arg._type.clone(),
-                identifier: arg.identifier.clone(),
-            }));
-        }
-        // return address
-        self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
-
-        let fn_arg_size = self.var_stack.total_size();
-
-        for v in function
-            .body
-            .as_ref()
-            .ok_or(anyhow!("compile_function: empty function body"))?
-        {
-            match v {
-                ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(&var)?,
+        for item in body {
+            match item {
+                ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
                 ast::Node::Return(exp) => {
                     if function.identifier == "main" {
                         self.instructions
@@ -350,7 +334,7 @@ impl FunctionCompiler {
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Reset(
-                            self.var_stack.total_size() - fn_arg_size,
+                            self.var_stack.pop_frame(),
                         )));
 
                     self.instructions
@@ -358,6 +342,7 @@ impl FunctionCompiler {
                 }
                 ast::Node::FunctionCall(fn_call) => {
                     self.compile_function_call(fn_call, fn_call.function.return_type.clone())?;
+                    // no variable to store result in, reset instantly
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Reset(
                             fn_call.function.return_type.size,
@@ -372,7 +357,33 @@ impl FunctionCompiler {
             };
         }
 
-        // todo: here have to reset local vars as well
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                self.var_stack.pop_frame(),
+            )));
+
+        Ok(())
+    }
+
+    fn compile(mut self, function: &ast::Function) -> Result<Vec<Instruction>> {
+        self.instructions.push_label();
+        self.var_stack.push_frame();
+
+        for arg in &function.arguments {
+            self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                _type: arg._type.clone(),
+                identifier: arg.identifier.clone(),
+            }));
+        }
+        // return address
+        self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
+
+        self.compile_body(
+            &function
+                .body
+                .ok_or(anyhow!("compile: function body empty"))?,
+            function,
+        );
 
         if function.identifier == "main" {
             self.instructions
