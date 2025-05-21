@@ -341,10 +341,8 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         if let Some(v) = &_if._else {
-            self.instructions.jump_if_true();
             self.compile_body(&v.body);
-            self.instructions.back();
-            self.instructions.back_no_pop();
+            // todo: huh is that it??
         }
 
         self.instructions.back();
