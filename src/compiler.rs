@@ -29,7 +29,9 @@ struct VarStack {
 
 impl VarStack {
     fn new() -> Self {
-        Self { stack: Vec::new() }
+        let mut stack = Vec::new();
+        stack.push(Vec::new());
+        Self { stack }
     }
 
     fn push_frame(&mut self) {
@@ -88,19 +90,16 @@ struct LabelInstructions {
 
 impl LabelInstructions {
     fn new() -> Self {
+        let mut instructions = Vec::new();
+        instructions.push(Vec::new());
         Self {
-            index: Vec::new(),
-            instructions: Vec::new(),
+            index: Vec::from([0]),
+            instructions,
         }
     }
 
     fn push(&mut self, instruction: Instruction) {
         self.instructions[*self.index.last().unwrap()].push(instruction);
-    }
-
-    fn push_label(&mut self) {
-        self.index.push(self.instructions.len());
-        self.instructions.push(Vec::new());
     }
 
     fn jump(&mut self) {
@@ -331,8 +330,8 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
-        self.instructions.push_label(); // will contain after if instructions
-        self.instructions.push_label(); // will contain jump if true instructions
+        self.instructions.jump(); // will contain after if instructions
+        self.instructions.jump(); // will contain jump if true instructions
 
         self.compile_if_block(&_if.expression, &_if.body)?;
 
@@ -342,7 +341,6 @@ impl<'a> FunctionCompiler<'a> {
 
         if let Some(v) = &_if._else {
             self.compile_body(&v.body);
-            // todo: huh is that it??
         }
 
         self.instructions.back();
@@ -415,9 +413,6 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile(mut self) -> Result<Vec<Instruction>> {
-        self.instructions.push_label();
-        self.var_stack.push_frame();
-
         for arg in self.function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
