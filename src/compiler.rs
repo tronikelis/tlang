@@ -13,7 +13,8 @@ pub enum Instruction {
 
 #[derive(Debug, Clone)]
 enum VarStackItem {
-    Anon(usize),
+    Increment(usize),
+    Reset(usize),
     Var(VarStackItemVar),
 }
 
@@ -56,7 +57,8 @@ impl VarStack {
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
         items.fold(0, |acc, curr| match curr {
             VarStackItem::Var(var) => acc + var._type.size,
-            VarStackItem::Anon(size) => acc + size,
+            VarStackItem::Increment(size) => acc + size,
+            VarStackItem::Reset(size) => acc - size,
         })
     }
 
@@ -75,7 +77,8 @@ impl VarStack {
                     }
                     offset += var._type.size;
                 }
-                VarStackItem::Anon(size) => offset += size,
+                VarStackItem::Increment(size) => offset += size,
+                VarStackItem::Reset(size) => offset -= size,
             };
         }
 
@@ -145,17 +148,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_function_call(
-        &mut self,
-        call: &ast::FunctionCall,
-        expected_type: ast::Type,
-    ) -> Result<usize> {
-        if expected_type != call.function.return_type {
-            return Err(anyhow!(
-                "compile_function_call: expected_type does not match"
-            ));
-        }
-
+    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         let argument_size = call.arguments.iter().enumerate().try_fold(0, |acc, curr| {
             let expected_type = &call
                 .function
@@ -164,7 +157,12 @@ impl<'a> FunctionCompiler<'a> {
                 .ok_or(anyhow!("compile_function_call: expected_argument"))?
                 ._type;
 
-            Ok::<usize, Error>(acc + self.compile_expression(curr.1, expected_type.clone())?)
+            let _type = self.compile_expression(curr.1)?;
+            if *expected_type != _type {
+                Err(anyhow!("compile_function_call: unexpected type"))
+            } else {
+                Ok::<usize, Error>(acc + _type.size)
+            }
         })?;
 
         let return_size = call.function.return_type.size;
@@ -178,6 +176,8 @@ impl<'a> FunctionCompiler<'a> {
                 .push(Instruction::Real(vm::Instruction::Increment(
                     return_size - argument_size,
                 )));
+            self.var_stack
+                .push(VarStackItem::Increment(return_size - argument_size));
         } else {
             // reset the argument section to the return size
             reset_size = argument_size - return_size;
@@ -189,39 +189,28 @@ impl<'a> FunctionCompiler<'a> {
         if reset_size != 0 {
             self.instructions
                 .push(Instruction::Real(vm::Instruction::Reset(reset_size)));
+            self.var_stack.push(VarStackItem::Reset(reset_size));
         }
 
-        Ok(return_size)
+        Ok(call.function.return_type.clone())
     }
 
-    fn compile_literal(
-        &mut self,
-        literal: &lexer::Literal,
-        expected_type: ast::Type,
-    ) -> Result<usize> {
+    fn compile_literal(&mut self, literal: &lexer::Literal) -> Result<ast::Type> {
         match literal {
             lexer::Literal::Int(int) => {
-                if expected_type != ast::INT {
-                    return Err(anyhow!("expected type dont match"));
-                }
-
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::PushI(*int)));
 
-                Ok(ast::INT.size)
+                Ok(ast::INT)
             }
         }
     }
 
-    fn compile_identifier(&mut self, identifier: &str, expected_type: ast::Type) -> Result<usize> {
+    fn compile_identifier(&mut self, identifier: &str) -> Result<ast::Type> {
         let (variable, offset) = self
             .var_stack
             .get_var(identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
-
-        if variable._type != expected_type {
-            return Err(anyhow!("variable does not match expected type"));
-        }
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::Increment(
@@ -234,44 +223,103 @@ impl<'a> FunctionCompiler<'a> {
                 variable._type.size,
             )));
 
-        Ok(variable._type.size)
+        Ok(variable._type)
     }
 
-    fn compile_addition(
-        &mut self,
-        addition: &ast::Addition,
-        expected_type: ast::Type,
-    ) -> Result<usize> {
-        self.compile_expression(&addition.left, expected_type.clone())?;
-        self.compile_expression(&addition.right, expected_type.clone())?;
+    fn compile_addition(&mut self, addition: &ast::Addition) -> Result<ast::Type> {
+        let a = self.compile_expression(&addition.left)?;
+        let b = self.compile_expression(&addition.right)?;
+        // compile_expression will push this for us
         self.var_stack.pop();
         self.var_stack.pop();
 
-        if expected_type == ast::VOID {
+        if a != b {
+            return Err(anyhow!("can't add different types"));
+        }
+        if a == ast::VOID {
             return Err(anyhow!("can't add void type"));
+        }
+        if a != ast::INT {
+            return Err(anyhow!("can only add int"));
         }
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::AddI));
 
-        Ok(expected_type.size)
+        Ok(a)
     }
 
-    fn compile_expression(
-        &mut self,
-        expression: &ast::Expression,
-        expected_type: ast::Type,
-    ) -> Result<usize> {
-        let size = match expression {
-            ast::Expression::Literal(v) => self.compile_literal(v, expected_type),
-            ast::Expression::Addition(v) => self.compile_addition(v, expected_type),
-            ast::Expression::Identifier(v) => self.compile_identifier(v, expected_type),
-            ast::Expression::FunctionCall(v) => self.compile_function_call(v, expected_type),
+    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<ast::Type> {
+        let a: ast::Type;
+        let b: ast::Type;
+
+        match compare.compare_type {
+            // last item on the stack is bigger
+            ast::CompareType::Gt => {
+                a = self.compile_expression(&compare.right)?;
+                b = self.compile_expression(&compare.left)?;
+            }
+            // last item on the stack is smaller
+            ast::CompareType::Lt => {
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression(&compare.right)?;
+            }
+            // dont matter
+            ast::CompareType::Equals => {
+                a = self.compile_expression(&compare.right)?;
+                b = self.compile_expression(&compare.left)?;
+            }
+        };
+        // compile expression will push for us
+        self.var_stack.pop();
+        self.var_stack.pop();
+
+        if a._type != b._type {
+            return Err(anyhow!("can't compare different types"));
+        }
+
+        match compare.compare_type {
+            ast::CompareType::Gt | ast::CompareType::Lt => {
+                // a = -a
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::MinusInt));
+
+                // a + b
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::AddI));
+
+                // >0:1 <0:0
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::ToBool));
+            }
+            ast::CompareType::Equals => match a._type {
+                lexer::Type::Int | lexer::Type::Bool => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::CompareInt));
+                }
+                _ => return Err(anyhow!("can only == int and bool")),
+            },
+        }
+
+        if let Some(andor) = compare.andor {
+            match andor {}
+        }
+
+        Ok(ast::BOOL)
+    }
+
+    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
+        let _type = match expression {
+            ast::Expression::Literal(v) => self.compile_literal(v),
+            ast::Expression::Addition(v) => self.compile_addition(v),
+            ast::Expression::Identifier(v) => self.compile_identifier(v),
+            ast::Expression::FunctionCall(v) => self.compile_function_call(v),
+            ast::Expression::Compare(v) => self.compile_compare(v),
         }?;
 
-        self.var_stack.push(VarStackItem::Anon(size));
+        self.var_stack.push(VarStackItem::Increment(_type.size));
 
-        Ok(size)
+        Ok(_type)
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
@@ -295,8 +343,12 @@ impl<'a> FunctionCompiler<'a> {
         // push expression
         // copy into assignment
         // reset expression
-        let size =
-            self.compile_expression(&assignment.expression, assignment.variable._type.clone())?;
+        let exp = self.compile_expression(&assignment.expression)?;
+        if exp != assignment.variable._type {
+            return Err(anyhow!(
+                "compile_variable_assignment: assignment does match expression"
+            ));
+        }
 
         let (variable, offset) = self
             .var_stack
@@ -307,9 +359,15 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         self.instructions
-            .push(Instruction::Real(vm::Instruction::Copy(offset, 0, size)));
+            .push(Instruction::Real(vm::Instruction::Copy(
+                offset,
+                0,
+                variable._type.size,
+            )));
         self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(size)));
+            .push(Instruction::Real(vm::Instruction::Reset(
+                variable._type.size,
+            )));
 
         self.var_stack.pop();
 
@@ -317,7 +375,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
-        self.compile_expression(expression, ast::BOOL)?;
+        self.compile_expression(expression)?; // todo: could free this earlier
 
         self.instructions.jump_if_true();
         self.var_stack.pop();
@@ -420,7 +478,8 @@ impl<'a> FunctionCompiler<'a> {
             }));
         }
         // return address
-        self.var_stack.push(VarStackItem::Anon(size_of::<usize>()));
+        self.var_stack
+            .push(VarStackItem::Increment(size_of::<usize>()));
 
         self.compile_body(
             &self

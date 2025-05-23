@@ -17,6 +17,7 @@ pub enum Instruction {
     ToBool,
     NegateBool,
     MinusInt,
+    CompareInt,
 }
 
 pub struct Stack {
@@ -185,6 +186,15 @@ impl Vm {
                 Instruction::MinusInt => {
                     let int = self.stack.pop::<isize>();
                     self.stack.push(-int);
+                }
+                Instruction::CompareInt => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    if a == b {
+                        self.stack.push::<isize>(1);
+                    } else {
+                        self.stack.push::<isize>(0)
+                    }
                 }
             }
 
