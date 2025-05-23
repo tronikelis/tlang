@@ -206,6 +206,7 @@ impl Vm {
                 }
             }
 
+            println!("executed instruction {pc}");
             pc += 1;
         }
     }

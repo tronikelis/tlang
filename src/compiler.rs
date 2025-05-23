@@ -138,17 +138,15 @@ impl LabelInstructions {
 pub struct FunctionCompiler<'a> {
     var_stack: VarStack,
     instructions: LabelInstructions,
-    label: usize,
     function: &'a ast::Function,
 }
 
 impl<'a> FunctionCompiler<'a> {
-    fn new(label: usize, function: &'a ast::Function) -> Self {
+    pub fn new(function: &'a ast::Function) -> Self {
         Self {
             function,
             var_stack: VarStack::new(),
             instructions: LabelInstructions::new(),
-            label,
         }
     }
 
@@ -233,9 +231,6 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_addition(&mut self, addition: &ast::Addition) -> Result<ast::Type> {
         let a = self.compile_expression(&addition.left)?;
         let b = self.compile_expression(&addition.right)?;
-        // compile_expression will push this for us
-        self.var_stack.pop();
-        self.var_stack.pop();
 
         if a != b {
             return Err(anyhow!("can't add different types"));
@@ -249,6 +244,8 @@ impl<'a> FunctionCompiler<'a> {
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::AddI));
+        self.var_stack.pop();
+        self.var_stack.pop();
 
         Ok(a)
     }
@@ -277,9 +274,6 @@ impl<'a> FunctionCompiler<'a> {
                 b = self.compile_expression(&compare.left)?;
             }
         };
-        // compile expression will push for us
-        self.var_stack.pop();
-        self.var_stack.pop();
 
         if a._type != b._type {
             return Err(anyhow!("can't compare different types"));
@@ -312,6 +306,8 @@ impl<'a> FunctionCompiler<'a> {
                 _ => return Err(anyhow!("can only == int and bool")),
             },
         }
+        self.var_stack.pop();
+        self.var_stack.pop();
 
         if let Some(andor) = &compare.andor {
             match andor {
@@ -324,24 +320,26 @@ impl<'a> FunctionCompiler<'a> {
                         .push(Instruction::Real(vm::Instruction::NegateBool));
 
                     let exp = self.compile_expression(exp)?;
-                    self.var_stack.pop();
                     if exp != ast::BOOL {
                         return Err(anyhow!("incorrect type"));
                     }
+
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::And));
+                    self.var_stack.pop();
                 }
                 ast::AndOr::Or(exp) => {
                     // jump to after if true
                     self.instructions.back_if_true(1);
 
                     let exp = self.compile_expression(exp)?;
-                    self.var_stack.pop();
                     if exp != ast::BOOL {
                         return Err(anyhow!("incorrect type"));
                     }
+
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Or));
+                    self.var_stack.pop();
                 }
             }
         }
@@ -370,11 +368,11 @@ impl<'a> FunctionCompiler<'a> {
         match variable._type._type {
             lexer::Type::Int => {
                 let exp = self.compile_expression(&variable.expression)?;
-                self.var_stack.pop();
                 if exp != ast::INT {
                     return Err(anyhow!("expected int expression"));
                 }
 
+                self.var_stack.pop();
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
@@ -382,11 +380,11 @@ impl<'a> FunctionCompiler<'a> {
             }
             lexer::Type::Bool => {
                 let exp = self.compile_expression(&variable.expression)?;
-                self.var_stack.pop();
                 if exp != ast::BOOL {
                     return Err(anyhow!("expected bool expression"));
                 }
 
+                self.var_stack.pop();
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
@@ -403,7 +401,6 @@ impl<'a> FunctionCompiler<'a> {
         // copy into assignment
         // reset expression
         let exp = self.compile_expression(&assignment.expression)?;
-        self.var_stack.pop();
         if exp != assignment.variable._type {
             return Err(anyhow!(
                 "compile_variable_assignment: assignment does match expression"
@@ -428,17 +425,17 @@ impl<'a> FunctionCompiler<'a> {
             .push(Instruction::Real(vm::Instruction::Reset(
                 variable._type.size,
             )));
+        self.var_stack.pop();
 
         Ok(())
     }
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
-        self.compile_expression(expression)?; // todo: could free this earlier
-        self.var_stack.pop();
+        self.compile_expression(expression)?; // todo: this should be freed earlier
 
         self.instructions.jump_if_true();
 
-        self.compile_body(body);
+        self.compile_body(body)?;
         self.instructions.back(2); // actual code will jump to after if instructions
         self.instructions.pop_index(); // continue adding else if instructions
 
@@ -456,7 +453,7 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         if let Some(v) = &_if._else {
-            self.compile_body(&v.body);
+            self.compile_body(&v.body)?;
         }
 
         self.instructions.back(1); // actual code will only reach this if we are in the last else
@@ -537,7 +534,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
+    pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         for arg in &self.function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
@@ -553,7 +550,7 @@ impl<'a> FunctionCompiler<'a> {
                 .body
                 .as_ref()
                 .ok_or(anyhow!("compile: function body empty"))?,
-        );
+        )?;
 
         if self.function.identifier == "main" {
             self.instructions
