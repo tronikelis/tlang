@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Error, Result};
-use std::collections::HashMap;
 
 use crate::{ast, lexer, vm};
 
@@ -121,13 +120,18 @@ impl LabelInstructions {
         self.instructions.push(Vec::new());
     }
 
-    fn back_no_pop(&mut self) {
-        self.push(Instruction::Jump(*self.index.last().unwrap() - 1));
+    fn pop_index(&mut self) {
+        self.index.pop();
     }
 
-    fn back(&mut self) {
-        self.push(Instruction::Jump(*self.index.last().unwrap() - 1));
-        self.index.pop();
+    fn back(&mut self, offset: usize) {
+        self.push(Instruction::Jump(self.index[self.index.len() - 1 - offset]));
+    }
+
+    fn back_if_true(&mut self, offset: usize) {
+        self.push(Instruction::JumpIfTrue(
+            self.index[self.index.len() - 1 - offset],
+        ));
     }
 }
 
@@ -250,6 +254,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_compare(&mut self, compare: &ast::Compare) -> Result<ast::Type> {
+        self.instructions.jump(); // after instructions
+        self.instructions.jump(); // intermediate checks
+
         let a: ast::Type;
         let b: ast::Type;
 
@@ -278,6 +285,11 @@ impl<'a> FunctionCompiler<'a> {
             return Err(anyhow!("can't compare different types"));
         }
 
+        match a {
+            ast::BOOL | ast::INT => {}
+            _type => return Err(anyhow!("can only compare int/bool")),
+        }
+
         match compare.compare_type {
             ast::CompareType::Gt | ast::CompareType::Lt => {
                 // a = -a
@@ -301,9 +313,41 @@ impl<'a> FunctionCompiler<'a> {
             },
         }
 
-        if let Some(andor) = compare.andor {
-            match andor {}
+        if let Some(andor) = &compare.andor {
+            match andor {
+                ast::AndOr::And(exp) => {
+                    // jump to after if false
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::NegateBool));
+                    self.instructions.back_if_true(1); // actual code will jump to after if
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::NegateBool));
+
+                    let exp = self.compile_expression(exp)?;
+                    self.var_stack.pop();
+                    if exp != ast::BOOL {
+                        return Err(anyhow!("incorrect type"));
+                    }
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::And));
+                }
+                ast::AndOr::Or(exp) => {
+                    // jump to after if true
+                    self.instructions.back_if_true(1);
+
+                    let exp = self.compile_expression(exp)?;
+                    self.var_stack.pop();
+                    if exp != ast::BOOL {
+                        return Err(anyhow!("incorrect type"));
+                    }
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::Or));
+                }
+            }
         }
+
+        self.instructions.back(1);
+        self.instructions.pop_index();
 
         Ok(ast::BOOL)
     }
@@ -325,18 +369,33 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
         match variable._type._type {
             lexer::Type::Int => {
-                self.compile_expression(&variable.expression, ast::INT)?;
-
+                let exp = self.compile_expression(&variable.expression)?;
                 self.var_stack.pop();
+                if exp != ast::INT {
+                    return Err(anyhow!("expected int expression"));
+                }
+
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
                 }));
-
-                Ok(())
             }
-            lexer::Type::Void => Err(anyhow!("cant declare void variable")),
+            lexer::Type::Bool => {
+                let exp = self.compile_expression(&variable.expression)?;
+                self.var_stack.pop();
+                if exp != ast::BOOL {
+                    return Err(anyhow!("expected bool expression"));
+                }
+
+                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                    identifier: variable.identifier.clone(),
+                    _type: variable._type.clone(),
+                }));
+            }
+            lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
         }
+
+        Ok(())
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
@@ -344,6 +403,7 @@ impl<'a> FunctionCompiler<'a> {
         // copy into assignment
         // reset expression
         let exp = self.compile_expression(&assignment.expression)?;
+        self.var_stack.pop();
         if exp != assignment.variable._type {
             return Err(anyhow!(
                 "compile_variable_assignment: assignment does match expression"
@@ -369,20 +429,18 @@ impl<'a> FunctionCompiler<'a> {
                 variable._type.size,
             )));
 
-        self.var_stack.pop();
-
         Ok(())
     }
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
         self.compile_expression(expression)?; // todo: could free this earlier
-
-        self.instructions.jump_if_true();
         self.var_stack.pop();
 
+        self.instructions.jump_if_true();
+
         self.compile_body(body);
-        self.instructions.back();
-        self.instructions.back_no_pop();
+        self.instructions.back(2); // actual code will jump to after if instructions
+        self.instructions.pop_index(); // continue adding else if instructions
 
         Ok(())
     }
@@ -401,7 +459,8 @@ impl<'a> FunctionCompiler<'a> {
             self.compile_body(&v.body);
         }
 
-        self.instructions.back();
+        self.instructions.back(1); // actual code will only reach this if we are in the last else
+        self.instructions.pop_index(); // continue in after if
 
         Ok(())
     }
@@ -425,15 +484,18 @@ impl<'a> FunctionCompiler<'a> {
                     // return
 
                     if let Some(exp) = exp {
-                        let size =
-                            self.compile_expression(exp, self.function.return_type.clone())?;
+                        let exp = self.compile_expression(exp)?;
+                        if exp != self.function.return_type {
+                            return Err(anyhow!("incorrect type"));
+                        }
+
                         self.instructions
                             .push(Instruction::Real(vm::Instruction::Copy(
                                 // -size because .total_size() gets you total stack size,
                                 // while we want to index into first item
-                                self.var_stack.total_size() - size,
+                                self.var_stack.total_size() - exp.size,
                                 0,
-                                size,
+                                exp.size,
                             )));
                     }
 
@@ -441,17 +503,22 @@ impl<'a> FunctionCompiler<'a> {
                         .push(Instruction::Real(vm::Instruction::Reset(
                             self.var_stack.pop_frame(),
                         )));
-
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Return));
                 }
                 ast::Node::FunctionCall(fn_call) => {
-                    self.compile_function_call(fn_call, fn_call.function.return_type.clone())?;
+                    let exp = self.compile_function_call(fn_call)?;
+                    if exp != fn_call.function.return_type.clone() {
+                        return Err(anyhow!("incorrect type"));
+                    }
+
                     // no variable to store result in, reset instantly
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Reset(
                             fn_call.function.return_type.size,
                         )));
+                    self.var_stack
+                        .push(VarStackItem::Reset(fn_call.function.return_type.size));
                 }
                 ast::Node::VariableAssignment(assignment) => {
                     self.compile_variable_assignment(assignment)?;
@@ -470,8 +537,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile(mut self) -> Result<Vec<Instruction>> {
-        for arg in self.function.arguments {
+    fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
+        for arg in &self.function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                 _type: arg._type.clone(),
                 identifier: arg.identifier.clone(),
@@ -482,9 +549,9 @@ impl<'a> FunctionCompiler<'a> {
             .push(VarStackItem::Increment(size_of::<usize>()));
 
         self.compile_body(
-            &self
-                .function
+            self.function
                 .body
+                .as_ref()
                 .ok_or(anyhow!("compile: function body empty"))?,
         );
 
@@ -496,7 +563,7 @@ impl<'a> FunctionCompiler<'a> {
                 .push(Instruction::Real(vm::Instruction::Return));
         }
 
-        Ok(self.instructions)
+        Ok(self.instructions.instructions)
     }
 }
 

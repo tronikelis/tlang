@@ -18,6 +18,8 @@ pub enum Instruction {
     NegateBool,
     MinusInt,
     CompareInt,
+    And,
+    Or,
 }
 
 pub struct Stack {
@@ -177,11 +179,7 @@ impl Vm {
                 }
                 Instruction::NegateBool => {
                     let int = self.stack.pop::<isize>();
-                    if int == 1 {
-                        self.stack.push::<isize>(0);
-                    } else {
-                        self.stack.push::<isize>(1);
-                    }
+                    self.stack.push(int ^ 1);
                 }
                 Instruction::MinusInt => {
                     let int = self.stack.pop::<isize>();
@@ -195,6 +193,16 @@ impl Vm {
                     } else {
                         self.stack.push::<isize>(0)
                     }
+                }
+                Instruction::And => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a & b);
+                }
+                Instruction::Or => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a | b);
                 }
             }
 
