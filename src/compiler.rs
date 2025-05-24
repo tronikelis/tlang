@@ -309,7 +309,10 @@ impl<'a> FunctionCompiler<'a> {
                 _ => return Err(anyhow!("can only == int and bool")),
             },
         }
+
         self.var_stack.pop();
+        self.var_stack.pop();
+        self.var_stack.push(VarStackItem::Increment(ast::BOOL.size));
 
         if let Some(andor) = &compare.andor {
             match andor {
