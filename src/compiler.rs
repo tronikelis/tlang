@@ -87,7 +87,7 @@ impl VarStack {
 
 struct LabelInstructions {
     instructions: Vec<Vec<Instruction>>,
-    index: Vec<usize>,
+    index: usize,
 }
 
 impl LabelInstructions {
@@ -95,44 +95,44 @@ impl LabelInstructions {
         let mut instructions = Vec::new();
         instructions.push(Vec::new());
         Self {
-            index: Vec::from([0]),
+            index: 0,
             instructions,
         }
     }
 
     fn push(&mut self, instruction: Instruction) {
-        self.instructions[*self.index.last().unwrap()].push(instruction);
+        self.instructions[self.index].push(instruction);
     }
 
     fn jump(&mut self) {
         let index = self.instructions.len();
         self.push(Instruction::Jump((index, 0)));
         self.instructions.push(Vec::new());
-        self.index.push(index);
+        self.index = index;
     }
 
     fn jump_if_true(&mut self) {
         let index = self.instructions.len();
         self.push(Instruction::JumpIfTrue((index, 0)));
         self.instructions.push(Vec::new());
-        self.index.push(index);
+        self.index = index;
     }
 
     fn back_if_true(&mut self, offset: usize) {
-        let target = self.index[self.index.len() - 1 - offset];
+        let target = self.index - offset;
         let target_last = self.instructions[target].len() - 1;
         self.push(Instruction::JumpIfTrue((target, target_last)));
     }
 
     fn back(&mut self, offset: usize) {
-        let target = self.index[self.index.len() - 1 - offset];
+        let target = self.index - offset;
         // jump to target's last instruction index + 1
         let target_last = self.instructions[target].len();
         self.push(Instruction::Jump((target, target_last)));
     }
 
     fn pop_index(&mut self) {
-        self.index.pop();
+        self.index -= 1;
     }
 }
 
@@ -522,6 +522,10 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 ast::Node::If(v) => {
                     self.compile_if(v)?;
+                }
+                ast::Node::Debug => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::Debug));
                 }
             };
         }

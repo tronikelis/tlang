@@ -119,6 +119,7 @@ pub enum Node {
     Return(Option<Expression>),
     FunctionCall(FunctionCall),
     If(If),
+    Debug,
 }
 
 #[derive(Debug)]
@@ -205,6 +206,10 @@ impl<'a> TokenParser<'a> {
 
     fn parse_token(&mut self) -> Result<Node> {
         match self.peek_token_err(0)? {
+            lexer::Token::Debug => {
+                self.next();
+                Ok(Node::Debug)
+            }
             lexer::Token::Let => Ok(Node::VariableDeclaration(
                 self.parse_variable_declaration()?,
             )),

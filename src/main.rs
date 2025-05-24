@@ -13,7 +13,8 @@ fn main() {
                 fn main() void {
                     let a int = 0
                     if a == 0 {
-                        a = 30
+                        a = 20
+                        __debug__
                     }
                 }
             ",

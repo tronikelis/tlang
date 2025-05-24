@@ -35,6 +35,7 @@ pub enum Token {
     AmperAmper,
     PipePipe,
     EqualsEquals,
+    Debug,
 }
 
 const CONTROL_CHAR: [char; 11] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+'];
@@ -57,6 +58,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "__debug__" => {
+                    tokens.push(Token::Debug);
+                    self.read_next_word();
+                    continue;
+                }
                 "elseif" => {
                     tokens.push(Token::ElseIf);
                     self.read_next_word();
