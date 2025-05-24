@@ -11,8 +11,8 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let a int = 0
-                    if a == 0 {
+                    let a int = 57
+                    if a == 57 {
                         a = 20
                         __debug__
                     }

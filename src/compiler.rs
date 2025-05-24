@@ -203,6 +203,7 @@ impl<'a> FunctionCompiler<'a> {
             lexer::Literal::Int(int) => {
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::PushI(*int)));
+                self.var_stack.push(VarStackItem::Increment(ast::INT.size));
 
                 Ok(ast::INT)
             }
@@ -226,6 +227,9 @@ impl<'a> FunctionCompiler<'a> {
                 variable._type.size,
             )));
 
+        self.var_stack
+            .push(VarStackItem::Increment(variable._type.size));
+
         Ok(variable._type)
     }
 
@@ -245,7 +249,6 @@ impl<'a> FunctionCompiler<'a> {
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::AddI));
-        self.var_stack.pop();
         self.var_stack.pop();
 
         Ok(a)
@@ -343,8 +346,6 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
 
-        self.var_stack.pop();
-
         self.instructions.back(1);
         self.instructions.pop_index();
 
@@ -359,8 +360,6 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
         }?;
-
-        self.var_stack.push(VarStackItem::Increment(_type.size));
 
         Ok(_type)
     }
@@ -545,9 +544,12 @@ impl<'a> FunctionCompiler<'a> {
                 identifier: arg.identifier.clone(),
             }));
         }
-        // return address
-        self.var_stack
-            .push(VarStackItem::Increment(size_of::<usize>()));
+
+        if self.function.identifier != "main" {
+            // return address
+            self.var_stack
+                .push(VarStackItem::Increment(size_of::<usize>()));
+        }
 
         self.compile_body(
             self.function

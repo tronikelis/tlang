@@ -164,6 +164,7 @@ impl Vm {
                 }
                 Instruction::JumpIfTrue(i) => {
                     let boolean = self.stack.pop::<isize>();
+                    self.stack.push(boolean);
                     if boolean == 1 {
                         pc = i;
                         continue;
