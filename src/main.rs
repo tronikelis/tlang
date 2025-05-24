@@ -26,15 +26,14 @@ fn main() {
     let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
 
     for v in &ast.functions {
-        functions.insert(
-            v.identifier.clone(),
-            compiler::FunctionCompiler::new(v).compile().unwrap(),
-        );
+        let compiled = compiler::FunctionCompiler::new(v).compile().unwrap();
+        println!("{:#?}", compiled);
+        functions.insert(v.identifier.clone(), compiled);
     }
 
     let instructions = linker::link(&functions).unwrap();
 
-    println!("{:#?}", instructions);
+    println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
     vm::Vm::new(instructions).run();
 }

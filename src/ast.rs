@@ -232,10 +232,6 @@ impl<'a> TokenParser<'a> {
         self.next();
 
         let expression = self.parse_expression()?;
-
-        self.expect_next_token(lexer::Token::COpen)?;
-        self.next();
-
         let body = self.parse_body()?;
 
         let mut elseif = Vec::<ElseIf>::new();

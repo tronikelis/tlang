@@ -20,15 +20,21 @@ fn link_jumps(
 
     for v in &mut ins {
         match v {
-            compiler::Instruction::Jump(i) => {
-                *v = compiler::Instruction::Jump(
-                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))? + offset,
-                );
+            compiler::Instruction::Jump((i, inner_offset)) => {
+                *v = compiler::Instruction::Jump((
+                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
+                        + offset
+                        + *inner_offset,
+                    0,
+                ));
             }
-            compiler::Instruction::JumpIfTrue(i) => {
-                *v = compiler::Instruction::JumpIfTrue(
-                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))? + offset,
-                );
+            compiler::Instruction::JumpIfTrue((i, inner_offset)) => {
+                *v = compiler::Instruction::JumpIfTrue((
+                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
+                        + offset
+                        + *inner_offset,
+                    0,
+                ));
             }
             _ => {}
         }
@@ -67,8 +73,8 @@ pub fn link(
                         .ok_or(anyhow!("unknown identifier"))?;
                     vm::Instruction::JumpAndLink(*index)
                 }
-                compiler::Instruction::Jump(v) => vm::Instruction::Jump(*v),
-                compiler::Instruction::JumpIfTrue(v) => vm::Instruction::JumpIfTrue(*v),
+                compiler::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
+                compiler::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
             })
         })
         .collect::<Result<Vec<vm::Instruction>>>()?;

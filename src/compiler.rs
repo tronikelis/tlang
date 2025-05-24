@@ -6,8 +6,8 @@ use crate::{ast, lexer, vm};
 pub enum Instruction {
     Real(vm::Instruction),
     JumpAndLink(String),
-    Jump(usize),
-    JumpIfTrue(usize),
+    Jump((usize, usize)),
+    JumpIfTrue((usize, usize)),
 }
 
 #[derive(Debug, Clone)]
@@ -105,33 +105,34 @@ impl LabelInstructions {
     }
 
     fn jump(&mut self) {
-        let new_index = self.instructions.len();
-        self.push(Instruction::Jump(new_index));
-        self.index.push(new_index);
-
+        let index = self.instructions.len();
+        self.push(Instruction::Jump((index, 0)));
         self.instructions.push(Vec::new());
+        self.index.push(index);
     }
 
     fn jump_if_true(&mut self) {
-        let new_index = self.instructions.len();
-        self.push(Instruction::JumpIfTrue(new_index));
-        self.index.push(new_index);
-
+        let index = self.instructions.len();
+        self.push(Instruction::JumpIfTrue((index, 0)));
         self.instructions.push(Vec::new());
+        self.index.push(index);
+    }
+
+    fn back_if_true(&mut self, offset: usize) {
+        let target = self.index[self.index.len() - 1 - offset];
+        let target_last = self.instructions[target].len() - 1;
+        self.push(Instruction::JumpIfTrue((target, target_last)));
+    }
+
+    fn back(&mut self, offset: usize) {
+        let target = self.index[self.index.len() - 1 - offset];
+        // jump to target's last instruction index + 1
+        let target_last = self.instructions[target].len();
+        self.push(Instruction::Jump((target, target_last)));
     }
 
     fn pop_index(&mut self) {
         self.index.pop();
-    }
-
-    fn back(&mut self, offset: usize) {
-        self.push(Instruction::Jump(self.index[self.index.len() - 1 - offset]));
-    }
-
-    fn back_if_true(&mut self, offset: usize) {
-        self.push(Instruction::JumpIfTrue(
-            self.index[self.index.len() - 1 - offset],
-        ));
     }
 }
 
@@ -251,8 +252,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_compare(&mut self, compare: &ast::Compare) -> Result<ast::Type> {
-        self.instructions.jump(); // after instructions
-        self.instructions.jump(); // intermediate checks
+        self.instructions.jump();
 
         let a: ast::Type;
         let b: ast::Type;
@@ -307,7 +307,6 @@ impl<'a> FunctionCompiler<'a> {
             },
         }
         self.var_stack.pop();
-        self.var_stack.pop();
 
         if let Some(andor) = &compare.andor {
             match andor {
@@ -343,6 +342,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         }
+
+        self.var_stack.pop();
 
         self.instructions.back(1);
         self.instructions.pop_index();
@@ -431,20 +432,19 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
-        self.compile_expression(expression)?; // todo: this should be freed earlier
+        self.compile_expression(expression)?;
 
         self.instructions.jump_if_true();
 
         self.compile_body(body)?;
-        self.instructions.back(2); // actual code will jump to after if instructions
-        self.instructions.pop_index(); // continue adding else if instructions
+        self.instructions.back(2);
+        self.instructions.pop_index();
 
         Ok(())
     }
 
     fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
-        self.instructions.jump(); // will contain after if instructions
-        self.instructions.jump(); // will contain jump if true instructions
+        self.instructions.jump();
 
         self.compile_if_block(&_if.expression, &_if.body)?;
 
@@ -456,8 +456,8 @@ impl<'a> FunctionCompiler<'a> {
             self.compile_body(&v.body)?;
         }
 
-        self.instructions.back(1); // actual code will only reach this if we are in the last else
-        self.instructions.pop_index(); // continue in after if
+        self.instructions.back(1);
+        self.instructions.pop_index();
 
         Ok(())
     }
