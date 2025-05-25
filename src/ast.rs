@@ -170,12 +170,9 @@ impl<'a> TokenParser<'a> {
 
         for (i, token) in self.tokens.iter().enumerate() {
             temp_parser.i = i;
-            match token {
-                lexer::Token::Function => {
-                    let function = temp_parser.parse_function_declaration()?;
-                    declarations.insert(function.identifier.clone(), function);
-                }
-                _ => {}
+            if let lexer::Token::Function = token {
+                let function = temp_parser.parse_function_declaration()?;
+                declarations.insert(function.identifier.clone(), function);
             }
         }
 
@@ -455,40 +452,15 @@ impl<'a> TokenParser<'a> {
         Ok(Expression::Literal(self.parse_literal()?))
     }
 
-    fn parse_expression_compare(&mut self, left: Expression) -> Result<Compare> {
-        let compare_type = match self.peek_token_err(0)? {
-            lexer::Token::Gt => CompareType::Gt,
-            lexer::Token::Lt => CompareType::Lt,
-            lexer::Token::EqualsEquals => CompareType::Equals,
-            _ => return Err(anyhow!("parse_expression_compare: unknown token")),
-        };
-        self.next();
-
-        let right = self.parse_expression()?;
-
-        let mut andor = None;
-        match self.peek_token_err(0)? {
-            lexer::Token::AmperAmper => andor = Some(AndOr::And(self.parse_expression()?)),
-            lexer::Token::PipePipe => andor = Some(AndOr::Or(self.parse_expression()?)),
-            _ => {}
-        }
-
-        Ok(Compare {
-            left,
-            right,
-            compare_type,
-            andor,
-        })
-    }
-
     fn parse_expression(&mut self) -> Result<Expression> {
         let expression = match self.peek_token_err(0)?.clone() {
             lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
             lexer::Token::Literal(_) => self.parse_expression_literal()?,
-            _ => return Err(anyhow!("parse_expression: wrong token")),
+            token => return Err(anyhow!("parse_expression: wrong token {token:#?}")),
         };
 
-        match self.peek_token_err(0)? {
+        let token = self.peek_token_err(0)?.clone();
+        match token {
             lexer::Token::Plus => {
                 self.next();
                 return Ok(Expression::Addition(Box::new(Addition {
@@ -497,9 +469,35 @@ impl<'a> TokenParser<'a> {
                 })));
             }
             lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {
-                return Ok(Expression::Compare(Box::new(
-                    self.parse_expression_compare(expression)?,
-                )));
+                self.next();
+                let right = self.parse_expression()?;
+
+                let mut andor = None;
+
+                match self.peek_token_err(0)? {
+                    lexer::Token::AmperAmper => {
+                        self.next();
+                        andor = Some(AndOr::And(self.parse_expression()?));
+                    }
+                    lexer::Token::PipePipe => {
+                        self.next();
+                        andor = Some(AndOr::Or(self.parse_expression()?));
+                    }
+                    lexer::Token::COpen => {}
+                    _ => return Err(anyhow!("token not supported")),
+                }
+
+                return Ok(Expression::Compare(Box::new(Compare {
+                    compare_type: match token {
+                        lexer::Token::Gt => CompareType::Gt,
+                        lexer::Token::Lt => CompareType::Lt,
+                        lexer::Token::EqualsEquals => CompareType::Equals,
+                        _ => return Err(anyhow!("token not supported")),
+                    },
+                    left: expression,
+                    right,
+                    andor,
+                })));
             }
             _ => {}
         }
