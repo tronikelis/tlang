@@ -19,6 +19,11 @@ pub const VOID: Type = Type {
     _type: lexer::Type::Void,
 };
 
+pub const BOOL: Type = Type {
+    size: INT.size,
+    _type: lexer::Type::Bool,
+};
+
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
     pub identifier: String,
@@ -57,6 +62,7 @@ pub enum Expression {
     Literal(lexer::Literal),
     Identifier(String),
     Addition(Box<Addition>),
+    Compare(Box<Compare>),
     FunctionCall(FunctionCall),
 }
 
@@ -67,11 +73,53 @@ pub struct VariableAssignment {
 }
 
 #[derive(Debug, Clone)]
+pub enum CompareType {
+    Gt,
+    Lt,
+    Equals,
+}
+
+#[derive(Debug, Clone)]
+pub enum AndOr {
+    And(Expression),
+    Or(Expression),
+}
+
+#[derive(Debug, Clone)]
+pub struct Compare {
+    pub left: Expression,
+    pub right: Expression,
+    pub compare_type: CompareType,
+    pub andor: Option<AndOr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct If {
+    pub expression: Expression,
+    pub body: Vec<Node>,
+    pub elseif: Vec<ElseIf>,
+    pub _else: Option<Else>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElseIf {
+    pub expression: Expression,
+    pub body: Vec<Node>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Else {
+    pub body: Vec<Node>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
     VariableAssignment(VariableAssignment),
     Return(Option<Expression>),
     FunctionCall(FunctionCall),
+    If(If),
+    Debug,
 }
 
 #[derive(Debug)]
@@ -122,12 +170,9 @@ impl<'a> TokenParser<'a> {
 
         for (i, token) in self.tokens.iter().enumerate() {
             temp_parser.i = i;
-            match token {
-                lexer::Token::Function => {
-                    let function = temp_parser.parse_function_declaration()?;
-                    declarations.insert(function.identifier.clone(), function);
-                }
-                _ => {}
+            if let lexer::Token::Function = token {
+                let function = temp_parser.parse_function_declaration()?;
+                declarations.insert(function.identifier.clone(), function);
             }
         }
 
@@ -158,6 +203,10 @@ impl<'a> TokenParser<'a> {
 
     fn parse_token(&mut self) -> Result<Node> {
         match self.peek_token_err(0)? {
+            lexer::Token::Debug => {
+                self.next();
+                Ok(Node::Debug)
+            }
             lexer::Token::Let => Ok(Node::VariableDeclaration(
                 self.parse_variable_declaration()?,
             )),
@@ -172,8 +221,44 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::POpen => Ok(Node::FunctionCall(self.parse_function_call()?)),
                 _ => return Err(anyhow!("parse_token: token not supported")),
             },
+            lexer::Token::If => Ok(Node::If(self.parse_if()?)),
             token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
         }
+    }
+
+    fn parse_if(&mut self) -> Result<If> {
+        match self.peek_token_err(0)? {
+            lexer::Token::If | lexer::Token::ElseIf => {}
+            _ => return Err(anyhow!("parse_if: unknown token")),
+        }
+        self.next();
+
+        let expression = self.parse_expression()?;
+        let body = self.parse_body()?;
+
+        let mut elseif = Vec::<ElseIf>::new();
+        while let lexer::Token::ElseIf = self.peek_token_err(0)? {
+            self.next();
+            elseif.push(ElseIf {
+                expression: self.parse_expression()?,
+                body: self.parse_body()?,
+            });
+        }
+
+        let mut _else = None;
+        if let lexer::Token::Else = self.peek_token_err(0)? {
+            self.next();
+            _else = Some(Else {
+                body: self.parse_body()?,
+            });
+        }
+
+        Ok(If {
+            expression,
+            body,
+            elseif,
+            _else,
+        })
     }
 
     fn parse_variable_assignment(&mut self) -> Result<VariableAssignment> {
@@ -195,7 +280,7 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_block(&mut self) -> Result<Vec<Node>> {
+    fn parse_body(&mut self) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
 
         self.expect_next_token(lexer::Token::COpen)?;
@@ -241,6 +326,7 @@ impl<'a> TokenParser<'a> {
                 let size = match &v {
                     lexer::Type::Void => 0,
                     lexer::Type::Int => size_of::<isize>(),
+                    lexer::Type::Bool => size_of::<isize>(),
                 };
 
                 Ok(Type {
@@ -305,7 +391,7 @@ impl<'a> TokenParser<'a> {
         self.context.variables = HashMap::new();
 
         let function = self.parse_function_declaration()?;
-        let body = self.parse_block()?;
+        let body = self.parse_body()?;
 
         Ok(Function {
             body: Some(body),
@@ -370,15 +456,47 @@ impl<'a> TokenParser<'a> {
         let expression = match self.peek_token_err(0)?.clone() {
             lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
             lexer::Token::Literal(_) => self.parse_expression_literal()?,
-            _ => return Err(anyhow!("parse_expression: wrong token")),
+            token => return Err(anyhow!("parse_expression: wrong token {token:#?}")),
         };
 
-        match self.peek_token_err(0)? {
+        let token = self.peek_token_err(0)?.clone();
+        match token {
             lexer::Token::Plus => {
                 self.next();
                 return Ok(Expression::Addition(Box::new(Addition {
                     left: expression,
                     right: self.parse_expression()?,
+                })));
+            }
+            lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {
+                self.next();
+                let right = self.parse_expression()?;
+
+                let mut andor = None;
+
+                match self.peek_token_err(0)? {
+                    lexer::Token::AmperAmper => {
+                        self.next();
+                        andor = Some(AndOr::And(self.parse_expression()?));
+                    }
+                    lexer::Token::PipePipe => {
+                        self.next();
+                        andor = Some(AndOr::Or(self.parse_expression()?));
+                    }
+                    lexer::Token::COpen => {}
+                    _ => return Err(anyhow!("token not supported")),
+                }
+
+                return Ok(Expression::Compare(Box::new(Compare {
+                    compare_type: match token {
+                        lexer::Token::Gt => CompareType::Gt,
+                        lexer::Token::Lt => CompareType::Lt,
+                        lexer::Token::EqualsEquals => CompareType::Equals,
+                        _ => return Err(anyhow!("token not supported")),
+                    },
+                    left: expression,
+                    right,
+                    andor,
                 })));
             }
             _ => {}
@@ -445,14 +563,11 @@ mod tests {
     fn simple() {
         let code = String::from(
             "
-                fn add(a int, b int) int {
-                    return a + b
-                }
                 fn main() void {
-                    let a int = 0
-                    let b int = 1
-                    let c int = a + b + 37 + 200
-                    let d int = b + add(a, b)
+                    let a = 20
+                    if a > 20 {
+                        a = 220
+                    }
                 }
             ",
         );

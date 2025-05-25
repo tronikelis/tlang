@@ -4,7 +4,7 @@ use std::alloc::{alloc, dealloc, Layout};
 pub enum Instruction {
     Increment(usize),
     PushI(isize),
-    AddI(usize, usize),
+    AddI,
     // dst = src * len
     Copy(usize, usize, usize),
     Exit,
@@ -13,6 +13,13 @@ pub enum Instruction {
     JumpAndLink(usize),
     Jump(usize),
     Return,
+    JumpIfTrue(usize),
+    ToBool,
+    NegateBool,
+    MinusInt,
+    CompareInt,
+    And,
+    Or,
 }
 
 pub struct Stack {
@@ -65,16 +72,6 @@ impl Stack {
         }
     }
 
-    fn offset_write<T: Copy>(&mut self, offset: usize, write: T) {
-        unsafe {
-            *self.sp.byte_offset(offset as isize).cast() = write;
-        }
-    }
-
-    fn offset<T: Copy>(&mut self, offset: usize) -> T {
-        unsafe { *self.sp.byte_offset(offset as isize).cast() }
-    }
-
     fn reset(&mut self, offset: usize) {
         unsafe {
             self.sp = self.sp.byte_offset(offset as isize);
@@ -121,10 +118,10 @@ impl Vm {
 
         loop {
             match self.instructions[pc] {
-                Instruction::AddI(a_offset, b_offset) => {
-                    let a = self.stack.offset::<isize>(a_offset);
-                    let b = self.stack.offset::<isize>(b_offset);
-                    self.stack.offset_write(b_offset, a + b);
+                Instruction::AddI => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a + b);
                 }
                 Instruction::Exit => return,
                 Instruction::PushI(v) => {
@@ -154,6 +151,49 @@ impl Vm {
                 }
                 Instruction::Increment(by) => {
                     self.stack.increment(by);
+                }
+                Instruction::JumpIfTrue(i) => {
+                    let boolean = self.stack.pop::<isize>();
+                    self.stack.push(boolean);
+                    if boolean == 1 {
+                        pc = i;
+                        continue;
+                    }
+                }
+                Instruction::ToBool => {
+                    let int = self.stack.pop::<isize>();
+                    if int > 0 {
+                        self.stack.push::<isize>(1);
+                    } else {
+                        self.stack.push::<isize>(0);
+                    }
+                }
+                Instruction::NegateBool => {
+                    let int = self.stack.pop::<isize>();
+                    self.stack.push(int ^ 1);
+                }
+                Instruction::MinusInt => {
+                    let int = self.stack.pop::<isize>();
+                    self.stack.push(-int);
+                }
+                Instruction::CompareInt => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    if a == b {
+                        self.stack.push::<isize>(1);
+                    } else {
+                        self.stack.push::<isize>(0)
+                    }
+                }
+                Instruction::And => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a & b);
+                }
+                Instruction::Or => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a | b);
                 }
             }
 

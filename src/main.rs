@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 mod vm;
 
 mod ast;
@@ -8,43 +10,31 @@ mod linker;
 fn main() {
     let code = String::from(
         "
-                fn withAdd(a int, b int) int {
-                    a = 20
-                    b = 35
-                    return a + b
-                }
-                fn voidfn() void {
-                    return
-                }
-                fn add(a int, b int) int {
-                    return a + b
-                }
                 fn main() void {
-                    let a int = 0
-                    let b int = 1
-                    a = 20
-                    b = 30
-                    let c int = a + b + 37 + 200
-                    let d int = b + add(a, b)
-                }
-                fn add3(a int, b int, c int) int {
-                    let abc int = a + b + c
-                    return abc
+                    let a int = 57
+                    if a > 20 {
+                        a = 20
+                    }
+                    __debug__
                 }
             ",
     );
 
-    let instructions: Vec<vm::Instruction>;
+    let tokens = lexer::Lexer::new(&code).run().unwrap();
+    let ast = ast::Ast::new(&tokens).unwrap();
+    println!("{:#?}", ast);
 
-    {
-        let tokens = lexer::Lexer::new(&code).run().unwrap();
-        let ast = ast::Ast::new(&tokens).unwrap();
-        println!("{:#?}", ast);
-        let functions = compiler::FunctionCompiler::compile_functions(&ast.functions).unwrap();
-        instructions = linker::link(&functions).unwrap();
+    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
+
+    for v in &ast.functions {
+        let compiled = compiler::FunctionCompiler::new(v).compile().unwrap();
+        println!("{:#?}", compiled);
+        functions.insert(v.identifier.clone(), compiled);
     }
 
-    println!("{:#?}", instructions);
+    let instructions = linker::link(&functions).unwrap();
+
+    println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
     vm::Vm::new(instructions).run();
 }

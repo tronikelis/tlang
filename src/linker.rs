@@ -3,24 +3,61 @@ use std::collections::HashMap;
 
 use crate::{compiler, vm};
 
+fn link_jumps(
+    instructions: &Vec<Vec<compiler::Instruction>>,
+    offset: usize,
+) -> Result<Vec<compiler::Instruction>> {
+    let mut ins = Vec::<compiler::Instruction>::new();
+    let mut index_to_len = HashMap::<usize, usize>::new();
+
+    for (i, v) in instructions.iter().enumerate() {
+        index_to_len.insert(i, ins.len());
+
+        for v in v {
+            ins.push(v.clone());
+        }
+    }
+
+    for v in &mut ins {
+        match v {
+            compiler::Instruction::Jump((i, inner_offset)) => {
+                *v = compiler::Instruction::Jump((
+                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
+                        + offset
+                        + *inner_offset,
+                    0,
+                ));
+            }
+            compiler::Instruction::JumpIfTrue((i, inner_offset)) => {
+                *v = compiler::Instruction::JumpIfTrue((
+                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
+                        + offset
+                        + *inner_offset,
+                    0,
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(ins)
+}
+
 pub fn link(
-    functions: &HashMap<String, Vec<compiler::Instruction>>,
+    functions: &HashMap<String, Vec<Vec<compiler::Instruction>>>,
 ) -> Result<Vec<vm::Instruction>> {
     let main = functions
         .get("main")
         .ok_or(anyhow!("cant link without main"))?;
 
-    let mut fake_instructions = Vec::<&compiler::Instruction>::new();
-    for v in main {
-        fake_instructions.push(v);
-    }
-
-    let mut fn_index_map = HashMap::<&str, usize>::new();
+    let mut fake_instructions = link_jumps(main, 0)?;
+    let mut fn_to_offset = HashMap::<&str, usize>::new();
 
     for (identifier, fn_instructions) in functions.iter().filter(|v| *v.0 != "main") {
-        fn_index_map.insert(identifier, fake_instructions.len());
+        let offset = fake_instructions.len();
+        fn_to_offset.insert(identifier, offset);
 
-        for v in fn_instructions {
+        for v in link_jumps(fn_instructions, offset)? {
             fake_instructions.push(v);
         }
     }
@@ -31,11 +68,13 @@ pub fn link(
             Ok(match v {
                 compiler::Instruction::Real(v) => v.clone(),
                 compiler::Instruction::JumpAndLink(identifier) => {
-                    let index = fn_index_map
+                    let index = fn_to_offset
                         .get(identifier as &str)
                         .ok_or(anyhow!("unknown identifier"))?;
                     vm::Instruction::JumpAndLink(*index)
                 }
+                compiler::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
+                compiler::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
             })
         })
         .collect::<Result<Vec<vm::Instruction>>>()?;
