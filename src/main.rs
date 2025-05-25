@@ -12,10 +12,11 @@ fn main() {
         "
                 fn main() void {
                     let a int = 57
-                    if a == 57 && a == 10 {
+                    if a == 57 && a == 57 {
                         a = 20
-                        __debug__
                     }
+                    a = 30
+                    __debug__
                 }
             ",
     );

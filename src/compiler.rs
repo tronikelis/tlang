@@ -25,13 +25,21 @@ struct VarStackItemVar {
 
 struct VarStack {
     stack: Vec<Vec<VarStackItem>>,
+    arg_size: Option<usize>,
 }
 
 impl VarStack {
     fn new() -> Self {
         let mut stack = Vec::new();
         stack.push(Vec::new());
-        Self { stack }
+        Self {
+            stack,
+            arg_size: None,
+        }
+    }
+
+    fn set_arg_size(&mut self) {
+        self.arg_size = Some(self.total_size());
     }
 
     fn push_frame(&mut self) {
@@ -87,7 +95,7 @@ impl VarStack {
 
 struct LabelInstructions {
     instructions: Vec<Vec<Instruction>>,
-    index: usize,
+    index: Vec<usize>,
 }
 
 impl LabelInstructions {
@@ -95,44 +103,43 @@ impl LabelInstructions {
         let mut instructions = Vec::new();
         instructions.push(Vec::new());
         Self {
-            index: 0,
+            index: Vec::from([0]),
             instructions,
         }
     }
 
     fn push(&mut self, instruction: Instruction) {
-        self.instructions[self.index].push(instruction);
+        self.instructions[*self.index.last().unwrap()].push(instruction);
     }
 
     fn jump(&mut self) {
         let index = self.instructions.len();
         self.push(Instruction::Jump((index, 0)));
         self.instructions.push(Vec::new());
-        self.index = index;
+        self.index.push(index);
     }
 
     fn jump_if_true(&mut self) {
         let index = self.instructions.len();
         self.push(Instruction::JumpIfTrue((index, 0)));
         self.instructions.push(Vec::new());
-        self.index = index;
+        self.index.push(index);
     }
 
     fn back_if_true(&mut self, offset: usize) {
-        let target = self.index - offset;
-        let target_last = self.instructions[target].len() - 1;
+        let target = self.index[self.index.len() - 1 - offset];
+        let target_last = self.instructions[target].len();
         self.push(Instruction::JumpIfTrue((target, target_last)));
     }
 
     fn back(&mut self, offset: usize) {
-        let target = self.index - offset;
-        // jump to target's last instruction index + 1
+        let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
         self.push(Instruction::Jump((target, target_last)));
     }
 
     fn pop_index(&mut self) {
-        self.index -= 1;
+        self.index.pop();
     }
 }
 
@@ -446,6 +453,8 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+        self.var_stack.push_frame();
+
         self.instructions.jump();
 
         self.compile_if_block(&_if.expression, &_if.body)?;
@@ -461,6 +470,11 @@ impl<'a> FunctionCompiler<'a> {
         self.instructions.back(1);
         self.instructions.pop_index();
 
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                self.var_stack.pop_frame(),
+            )));
+
         Ok(())
     }
 
@@ -470,41 +484,7 @@ impl<'a> FunctionCompiler<'a> {
         for item in body {
             match item {
                 ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
-                ast::Node::Return(exp) => {
-                    if self.function.identifier == "main" {
-                        self.instructions
-                            .push(Instruction::Real(vm::Instruction::Exit));
-
-                        continue;
-                    }
-
-                    // write expression into arguments
-                    // reset local vars
-                    // return
-
-                    if let Some(exp) = exp {
-                        let exp = self.compile_expression(exp)?;
-                        if exp != self.function.return_type {
-                            return Err(anyhow!("incorrect type"));
-                        }
-
-                        self.instructions
-                            .push(Instruction::Real(vm::Instruction::Copy(
-                                // -size because .total_size() gets you total stack size,
-                                // while we want to index into first item
-                                self.var_stack.total_size() - exp.size,
-                                0,
-                                exp.size,
-                            )));
-                    }
-
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Reset(
-                            self.var_stack.pop_frame(),
-                        )));
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Return));
-                }
+                ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
                 ast::Node::FunctionCall(fn_call) => {
                     let exp = self.compile_function_call(fn_call)?;
                     if exp != fn_call.function.return_type.clone() {
@@ -540,6 +520,39 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn compile_return(&mut self, exp: Option<&ast::Expression>) -> Result<()> {
+        if let Some(exp) = exp {
+            let exp = self.compile_expression(exp)?;
+            if exp != self.function.return_type {
+                return Err(anyhow!("incorrect type"));
+            }
+
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Copy(
+                    // -size because .total_size() gets you total stack size,
+                    // while we want to index into first item
+                    self.var_stack.total_size() - exp.size,
+                    0,
+                    exp.size,
+                )));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
+            )));
+
+        if self.function.identifier == "main" {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Exit));
+        } else {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Return));
+        }
+
+        Ok(())
+    }
+
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         for arg in &self.function.arguments {
             self.var_stack.push(VarStackItem::Var(VarStackItemVar {
@@ -554,6 +567,8 @@ impl<'a> FunctionCompiler<'a> {
                 .push(VarStackItem::Increment(size_of::<usize>()));
         }
 
+        self.var_stack.set_arg_size();
+
         self.compile_body(
             self.function
                 .body
@@ -561,13 +576,7 @@ impl<'a> FunctionCompiler<'a> {
                 .ok_or(anyhow!("compile: function body empty"))?,
         )?;
 
-        if self.function.identifier == "main" {
-            self.instructions
-                .push(Instruction::Real(vm::Instruction::Exit));
-        } else {
-            self.instructions
-                .push(Instruction::Real(vm::Instruction::Return));
-        }
+        self.compile_return(None)?;
 
         Ok(self.instructions.instructions)
     }
