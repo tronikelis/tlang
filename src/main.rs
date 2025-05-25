@@ -13,7 +13,7 @@ fn main() {
                 fn main() void {
                     let a int = 57
                     if a > 20 {
-                        a = 20
+                        a++
                     }
                     __debug__
                 }

@@ -36,6 +36,8 @@ pub enum Token {
     PipePipe,
     EqualsEquals,
     Debug,
+    PlusPlus,
+    MinusMinus,
 }
 
 const CONTROL_CHAR: [char; 11] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+'];
@@ -201,6 +203,31 @@ impl Lexer {
                 }
 
                 tokens.push(Token::Identifier(identifier));
+
+                if let Some(ch) = self.peek_char(0) {
+                    match ch {
+                        '+' => {
+                            if let Some(ch) = self.peek_char(1) {
+                                if ch == '+' {
+                                    self.next();
+                                    self.next();
+                                    tokens.push(Token::PlusPlus);
+                                }
+                            }
+                        }
+                        '-' => {
+                            if let Some(ch) = self.peek_char(1) {
+                                if ch == '-' {
+                                    self.next();
+                                    self.next();
+                                    tokens.push(Token::MinusMinus);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 continue;
             }
 
