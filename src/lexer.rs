@@ -38,9 +38,13 @@ pub enum Token {
     Debug,
     PlusPlus,
     MinusMinus,
+    For,
+    Semicolon,
 }
 
-const CONTROL_CHAR: [char; 12] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-'];
+const CONTROL_CHAR: [char; 13] = [
+    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';',
+];
 
 pub struct Lexer {
     code: Vec<char>,
@@ -60,6 +64,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "for" => {
+                    tokens.push(Token::For);
+                    self.read_next_word();
+                    continue;
+                }
                 "__debug__" => {
                     tokens.push(Token::Debug);
                     self.read_next_word();
@@ -115,6 +124,11 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    ';' => {
+                        tokens.push(Token::Semicolon);
+                        self.next();
+                        continue;
+                    }
                     '&' => {
                         match self.peek_char(1).ok_or(anyhow!("todo: amper"))? {
                             '&' => {

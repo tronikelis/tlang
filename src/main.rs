@@ -15,6 +15,9 @@ fn main() {
                     if a > 20 {
                         a--
                     }
+                    for let i int = 0; i < 10; i++ {
+
+                    }
                     __debug__
                 }
             ",

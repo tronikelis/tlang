@@ -509,6 +509,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Debug));
                 }
+                ast::Node::For(_) => todo!(),
             };
         }
 
