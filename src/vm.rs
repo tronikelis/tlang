@@ -72,16 +72,6 @@ impl Stack {
         }
     }
 
-    fn offset_write<T: Copy>(&mut self, offset: usize, write: T) {
-        unsafe {
-            *self.sp.byte_offset(offset as isize).cast() = write;
-        }
-    }
-
-    fn offset<T: Copy>(&mut self, offset: usize) -> T {
-        unsafe { *self.sp.byte_offset(offset as isize).cast() }
-    }
-
     fn reset(&mut self, offset: usize) {
         unsafe {
             self.sp = self.sp.byte_offset(offset as isize);
