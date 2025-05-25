@@ -13,7 +13,7 @@ fn main() {
                 fn main() void {
                     let a int = 57
                     if a > 20 {
-                        a++
+                        a--
                     }
                     __debug__
                 }
@@ -21,6 +21,7 @@ fn main() {
     );
 
     let tokens = lexer::Lexer::new(&code).run().unwrap();
+    println!("{tokens:#?}");
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 

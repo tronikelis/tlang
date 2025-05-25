@@ -40,7 +40,7 @@ pub enum Token {
     MinusMinus,
 }
 
-const CONTROL_CHAR: [char; 11] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+'];
+const CONTROL_CHAR: [char; 12] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-'];
 
 pub struct Lexer {
     code: Vec<char>,
