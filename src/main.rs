@@ -12,14 +12,8 @@ fn main() {
         "
                 fn main() void {
                     let a int = 57
-                    if a == 57 && a == 17 {
+                    if a > 20 {
                         a = 20
-                    } elseif a == 58 {
-                        a = 27
-                    } else {
-                        if a == 57 {
-                            a = 50
-                        }
                     }
                     __debug__
                 }

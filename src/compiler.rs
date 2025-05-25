@@ -268,15 +268,15 @@ impl<'a> FunctionCompiler<'a> {
         let b: ast::Type;
 
         match compare.compare_type {
-            // last item on the stack is bigger
-            ast::CompareType::Gt => {
-                a = self.compile_expression(&compare.right)?;
-                b = self.compile_expression(&compare.left)?;
-            }
             // last item on the stack is smaller
+            ast::CompareType::Gt => {
+                b = self.compile_expression(&compare.left)?;
+                a = self.compile_expression(&compare.right)?;
+            }
+            // last item on the stack is bigger
             ast::CompareType::Lt => {
-                a = self.compile_expression(&compare.left)?;
                 b = self.compile_expression(&compare.right)?;
+                a = self.compile_expression(&compare.left)?;
             }
             // dont matter
             ast::CompareType::Equals => {
