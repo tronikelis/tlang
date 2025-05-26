@@ -11,14 +11,7 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let a int = 57
-                    if a > 20 {
-                        a--
-                    }
-                    for let i int = 0; i < 10; i++ {
-
-                    }
-                    __debug__
+                    let acc int = 0
                 }
             ",
     );

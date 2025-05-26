@@ -57,10 +57,6 @@ impl VarStack {
         self.stack.last_mut().unwrap().push(item);
     }
 
-    fn pop(&mut self) {
-        self.stack.last_mut().unwrap().pop();
-    }
-
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
         items.fold(0, |acc, curr| match curr {
             VarStackItem::Var(var) => acc + var._type.size,
@@ -74,18 +70,18 @@ impl VarStack {
     }
 
     fn get_var(&self, identifier: &str) -> Option<(VarStackItemVar, usize)> {
-        let mut offset = 0;
+        let mut offset: isize = 0;
 
         for item in self.stack.iter().flatten().rev() {
             match item {
                 VarStackItem::Var(var) => {
                     if var.identifier == identifier {
-                        return Some((var.clone(), offset));
+                        return Some((var.clone(), offset as usize));
                     }
-                    offset += var._type.size;
+                    offset += var._type.size as isize;
                 }
-                VarStackItem::Increment(size) => offset += size,
-                VarStackItem::Reset(size) => offset -= size,
+                VarStackItem::Increment(size) => offset += *size as isize,
+                VarStackItem::Reset(size) => offset -= *size as isize,
             };
         }
 
@@ -130,6 +126,10 @@ impl LabelInstructions {
         let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
         self.push(Instruction::JumpIfTrue((target, target_last)));
+    }
+
+    fn again(&mut self) {
+        self.push(Instruction::Jump((*self.index.last().unwrap(), 0)));
     }
 
     fn back(&mut self, offset: usize) {
@@ -256,7 +256,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::AddI));
-        self.var_stack.pop();
+        self.var_stack.push(VarStackItem::Reset(a.size));
 
         Ok(a)
     }
@@ -317,9 +317,7 @@ impl<'a> FunctionCompiler<'a> {
             },
         }
 
-        self.var_stack.pop();
-        self.var_stack.pop();
-        self.var_stack.push(VarStackItem::Increment(ast::BOOL.size));
+        self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
 
         if let Some(andor) = &compare.andor {
             match andor {
@@ -338,7 +336,7 @@ impl<'a> FunctionCompiler<'a> {
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::And));
-                    self.var_stack.pop();
+                    self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
                 }
                 ast::AndOr::Or(exp) => {
                     // jump to after if true
@@ -351,7 +349,7 @@ impl<'a> FunctionCompiler<'a> {
 
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::Or));
-                    self.var_stack.pop();
+                    self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
                 }
             }
         }
@@ -382,7 +380,8 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(anyhow!("expected int expression"));
                 }
 
-                self.var_stack.pop();
+                self.var_stack
+                    .push(VarStackItem::Reset(variable._type.size));
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
@@ -394,7 +393,8 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(anyhow!("expected bool expression"));
                 }
 
-                self.var_stack.pop();
+                self.var_stack
+                    .push(VarStackItem::Reset(variable._type.size));
                 self.var_stack.push(VarStackItem::Var(VarStackItemVar {
                     identifier: variable.identifier.clone(),
                     _type: variable._type.clone(),
@@ -435,7 +435,8 @@ impl<'a> FunctionCompiler<'a> {
             .push(Instruction::Real(vm::Instruction::Reset(
                 variable._type.size,
             )));
-        self.var_stack.pop();
+        self.var_stack
+            .push(VarStackItem::Reset(variable._type.size));
 
         Ok(())
     }
@@ -478,39 +479,78 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
+        self.var_stack.push_frame();
+        self.compile_node(&_for.initializer)?;
+
+        self.instructions.jump();
+        self.var_stack.push_frame();
+
+        let exp = self.compile_expression(&_for.expression)?;
+        if exp != ast::BOOL {
+            return Err(anyhow!("compile_for: expected expression to return bool"));
+        }
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::NegateBool));
+        self.instructions.back_if_true(1);
+
+        self.compile_body(&_for.body)?;
+        self.compile_node(&_for.after_each)?;
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                self.var_stack.pop_frame(),
+            )));
+        self.instructions.again();
+        self.instructions.pop_index();
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                ast::BOOL.size + self.var_stack.pop_frame(),
+            )));
+
+        Ok(())
+    }
+
+    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
+        match node {
+            ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
+            ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
+            ast::Node::FunctionCall(fn_call) => {
+                let exp = self.compile_function_call(fn_call)?;
+                if exp != fn_call.function.return_type.clone() {
+                    return Err(anyhow!("incorrect type"));
+                }
+
+                // no variable to store result in, reset instantly
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::Reset(
+                        fn_call.function.return_type.size,
+                    )));
+                self.var_stack
+                    .push(VarStackItem::Reset(fn_call.function.return_type.size));
+            }
+            ast::Node::VariableAssignment(assignment) => {
+                self.compile_variable_assignment(assignment)?;
+            }
+            ast::Node::If(v) => {
+                self.compile_if(v)?;
+            }
+            ast::Node::Debug => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::Debug));
+            }
+            ast::Node::For(v) => self.compile_for(v)?,
+        };
+
+        Ok(())
+    }
+
     fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
         self.var_stack.push_frame();
 
-        for item in body {
-            match item {
-                ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
-                ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
-                ast::Node::FunctionCall(fn_call) => {
-                    let exp = self.compile_function_call(fn_call)?;
-                    if exp != fn_call.function.return_type.clone() {
-                        return Err(anyhow!("incorrect type"));
-                    }
-
-                    // no variable to store result in, reset instantly
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Reset(
-                            fn_call.function.return_type.size,
-                        )));
-                    self.var_stack
-                        .push(VarStackItem::Reset(fn_call.function.return_type.size));
-                }
-                ast::Node::VariableAssignment(assignment) => {
-                    self.compile_variable_assignment(assignment)?;
-                }
-                ast::Node::If(v) => {
-                    self.compile_if(v)?;
-                }
-                ast::Node::Debug => {
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Debug));
-                }
-                ast::Node::For(_) => todo!(),
-            };
+        for node in body {
+            self.compile_node(node)?;
         }
 
         self.instructions
