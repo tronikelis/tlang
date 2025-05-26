@@ -11,16 +11,13 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let a int = 57
-                    if a > 20 {
-                        a = 20
-                    }
-                    __debug__
+                    let acc int = 0
                 }
             ",
     );
 
     let tokens = lexer::Lexer::new(&code).run().unwrap();
+    println!("{tokens:#?}");
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 

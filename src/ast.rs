@@ -113,12 +113,21 @@ pub struct Else {
 }
 
 #[derive(Debug, Clone)]
+pub struct For {
+    pub initializer: Box<Node>,
+    pub expression: Expression,
+    pub after_each: Box<Node>,
+    pub body: Vec<Node>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Node {
     VariableDeclaration(VariableDeclaration),
     VariableAssignment(VariableAssignment),
     Return(Option<Expression>),
     FunctionCall(FunctionCall),
     If(If),
+    For(For),
     Debug,
 }
 
@@ -201,6 +210,31 @@ impl<'a> TokenParser<'a> {
         Ok(functions)
     }
 
+    fn parse_for(&mut self) -> Result<For> {
+        self.expect_next_token(lexer::Token::For)?;
+        self.next();
+
+        let initializer = self.parse_token()?;
+
+        self.expect_next_token(lexer::Token::Semicolon)?;
+        self.next();
+
+        let expression = self.parse_expression()?;
+
+        self.expect_next_token(lexer::Token::Semicolon)?;
+        self.next();
+
+        let after_each = self.parse_token()?;
+        let body = self.parse_body()?;
+
+        Ok(For {
+            initializer: Box::new(initializer),
+            expression,
+            after_each: Box::new(after_each),
+            body,
+        })
+    }
+
     fn parse_token(&mut self) -> Result<Node> {
         match self.peek_token_err(0)? {
             lexer::Token::Debug => {
@@ -215,13 +249,14 @@ impl<'a> TokenParser<'a> {
                 Ok(Node::Return(self.parse_expression().ok()))
             }
             lexer::Token::Identifier(_) => match self.peek_token_err(1)? {
-                lexer::Token::Equals => {
+                lexer::Token::Equals | lexer::Token::PlusPlus | lexer::Token::MinusMinus => {
                     Ok(Node::VariableAssignment(self.parse_variable_assignment()?))
                 }
                 lexer::Token::POpen => Ok(Node::FunctionCall(self.parse_function_call()?)),
-                _ => return Err(anyhow!("parse_token: token not supported")),
+                token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
             },
             lexer::Token::If => Ok(Node::If(self.parse_if()?)),
+            lexer::Token::For => Ok(Node::For(self.parse_for()?)),
             token => return Err(anyhow!("parse_token: token not supported {token:#?}")),
         }
     }
@@ -264,20 +299,42 @@ impl<'a> TokenParser<'a> {
     fn parse_variable_assignment(&mut self) -> Result<VariableAssignment> {
         let identifier = self.parse_identifier()?;
 
-        self.expect_next_token(lexer::Token::Equals)?;
-        self.next();
+        let variable = self
+            .context
+            .variables
+            .get(&identifier)
+            .ok_or(anyhow!("parse_variable_assignment variable not found"))?
+            .clone();
 
-        let expression = self.parse_expression()?;
-
-        Ok(VariableAssignment {
-            variable: self
-                .context
-                .variables
-                .get(&identifier)
-                .ok_or(anyhow!("parse_variable_assignment: variable not found"))?
-                .clone(),
-            expression,
-        })
+        let token = self.peek_token_err(0)?.clone();
+        match token {
+            lexer::Token::PlusPlus | lexer::Token::MinusMinus => {
+                self.next();
+                Ok(VariableAssignment {
+                    variable: variable.clone(),
+                    expression: Expression::Addition(Box::new(Addition {
+                        left: Expression::Identifier(variable.identifier),
+                        right: Expression::Literal(lexer::Literal::Int({
+                            if let lexer::Token::PlusPlus = token {
+                                1
+                            } else {
+                                -1
+                            }
+                        })),
+                    })),
+                })
+            }
+            lexer::Token::Equals => {
+                self.next();
+                Ok(VariableAssignment {
+                    variable,
+                    expression: self.parse_expression()?,
+                })
+            }
+            token => Err(anyhow!(
+                "parse_variable_assignment: token not supported {token:#?}"
+            )),
+        }
     }
 
     fn parse_body(&mut self) -> Result<Vec<Node>> {
@@ -483,8 +540,7 @@ impl<'a> TokenParser<'a> {
                         self.next();
                         andor = Some(AndOr::Or(self.parse_expression()?));
                     }
-                    lexer::Token::COpen => {}
-                    _ => return Err(anyhow!("token not supported")),
+                    _ => {}
                 }
 
                 return Ok(Expression::Compare(Box::new(Compare {
@@ -492,7 +548,7 @@ impl<'a> TokenParser<'a> {
                         lexer::Token::Gt => CompareType::Gt,
                         lexer::Token::Lt => CompareType::Lt,
                         lexer::Token::EqualsEquals => CompareType::Equals,
-                        _ => return Err(anyhow!("token not supported")),
+                        token => return Err(anyhow!("token not supported {token:#?}")),
                     },
                     left: expression,
                     right,

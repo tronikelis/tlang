@@ -36,9 +36,15 @@ pub enum Token {
     PipePipe,
     EqualsEquals,
     Debug,
+    PlusPlus,
+    MinusMinus,
+    For,
+    Semicolon,
 }
 
-const CONTROL_CHAR: [char; 11] = [')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+'];
+const CONTROL_CHAR: [char; 13] = [
+    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';',
+];
 
 pub struct Lexer {
     code: Vec<char>,
@@ -58,6 +64,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "for" => {
+                    tokens.push(Token::For);
+                    self.read_next_word();
+                    continue;
+                }
                 "__debug__" => {
                     tokens.push(Token::Debug);
                     self.read_next_word();
@@ -113,6 +124,11 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    ';' => {
+                        tokens.push(Token::Semicolon);
+                        self.next();
+                        continue;
+                    }
                     '&' => {
                         match self.peek_char(1).ok_or(anyhow!("todo: amper"))? {
                             '&' => {
@@ -201,6 +217,31 @@ impl Lexer {
                 }
 
                 tokens.push(Token::Identifier(identifier));
+
+                if let Some(ch) = self.peek_char(0) {
+                    match ch {
+                        '+' => {
+                            if let Some(ch) = self.peek_char(1) {
+                                if ch == '+' {
+                                    self.next();
+                                    self.next();
+                                    tokens.push(Token::PlusPlus);
+                                }
+                            }
+                        }
+                        '-' => {
+                            if let Some(ch) = self.peek_char(1) {
+                                if ch == '-' {
+                                    self.next();
+                                    self.next();
+                                    tokens.push(Token::MinusMinus);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 continue;
             }
 
