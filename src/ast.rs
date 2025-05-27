@@ -336,14 +336,14 @@ impl<'a> TokenParser<'a> {
                     variable: variable.clone(),
                     expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: Expression::Identifier(variable.identifier),
-                        right: Expression::Literal(lexer::Literal::Int({
+                        right: Expression::Literal(lexer::Literal::Int(1)),
+                        _type: {
                             if let lexer::Token::PlusPlus = token {
-                                1
+                                ArithmeticType::Plus
                             } else {
-                                -1
+                                ArithmeticType::Minus
                             }
-                        })),
-                        _type: ArithmeticType::Plus,
+                        },
                     })),
                 })
             }

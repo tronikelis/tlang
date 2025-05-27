@@ -9,7 +9,7 @@ pub enum Type {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
-    Int(isize),
+    Int(usize),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -228,8 +228,7 @@ impl Lexer {
             if identifier.len() > 0 {
                 if let Some(ch) = identifier.chars().next() {
                     if ch >= '0' && ch <= '9' {
-                        let int: isize = identifier.parse()?;
-                        tokens.push(Token::Literal(Literal::Int(int)));
+                        tokens.push(Token::Literal(Literal::Int(identifier.parse()?)));
                         continue;
                     }
                 }
