@@ -56,6 +56,8 @@ pub struct Arithmetic {
 pub enum ArithmeticType {
     Plus,
     Minus,
+    Divide,
+    Multiply,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +67,20 @@ pub struct FunctionCall {
 }
 
 #[derive(Debug, Clone)]
+pub enum InfixType {
+    Plus,
+    Minus,
+}
+
+#[derive(Debug, Clone)]
+pub struct Infix {
+    pub expression: Box<Expression>,
+    pub _type: InfixType,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    Infix(Infix),
     Literal(lexer::Literal),
     Identifier(String),
     Arithmetic(Box<Arithmetic>),
@@ -321,14 +336,14 @@ impl<'a> TokenParser<'a> {
                     variable: variable.clone(),
                     expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: Expression::Identifier(variable.identifier),
-                        right: Expression::Literal(lexer::Literal::Int({
+                        right: Expression::Literal(lexer::Literal::Int(1)),
+                        _type: {
                             if let lexer::Token::PlusPlus = token {
-                                1
+                                ArithmeticType::Plus
                             } else {
-                                -1
+                                ArithmeticType::Minus
                             }
-                        })),
-                        _type: ArithmeticType::Plus,
+                        },
                     })),
                 })
             }
@@ -511,37 +526,71 @@ impl<'a> TokenParser<'a> {
         return Ok(Expression::Identifier(self.parse_identifier()?));
     }
 
-    // for now this is a useless abstraction, but kept for consistency,
-    // check below why
     fn parse_expression_literal(&mut self) -> Result<Expression> {
         Ok(Expression::Literal(self.parse_literal()?))
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
-        let expression = match self.peek_token_err(0)?.clone() {
+    fn parse_pratt(&mut self, min_bp: usize, mut left: Expression) -> Result<Expression> {
+        loop {
+            let token = self.peek_token_err(0)?.clone();
+            let (l_bp, r_bp) = match pratt_binding_power(&token) {
+                Some(v) => v,
+                None => break,
+            };
+
+            if l_bp < min_bp {
+                break;
+            }
+
+            self.next();
+            let right = self.parse_expression_in_pratt()?;
+            let right = self.parse_pratt(r_bp, right)?;
+
+            left = Expression::Arithmetic(Box::new(Arithmetic {
+                left,
+                right,
+                _type: match token {
+                    lexer::Token::Plus => ArithmeticType::Plus,
+                    lexer::Token::Minus => ArithmeticType::Minus,
+                    lexer::Token::Slash => ArithmeticType::Divide,
+                    lexer::Token::Star => ArithmeticType::Multiply,
+                    token => return Err(anyhow!("parse_pratt: unknown token {token:#?}")),
+                },
+            }));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_expression_in_pratt(&mut self) -> Result<Expression> {
+        let infix_type;
+        match self.peek_token_err(0)? {
+            lexer::Token::Minus => {
+                infix_type = Some(InfixType::Minus);
+                self.next();
+            }
+            lexer::Token::Plus => {
+                infix_type = Some(InfixType::Plus);
+                self.next();
+            }
+            _ => infix_type = None,
+        };
+
+        let mut expression = match self.peek_token_err(0)?.clone() {
             lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
             lexer::Token::Literal(_) => self.parse_expression_literal()?,
             token => return Err(anyhow!("parse_expression: wrong token {token:#?}")),
         };
 
+        if let Some(_type) = infix_type {
+            expression = Expression::Infix(Infix {
+                expression: Box::new(expression),
+                _type,
+            });
+        }
+
         let token = self.peek_token_err(0)?.clone();
         match token {
-            lexer::Token::Plus => {
-                self.next();
-                return Ok(Expression::Arithmetic(Box::new(Arithmetic {
-                    left: expression,
-                    right: self.parse_expression()?,
-                    _type: ArithmeticType::Plus,
-                })));
-            }
-            lexer::Token::Minus => {
-                self.next();
-                return Ok(Expression::Arithmetic(Box::new(Arithmetic {
-                    left: expression,
-                    right: self.parse_expression()?,
-                    _type: ArithmeticType::Minus,
-                })));
-            }
             lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {
                 self.next();
                 let right = self.parse_expression()?;
@@ -576,6 +625,17 @@ impl<'a> TokenParser<'a> {
         }
 
         Ok(expression)
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression> {
+        let expression = self.parse_expression_in_pratt()?;
+        if let lexer::Token::Plus | lexer::Token::Minus | lexer::Token::Star | lexer::Token::Slash =
+            self.peek_token_err(0)?
+        {
+            Ok(self.parse_pratt(0, expression)?)
+        } else {
+            Ok(expression)
+        }
     }
 
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration> {
@@ -625,6 +685,14 @@ impl<'a> TokenParser<'a> {
     fn peek_token_err(&self, n: usize) -> Result<&lexer::Token> {
         self.peek_token(n)
             .ok_or(anyhow!("peek_token_err: expected Some"))
+    }
+}
+
+fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
+    match token {
+        lexer::Token::Plus | lexer::Token::Minus => Some((1, 2)),
+        lexer::Token::Star | lexer::Token::Slash => Some((3, 4)),
+        _ => None,
     }
 }
 

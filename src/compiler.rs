@@ -209,7 +209,7 @@ impl<'a> FunctionCompiler<'a> {
         match literal {
             lexer::Literal::Int(int) => {
                 self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI(*int)));
+                    .push(Instruction::Real(vm::Instruction::PushI(*int as isize)));
                 self.var_stack.push(VarStackItem::Increment(ast::INT.size));
 
                 Ok(ast::INT)
@@ -244,11 +244,6 @@ impl<'a> FunctionCompiler<'a> {
         let a = self.compile_expression(&arithmetic.left)?;
         let b = self.compile_expression(&arithmetic.right)?;
 
-        if let ast::ArithmeticType::Minus = arithmetic._type {
-            self.instructions
-                .push(Instruction::Real(vm::Instruction::MinusInt));
-        }
-
         if a != b {
             return Err(anyhow!("can't add different types"));
         }
@@ -259,8 +254,27 @@ impl<'a> FunctionCompiler<'a> {
             return Err(anyhow!("can only arithmetic on int"));
         }
 
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::AddI));
+        match arithmetic._type {
+            ast::ArithmeticType::Minus => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::MinusInt));
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::AddI));
+            }
+            ast::ArithmeticType::Plus => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::AddI));
+            }
+            ast::ArithmeticType::Multiply => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::MultiplyI));
+            }
+            ast::ArithmeticType::Divide => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::DivideI));
+            }
+        }
+
         self.var_stack.push(VarStackItem::Reset(a.size));
 
         Ok(a)
@@ -365,6 +379,17 @@ impl<'a> FunctionCompiler<'a> {
         Ok(ast::BOOL)
     }
 
+    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<ast::Type> {
+        let exp = self.compile_expression(&infix.expression)?;
+        match infix._type {
+            ast::InfixType::Plus => {}
+            ast::InfixType::Minus => self
+                .instructions
+                .push(Instruction::Real(vm::Instruction::MinusInt)),
+        }
+        Ok(exp)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let _type = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
@@ -372,6 +397,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Identifier(v) => self.compile_identifier(v),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
+            ast::Expression::Infix(v) => self.compile_infix(v),
         }?;
 
         Ok(_type)

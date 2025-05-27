@@ -5,6 +5,8 @@ pub enum Instruction {
     Increment(usize),
     PushI(isize),
     AddI,
+    MultiplyI,
+    DivideI,
     // dst = src * len
     Copy(usize, usize, usize),
     Exit,
@@ -194,6 +196,16 @@ impl Vm {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     self.stack.push(a | b);
+                }
+                Instruction::DivideI => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a / b);
+                }
+                Instruction::MultiplyI => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+                    self.stack.push(a * b);
                 }
             }
 

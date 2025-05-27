@@ -9,7 +9,7 @@ pub enum Type {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
-    Int(isize),
+    Int(usize),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -26,6 +26,8 @@ pub enum Token {
     POpen,
     Plus,
     Minus,
+    Slash,
+    Star,
     Type(Type),
     Literal(Literal),
     Lt,
@@ -43,8 +45,8 @@ pub enum Token {
     Semicolon,
 }
 
-const CONTROL_CHAR: [char; 13] = [
-    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';',
+const CONTROL_CHAR: [char; 15] = [
+    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/',
 ];
 
 pub struct Lexer {
@@ -125,6 +127,16 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    '*' => {
+                        tokens.push(Token::Star);
+                        self.next();
+                        continue;
+                    }
+                    '/' => {
+                        tokens.push(Token::Slash);
+                        self.next();
+                        continue;
+                    }
                     ';' => {
                         tokens.push(Token::Semicolon);
                         self.next();
@@ -216,8 +228,7 @@ impl Lexer {
             if identifier.len() > 0 {
                 if let Some(ch) = identifier.chars().next() {
                     if ch >= '0' && ch <= '9' {
-                        let int: isize = identifier.parse()?;
-                        tokens.push(Token::Literal(Literal::Int(int)));
+                        tokens.push(Token::Literal(Literal::Int(identifier.parse()?)));
                         continue;
                     }
                 }
