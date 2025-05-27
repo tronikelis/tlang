@@ -67,7 +67,20 @@ pub struct FunctionCall {
 }
 
 #[derive(Debug, Clone)]
+pub enum InfixType {
+    Plus,
+    Minus,
+}
+
+#[derive(Debug, Clone)]
+pub struct Infix {
+    pub expression: Box<Expression>,
+    pub _type: InfixType,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    Infix(Infix),
     Literal(lexer::Literal),
     Identifier(String),
     Arithmetic(Box<Arithmetic>),
@@ -529,7 +542,8 @@ impl<'a> TokenParser<'a> {
                 break;
             }
 
-            let right = self.parse_expression()?;
+            self.next();
+            let right = self.parse_expression_in_pratt()?;
             let right = self.parse_pratt(r_bp, right)?;
 
             left = Expression::Arithmetic(Box::new(Arithmetic {
@@ -548,33 +562,35 @@ impl<'a> TokenParser<'a> {
         Ok(left)
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
-        let in_pratt;
+    fn parse_expression_in_pratt(&mut self) -> Result<Expression> {
+        let infix_type;
+        match self.peek_token_err(0)? {
+            lexer::Token::Minus => {
+                infix_type = Some(InfixType::Minus);
+                self.next();
+            }
+            lexer::Token::Plus => {
+                infix_type = Some(InfixType::Plus);
+                self.next();
+            }
+            _ => infix_type = None,
+        };
 
-        if let lexer::Token::Plus | lexer::Token::Minus | lexer::Token::Slash | lexer::Token::Star =
-            self.peek_token_err(0)?
-        {
-            self.next();
-            in_pratt = true;
-        } else {
-            in_pratt = false
-        }
-
-        let expression = match self.peek_token_err(0)?.clone() {
+        let mut expression = match self.peek_token_err(0)?.clone() {
             lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
             lexer::Token::Literal(_) => self.parse_expression_literal()?,
             token => return Err(anyhow!("parse_expression: wrong token {token:#?}")),
         };
 
+        if let Some(_type) = infix_type {
+            expression = Expression::Infix(Infix {
+                expression: Box::new(expression),
+                _type,
+            });
+        }
+
         let token = self.peek_token_err(0)?.clone();
         match token {
-            lexer::Token::Plus | lexer::Token::Minus | lexer::Token::Star | lexer::Token::Slash => {
-                if in_pratt {
-                    return Ok(expression);
-                } else {
-                    return Ok(self.parse_pratt(0, expression)?);
-                }
-            }
             lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {
                 self.next();
                 let right = self.parse_expression()?;
@@ -609,6 +625,17 @@ impl<'a> TokenParser<'a> {
         }
 
         Ok(expression)
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression> {
+        let expression = self.parse_expression_in_pratt()?;
+        if let lexer::Token::Plus | lexer::Token::Minus | lexer::Token::Star | lexer::Token::Slash =
+            self.peek_token_err(0)?
+        {
+            Ok(self.parse_pratt(0, expression)?)
+        } else {
+            Ok(expression)
+        }
     }
 
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration> {

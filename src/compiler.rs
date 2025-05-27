@@ -365,6 +365,17 @@ impl<'a> FunctionCompiler<'a> {
         Ok(ast::BOOL)
     }
 
+    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<ast::Type> {
+        let exp = self.compile_expression(&infix.expression)?;
+        match infix._type {
+            ast::InfixType::Plus => {}
+            ast::InfixType::Minus => self
+                .instructions
+                .push(Instruction::Real(vm::Instruction::MinusInt)),
+        }
+        Ok(exp)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let _type = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
@@ -372,6 +383,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Identifier(v) => self.compile_identifier(v),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
+            ast::Expression::Infix(v) => self.compile_infix(v),
         }?;
 
         Ok(_type)
