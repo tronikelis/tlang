@@ -10,8 +10,15 @@ mod linker;
 fn main() {
     let code = String::from(
         "
+                fn loop(n int) void {
+                    if n == 0 {
+                        return
+                    }
+
+                    return loop(n - 1)
+                }
                 fn main() void {
-                    let acc int = 0
+                    loop(10)
                 }
             ",
     );

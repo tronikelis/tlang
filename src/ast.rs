@@ -46,9 +46,16 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
-pub struct Addition {
+pub struct Arithmetic {
     pub left: Expression,
     pub right: Expression,
+    pub _type: ArithmeticType,
+}
+
+#[derive(Debug, Clone)]
+pub enum ArithmeticType {
+    Plus,
+    Minus,
 }
 
 #[derive(Debug, Clone)]
@@ -61,7 +68,7 @@ pub struct FunctionCall {
 pub enum Expression {
     Literal(lexer::Literal),
     Identifier(String),
-    Addition(Box<Addition>),
+    Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
     FunctionCall(FunctionCall),
 }
@@ -312,7 +319,7 @@ impl<'a> TokenParser<'a> {
                 self.next();
                 Ok(VariableAssignment {
                     variable: variable.clone(),
-                    expression: Expression::Addition(Box::new(Addition {
+                    expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: Expression::Identifier(variable.identifier),
                         right: Expression::Literal(lexer::Literal::Int({
                             if let lexer::Token::PlusPlus = token {
@@ -321,6 +328,7 @@ impl<'a> TokenParser<'a> {
                                 -1
                             }
                         })),
+                        _type: ArithmeticType::Plus,
                     })),
                 })
             }
@@ -520,9 +528,18 @@ impl<'a> TokenParser<'a> {
         match token {
             lexer::Token::Plus => {
                 self.next();
-                return Ok(Expression::Addition(Box::new(Addition {
+                return Ok(Expression::Arithmetic(Box::new(Arithmetic {
                     left: expression,
                     right: self.parse_expression()?,
+                    _type: ArithmeticType::Plus,
+                })));
+            }
+            lexer::Token::Minus => {
+                self.next();
+                return Ok(Expression::Arithmetic(Box::new(Arithmetic {
+                    left: expression,
+                    right: self.parse_expression()?,
+                    _type: ArithmeticType::Minus,
                 })));
             }
             lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {

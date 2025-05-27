@@ -240,9 +240,14 @@ impl<'a> FunctionCompiler<'a> {
         Ok(variable._type)
     }
 
-    fn compile_addition(&mut self, addition: &ast::Addition) -> Result<ast::Type> {
-        let a = self.compile_expression(&addition.left)?;
-        let b = self.compile_expression(&addition.right)?;
+    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<ast::Type> {
+        let a = self.compile_expression(&arithmetic.left)?;
+        let b = self.compile_expression(&arithmetic.right)?;
+
+        if let ast::ArithmeticType::Minus = arithmetic._type {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::MinusInt));
+        }
 
         if a != b {
             return Err(anyhow!("can't add different types"));
@@ -251,7 +256,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err(anyhow!("can't add void type"));
         }
         if a != ast::INT {
-            return Err(anyhow!("can only add int"));
+            return Err(anyhow!("can only arithmetic on int"));
         }
 
         self.instructions
@@ -363,7 +368,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let _type = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
-            ast::Expression::Addition(v) => self.compile_addition(v),
+            ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
             ast::Expression::Identifier(v) => self.compile_identifier(v),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),

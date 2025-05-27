@@ -25,6 +25,7 @@ pub enum Token {
     PClose,
     POpen,
     Plus,
+    Minus,
     Type(Type),
     Literal(Literal),
     Lt,
@@ -184,6 +185,11 @@ impl Lexer {
                     }
                     '+' => {
                         tokens.push(Token::Plus);
+                        self.next();
+                        continue;
+                    }
+                    '-' => {
+                        tokens.push(Token::Minus);
                         self.next();
                         continue;
                     }
