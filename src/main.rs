@@ -12,6 +12,7 @@ fn main() {
         "
                 fn foo() void {}
                 fn main() void {
+                    let slice int[] = {}
                     let a int = -5 + 3 * 8 + 9 * 20
                     __debug__
                 }

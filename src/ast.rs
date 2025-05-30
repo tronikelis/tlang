@@ -4,24 +4,28 @@ use std::collections::HashMap;
 use crate::lexer;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Type {
-    pub size: usize,
-    pub _type: lexer::Type,
+pub enum TypeType {
+    Slice(Box<Type>),
+    Scalar(lexer::Type),
 }
 
-pub const INT: Type = Type {
-    size: size_of::<isize>(),
-    _type: lexer::Type::Int,
-};
+#[derive(Debug, Clone, PartialEq)]
+pub struct Type {
+    pub size: usize,
+    pub _type: TypeType,
+}
 
 pub const VOID: Type = Type {
     size: 0,
-    _type: lexer::Type::Void,
+    _type: TypeType::Scalar(lexer::Type::Void),
 };
-
+pub const INT: Type = Type {
+    size: size_of::<isize>(),
+    _type: TypeType::Scalar(lexer::Type::Int),
+};
 pub const BOOL: Type = Type {
-    size: INT.size,
-    _type: lexer::Type::Bool,
+    size: size_of::<isize>(),
+    _type: TypeType::Scalar(lexer::Type::Bool),
 };
 
 #[derive(Debug, Clone)]
@@ -79,9 +83,15 @@ pub struct Infix {
 }
 
 #[derive(Debug, Clone)]
+pub struct Literal {
+    pub literal: lexer::Literal,
+    pub _type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     Infix(Infix),
-    Literal(lexer::Literal),
+    Literal(Literal),
     Identifier(String),
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
@@ -336,7 +346,10 @@ impl<'a> TokenParser<'a> {
                     variable: variable.clone(),
                     expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: Expression::Identifier(variable.identifier),
-                        right: Expression::Literal(lexer::Literal::Int(1)),
+                        right: Expression::Literal(Literal {
+                            _type: INT,
+                            literal: lexer::Literal::Int(1),
+                        }),
                         _type: {
                             if let lexer::Token::PlusPlus = token {
                                 ArithmeticType::Plus
@@ -378,11 +391,17 @@ impl<'a> TokenParser<'a> {
         Ok(nodes)
     }
 
-    fn parse_literal(&mut self) -> Result<lexer::Literal> {
+    fn parse_literal(&mut self) -> Result<Literal> {
         match self.peek_token_err(0)?.clone() {
             lexer::Token::Literal(v) => {
                 self.next();
-                Ok(v.clone())
+                Ok(Literal {
+                    literal: v.clone(),
+                    _type: match v {
+                        lexer::Literal::Int(_) => INT,
+                        lexer::Literal::Bool(_) => BOOL,
+                    },
+                })
             }
             _ => Err(anyhow!("parse_literal: expected Literal")),
         }
@@ -398,24 +417,43 @@ impl<'a> TokenParser<'a> {
         }
     }
 
+    fn parse_type_slice(&mut self, parent: Type) -> Result<Type> {
+        self.expect_next_token(lexer::Token::BOpen)?;
+        self.next();
+        self.expect_next_token(lexer::Token::BClose)?;
+        self.next();
+
+        let _type = Type {
+            _type: TypeType::Slice(Box::new(parent)),
+            size: size_of::<usize>(),
+        };
+
+        if let Ok(v) = self.parse_type_slice(_type.clone()) {
+            Ok(v)
+        } else {
+            Ok(_type)
+        }
+    }
+
     fn parse_type(&mut self) -> Result<Type> {
-        match self.peek_token_err(0)?.clone() {
+        let _type = match self.peek_token_err(0)?.clone() {
             lexer::Token::Type(v) => {
                 self.next();
-
-                let size = match &v {
-                    lexer::Type::Void => 0,
-                    lexer::Type::Int => size_of::<isize>(),
-                    lexer::Type::Bool => size_of::<isize>(),
-                };
-
-                Ok(Type {
-                    size,
-                    _type: v.clone(),
-                })
+                match v {
+                    lexer::Type::Void => VOID,
+                    lexer::Type::Int => INT,
+                    lexer::Type::Bool => BOOL,
+                }
             }
-            _ => Err(anyhow!("parse_type: expected Type")),
-        }
+            _ => return Err(anyhow!("parse_type: expected Type")),
+        };
+
+        match self.peek_token_err(0)? {
+            lexer::Token::BOpen => return self.parse_type_slice(_type),
+            _ => {}
+        };
+
+        Ok(_type)
     }
 
     fn parse_function_declaration(&mut self) -> Result<Function> {

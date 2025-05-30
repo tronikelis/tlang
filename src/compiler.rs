@@ -205,16 +205,28 @@ impl<'a> FunctionCompiler<'a> {
         Ok(call.function.return_type.clone())
     }
 
-    fn compile_literal(&mut self, literal: &lexer::Literal) -> Result<ast::Type> {
-        match literal {
+    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ast::Type> {
+        match literal.literal {
             lexer::Literal::Int(int) => {
                 self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI(*int as isize)));
-                self.var_stack.push(VarStackItem::Increment(ast::INT.size));
-
-                Ok(ast::INT)
+                    .push(Instruction::Real(vm::Instruction::PushI(int as isize)));
+            }
+            lexer::Literal::Bool(bool) => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::PushI({
+                        if bool {
+                            1
+                        } else {
+                            0
+                        }
+                    })));
             }
         }
+
+        self.var_stack
+            .push(VarStackItem::Increment(literal._type.size));
+
+        Ok(literal._type.clone())
     }
 
     fn compile_identifier(&mut self, identifier: &str) -> Result<ast::Type> {
