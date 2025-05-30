@@ -339,13 +339,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::ToBool));
             }
-            ast::CompareType::Equals => match a._type {
-                lexer::Type::Int | lexer::Type::Bool => {
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::CompareInt));
-                }
-                _ => return Err(anyhow!("can only == int and bool")),
-            },
+            ast::CompareType::Equals => self
+                .instructions
+                .push(Instruction::Real(vm::Instruction::CompareInt)),
         }
 
         self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
@@ -410,41 +406,45 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
+            ast::Expression::List(v) => todo!(),
         }?;
 
         Ok(_type)
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
-        match variable._type._type {
-            lexer::Type::Int => {
-                let exp = self.compile_expression(&variable.expression)?;
-                if exp != ast::INT {
-                    return Err(anyhow!("expected int expression"));
-                }
+        match &variable._type._type {
+            ast::TypeType::Scalar(v) => match v {
+                lexer::Type::Int => {
+                    let exp = self.compile_expression(&variable.expression)?;
+                    if exp != ast::INT {
+                        return Err(anyhow!("expected int expression"));
+                    }
 
-                self.var_stack
-                    .push(VarStackItem::Reset(variable._type.size));
-                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                    identifier: variable.identifier.clone(),
-                    _type: variable._type.clone(),
-                }));
-            }
-            lexer::Type::Bool => {
-                let exp = self.compile_expression(&variable.expression)?;
-                if exp != ast::BOOL {
-                    return Err(anyhow!("expected bool expression"));
+                    self.var_stack
+                        .push(VarStackItem::Reset(variable._type.size));
+                    self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                        identifier: variable.identifier.clone(),
+                        _type: variable._type.clone(),
+                    }));
                 }
+                lexer::Type::Bool => {
+                    let exp = self.compile_expression(&variable.expression)?;
+                    if exp != ast::BOOL {
+                        return Err(anyhow!("expected bool expression"));
+                    }
 
-                self.var_stack
-                    .push(VarStackItem::Reset(variable._type.size));
-                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                    identifier: variable.identifier.clone(),
-                    _type: variable._type.clone(),
-                }));
-            }
-            lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
-        }
+                    self.var_stack
+                        .push(VarStackItem::Reset(variable._type.size));
+                    self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+                        identifier: variable.identifier.clone(),
+                        _type: variable._type.clone(),
+                    }));
+                }
+                lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
+            },
+            ast::TypeType::Slice(v) => todo!(),
+        };
 
         Ok(())
     }

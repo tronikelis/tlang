@@ -96,6 +96,7 @@ pub enum Expression {
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
     FunctionCall(FunctionCall),
+    List(Vec<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -600,7 +601,35 @@ impl<'a> TokenParser<'a> {
         Ok(left)
     }
 
+    fn parse_expression_list(&mut self) -> Result<Vec<Expression>> {
+        self.expect_next_token(lexer::Token::COpen)?;
+        self.next();
+
+        let mut expressions = Vec::new();
+
+        while let Some(v) = self.peek_token(0) {
+            if let lexer::Token::CClose = v {
+                self.next();
+                break;
+            }
+
+            expressions.push(self.parse_expression()?);
+
+            if *self.peek_token_err(0)? != lexer::Token::CClose {
+                self.expect_next_token(lexer::Token::Comma)?;
+                self.next();
+            }
+        }
+
+        Ok(expressions)
+    }
+
     fn parse_expression_in_pratt(&mut self) -> Result<Expression> {
+        match self.peek_token_err(0)? {
+            lexer::Token::COpen => return Ok(Expression::List(self.parse_expression_list()?)),
+            _ => {}
+        };
+
         let infix_type;
         match self.peek_token_err(0)? {
             lexer::Token::Minus => {

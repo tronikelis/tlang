@@ -10,9 +10,8 @@ mod linker;
 fn main() {
     let code = String::from(
         "
-                fn foo() void {}
                 fn main() void {
-                    let slice int[] = {}
+                    let slice int[] = {1, 2, 3}
                     let a int = -5 + 3 * 8 + 9 * 20
                     __debug__
                 }
