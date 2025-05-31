@@ -430,8 +430,6 @@ impl<'a> FunctionCompiler<'a> {
                 .push(VarStackItem::Reset(slice_size + exp.size));
         }
 
-        self.var_stack.push(VarStackItem::Increment(slice_size));
-
         Ok(ast::Type {
             size: slice_size,
             _type: curr_exp
