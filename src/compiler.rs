@@ -469,7 +469,15 @@ impl<'a> FunctionCompiler<'a> {
             },
             ast::TypeType::Slice(v) => {
                 if exp != **v {
-                    return Err(anyhow!("expected slice expression"));
+                    if let ast::TypeType::Slice(_type) = exp._type {
+                        // hacky solution for empty lists
+                        // need something more maintainable haha
+                        if *_type != ast::VOID {
+                            return Err(anyhow!("expected slice expression"));
+                        }
+                    } else {
+                        return Err(anyhow!("expected slice expression"));
+                    }
                 }
             }
         };

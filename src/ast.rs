@@ -15,10 +15,6 @@ pub struct Type {
     pub _type: TypeType,
 }
 
-// pub const VOID_SLICE: Type = Type {
-//     size: size_of::<usize>(),
-//     _type: TypeType::Slice(Box::new(VOID)),
-// };
 pub const VOID: Type = Type {
     size: 0,
     _type: TypeType::Scalar(lexer::Type::Void),

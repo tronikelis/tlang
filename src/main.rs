@@ -11,9 +11,7 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let slice int[] = {1, 2, 3}
-                    let a int = -5 + 3 * 8 + 9 * 20
-                    __debug__
+                    let slice int[] = {}
                 }
             ",
     );
