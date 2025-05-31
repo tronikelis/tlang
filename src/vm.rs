@@ -7,6 +7,7 @@ fn layout_u8(size: usize) -> Layout {
     Layout::from_size_align(size, 1).unwrap()
 }
 
+#[derive(Debug)]
 struct Slice {
     data: Vec<u8>,
 }
