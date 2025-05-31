@@ -399,15 +399,18 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_list(&mut self, list: &[ast::Expression]) -> Result<ast::Type> {
+        let slice_size = size_of::<usize>();
+
         self.instructions
             .push(Instruction::Real(vm::Instruction::PushSlice));
+        self.var_stack.push(VarStackItem::Increment(slice_size));
 
         let mut curr_exp: Option<ast::Type> = None;
 
         for v in list {
-            let slice_size = size_of::<usize>();
             self.instructions
                 .push(Instruction::Real(vm::Instruction::Increment(slice_size)));
+            self.var_stack.push(VarStackItem::Increment(slice_size));
             self.instructions
                 .push(Instruction::Real(vm::Instruction::Copy(
                     0, slice_size, slice_size,
@@ -423,10 +426,14 @@ impl<'a> FunctionCompiler<'a> {
 
             self.instructions
                 .push(Instruction::Real(vm::Instruction::SliceAppend(exp.size)));
+            self.var_stack
+                .push(VarStackItem::Reset(slice_size + exp.size));
         }
 
+        self.var_stack.push(VarStackItem::Increment(slice_size));
+
         Ok(ast::Type {
-            size: size_of::<usize>(),
+            size: slice_size,
             _type: curr_exp
                 .map(|v| v._type)
                 .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),
