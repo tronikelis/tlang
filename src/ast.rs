@@ -572,10 +572,16 @@ impl<'a> TokenParser<'a> {
         self.expect_next_token(lexer::Token::BClose)?;
         self.next();
 
-        Ok(Index {
+        let index = Index {
             var: Box::new(var),
             expression: Box::new(expression),
-        })
+        };
+
+        if let lexer::Token::BOpen = self.peek_token_err(0)? {
+            Ok(self.parse_expression_index(Expression::Index(index))?)
+        } else {
+            Ok(index)
+        }
     }
 
     fn parse_expression_identifier(&mut self) -> Result<Expression> {

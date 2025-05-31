@@ -433,7 +433,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(ast::Type {
             size: slice_size,
             _type: curr_exp
-                .map(|v| v._type)
+                .map(|v| ast::TypeType::Slice(Box::new(v)))
                 .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),
         })
     }
@@ -497,17 +497,15 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
             },
-            ast::TypeType::Slice(v) => {
-                if exp != **v {
-                    if let ast::TypeType::Slice(_type) = exp._type {
-                        // hacky solution for empty lists
-                        // need something more maintainable haha
-                        if *_type != ast::VOID {
-                            return Err(anyhow!("expected slice expression"));
-                        }
-                    } else {
-                        return Err(anyhow!("expected slice expression"));
-                    }
+            ast::TypeType::Slice(slice_type) => {
+                let exp_slice_type = match exp._type {
+                    ast::TypeType::Slice(v) => v,
+                    _ => return Err(anyhow!("expected slice")),
+                };
+
+                // void slices are allowed
+                if *exp_slice_type != ast::VOID && *slice_type != exp_slice_type {
+                    return Err(anyhow!("slice type mismatch"));
                 }
             }
         };
