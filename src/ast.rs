@@ -89,6 +89,12 @@ pub struct Literal {
 }
 
 #[derive(Debug, Clone)]
+pub struct Index {
+    pub var: Box<Expression>,
+    pub expression: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     Infix(Infix),
     Literal(Literal),
@@ -97,6 +103,7 @@ pub enum Expression {
     Compare(Box<Compare>),
     FunctionCall(FunctionCall),
     List(Vec<Expression>),
+    Index(Index),
 }
 
 #[derive(Debug, Clone)]
@@ -556,13 +563,26 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_expression_identifier(&mut self) -> Result<Expression> {
-        // follow a function call
-        if let lexer::Token::POpen = self.peek_token_err(1)? {
-            return Ok(Expression::FunctionCall(self.parse_function_call()?));
-        }
+    fn parse_expression_index(&mut self, var: Expression) -> Result<Index> {
+        self.expect_next_token(lexer::Token::BOpen)?;
+        self.next();
 
-        return Ok(Expression::Identifier(self.parse_identifier()?));
+        let expression = self.parse_expression()?;
+
+        self.expect_next_token(lexer::Token::BClose)?;
+        self.next();
+
+        Ok(Index {
+            var: Box::new(var),
+            expression: Box::new(expression),
+        })
+    }
+
+    fn parse_expression_identifier(&mut self) -> Result<Expression> {
+        match self.peek_token_err(1)? {
+            lexer::Token::POpen => Ok(Expression::FunctionCall(self.parse_function_call()?)),
+            _ => Ok(Expression::Identifier(self.parse_identifier()?)),
+        }
     }
 
     fn parse_expression_literal(&mut self) -> Result<Expression> {
@@ -687,6 +707,9 @@ impl<'a> TokenParser<'a> {
                     right,
                     andor,
                 })));
+            }
+            lexer::Token::BOpen => {
+                return Ok(Expression::Index(self.parse_expression_index(expression)?))
             }
             _ => {}
         }

@@ -11,7 +11,14 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let slice int[] = {}
+                    let slice int[] = {1, 2, 3}
+                    for let i int = 0; i < 3; i++ {
+                        let foo int = 99999
+                        let b int = slice[i]
+                        __debug__
+                    }
+                    let foo int = 69
+                    __debug__
                 }
             ",
     );

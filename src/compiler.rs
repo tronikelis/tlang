@@ -438,6 +438,35 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<ast::Type> {
+        let exp_var = self.compile_expression(&index.var)?;
+
+        let expected_type;
+        match exp_var._type {
+            ast::TypeType::Slice(v) => {
+                expected_type = v;
+            }
+            token => return Err(anyhow!("cant index {token:#?}")),
+        }
+
+        let exp_index = self.compile_expression(&index.expression)?;
+        if exp_index != ast::INT {
+            return Err(anyhow!("cant index with {exp_index:#?}"));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceIndexGet(
+                expected_type.size,
+            )));
+
+        self.var_stack
+            .push(VarStackItem::Reset(exp_var.size + exp_index.size));
+        self.var_stack
+            .push(VarStackItem::Increment(expected_type.size));
+
+        Ok(*expected_type)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         Ok(match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
@@ -447,6 +476,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::List(v) => self.compile_list(v),
+            ast::Expression::Index(v) => self.compile_expression_index(v),
         }?)
     }
 
