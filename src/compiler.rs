@@ -398,7 +398,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(exp)
     }
 
-    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<Option<ast::Type>> {
+    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<ast::Type> {
         self.instructions
             .push(Instruction::Real(vm::Instruction::PushSlice));
 
@@ -425,14 +425,16 @@ impl<'a> FunctionCompiler<'a> {
                 .push(Instruction::Real(vm::Instruction::SliceAppend(exp.size)));
         }
 
-        Ok(curr_exp.map(|v| ast::Type {
+        Ok(ast::Type {
             size: size_of::<usize>(),
-            _type: ast::TypeType::Slice(Box::new(v)),
-        }))
+            _type: curr_exp
+                .map(|v| v._type)
+                .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),
+        })
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
-        let _type = match expression {
+        Ok(match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
             ast::Expression::Identifier(v) => self.compile_identifier(v),
@@ -440,9 +442,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::List(v) => self.compile_list(v),
-        }?;
-
-        Ok(_type)
+        }?)
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
