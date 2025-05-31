@@ -398,6 +398,39 @@ impl<'a> FunctionCompiler<'a> {
         Ok(exp)
     }
 
+    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<Option<ast::Type>> {
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::PushSlice));
+
+        let mut curr_exp: Option<ast::Type> = None;
+
+        for v in list {
+            let slice_size = size_of::<usize>();
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Increment(slice_size)));
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Copy(
+                    0, slice_size, slice_size,
+                )));
+
+            let exp = self.compile_expression(v)?;
+            if let Some(curr_exp) = curr_exp {
+                if curr_exp != exp {
+                    return Err(anyhow!("type mismatch"));
+                }
+            }
+            curr_exp = Some(exp.clone());
+
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::SliceAppend(exp.size)));
+        }
+
+        Ok(curr_exp.map(|v| ast::Type {
+            size: size_of::<usize>(),
+            _type: ast::TypeType::Slice(Box::new(v)),
+        }))
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let _type = match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
@@ -406,45 +439,42 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
-            ast::Expression::List(v) => todo!(),
+            ast::Expression::List(v) => self.compile_list(v),
         }?;
 
         Ok(_type)
     }
 
     fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
+        let exp = self.compile_expression(&variable.expression)?;
+
         match &variable._type._type {
             ast::TypeType::Scalar(v) => match v {
                 lexer::Type::Int => {
-                    let exp = self.compile_expression(&variable.expression)?;
                     if exp != ast::INT {
                         return Err(anyhow!("expected int expression"));
                     }
-
-                    self.var_stack
-                        .push(VarStackItem::Reset(variable._type.size));
-                    self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                        identifier: variable.identifier.clone(),
-                        _type: variable._type.clone(),
-                    }));
                 }
                 lexer::Type::Bool => {
-                    let exp = self.compile_expression(&variable.expression)?;
                     if exp != ast::BOOL {
                         return Err(anyhow!("expected bool expression"));
                     }
-
-                    self.var_stack
-                        .push(VarStackItem::Reset(variable._type.size));
-                    self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                        identifier: variable.identifier.clone(),
-                        _type: variable._type.clone(),
-                    }));
                 }
                 lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
             },
-            ast::TypeType::Slice(v) => todo!(),
+            ast::TypeType::Slice(v) => {
+                if exp != **v {
+                    return Err(anyhow!("expected slice expression"));
+                }
+            }
         };
+
+        self.var_stack
+            .push(VarStackItem::Reset(variable._type.size));
+        self.var_stack.push(VarStackItem::Var(VarStackItemVar {
+            identifier: variable.identifier.clone(),
+            _type: variable._type.clone(),
+        }));
 
         Ok(())
     }

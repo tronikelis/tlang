@@ -18,19 +18,21 @@ impl Slice {
 
     fn index(&self, index: isize, size: usize) -> &[u8] {
         let index = index as usize;
-        &self.data[index..(index + size)]
+        let from = index * size;
+        &self.data[from..(from + size)]
     }
 
-    fn index_set(&mut self, index: isize, val: &[u8]) {
-        for (i, v) in val.iter().enumerate() {
-            self.data[(index as usize) + i] = *v;
+    fn index_set(&mut self, index: isize, val: Vec<u8>) {
+        let from = index as usize * val.len();
+        for (i, v) in val.into_iter().enumerate() {
+            self.data[from + i] = v;
         }
     }
 
-    fn append(&mut self, val: &[u8]) {
+    fn append(&mut self, val: Vec<u8>) {
         self.data.reserve(val.len());
         for v in val {
-            self.data.push(*v);
+            self.data.push(v);
         }
     }
 }
@@ -261,25 +263,22 @@ impl Vm {
                     self.stack.push(Slice::new());
                 }
                 Instruction::SliceAppend(size) => {
-                    let slice = self.stack.pop::<*mut Slice>();
-                    let item = self.stack.pop_size(size);
+                    let item = self.stack.pop_size(size).to_vec();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    let slice = unsafe { &mut *slice };
                     slice.append(item);
                 }
                 Instruction::SliceIndexGet(size) => {
-                    let slice = self.stack.pop::<*mut Slice>();
                     let index = self.stack.pop::<isize>();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    let slice = unsafe { &mut *slice };
                     self.stack.push_size(slice.index(index, size));
                 }
                 Instruction::SliceIndexSet(size) => {
-                    let slice = self.stack.pop::<*mut Slice>();
                     let index = self.stack.pop::<isize>();
-                    let item = self.stack.pop_size(size);
+                    let item = self.stack.pop_size(size).to_vec();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    let slice = unsafe { &mut *slice };
                     slice.index_set(index, item);
                 }
             }
