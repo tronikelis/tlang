@@ -11,9 +11,9 @@ fn main() {
     let code = String::from(
         "
                 fn main() void {
-                    let slice int[][] = {}
-                    slice[0] = { 1 }
-                    slice[0][0] = 2
+                    let slice int[][] = {{}}
+                    slice[0] = {0}
+                    slice[0][0] = 1
                 }
             ",
     );

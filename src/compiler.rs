@@ -493,14 +493,14 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
             },
-            ast::TypeType::Slice(slice_type) => {
-                let exp_slice_type = match exp._type {
+            ast::TypeType::Slice(left_type) => {
+                let right_type = match exp._type {
                     ast::TypeType::Slice(v) => v,
-                    _ => return Err(anyhow!("expected slice")),
+                    _ => return Err(anyhow!("slice type mismatch")),
                 };
 
                 // void slices are allowed
-                if *exp_slice_type != ast::VOID && *slice_type != exp_slice_type {
+                if *right_type.extract_slice_type() != ast::VOID && *left_type != right_type {
                     return Err(anyhow!("slice type mismatch"));
                 }
             }

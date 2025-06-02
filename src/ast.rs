@@ -15,6 +15,21 @@ pub struct Type {
     pub _type: TypeType,
 }
 
+impl Type {
+    pub fn extract_slice_type(&self) -> &Type {
+        let mut _type = self;
+        loop {
+            if let TypeType::Slice(v) = &_type._type {
+                _type = v;
+            } else {
+                break;
+            }
+        }
+
+        _type
+    }
+}
+
 pub const VOID: Type = Type {
     size: 0,
     _type: TypeType::Scalar(lexer::Type::Void),
