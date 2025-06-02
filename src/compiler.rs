@@ -474,8 +474,9 @@ impl<'a> FunctionCompiler<'a> {
         declaration: &ast::VariableDeclaration,
     ) -> Result<()> {
         let exp = self.compile_expression(&declaration.expression)?;
-
-        println!("compile_variable_declaration: {exp:#?}");
+        if exp == ast::VOID {
+            return Err(anyhow!("can't declare void variable"));
+        }
 
         if !declaration.variable._type.can_assign(&exp) {
             return Err(anyhow!("type mismatch"));
