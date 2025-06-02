@@ -12,8 +12,7 @@ fn main() {
         "
                 fn main() void {
                     let slice int[][] = {{}}
-                    slice[0] = {0}
-                    slice[0][0] = 1
+                    slice[0] = {}
                 }
             ",
     );

@@ -434,13 +434,9 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_expression_index(&mut self, index: &ast::Index) -> Result<ast::Type> {
         let exp_var = self.compile_expression(&index.var)?;
 
-        let expected_type;
-        match exp_var._type {
-            ast::TypeType::Slice(v) => {
-                expected_type = v;
-            }
-            token => return Err(anyhow!("cant index {token:#?}")),
-        }
+        let ast::TypeType::Slice(expected_type) = exp_var._type else {
+            return Err(anyhow!("can't index this type"));
+        };
 
         let exp_index = self.compile_expression(&index.expression)?;
         if exp_index != ast::INT {
@@ -461,7 +457,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
-        Ok(match expression {
+        match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
             ast::Expression::Variable(v) => self.compile_variable(v),
@@ -470,7 +466,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::List(v) => self.compile_list(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
-        }?)
+        }
     }
 
     fn compile_variable_declaration(
@@ -479,32 +475,11 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<()> {
         let exp = self.compile_expression(&declaration.expression)?;
 
-        match &declaration.variable._type._type {
-            ast::TypeType::Scalar(v) => match v {
-                lexer::Type::Int => {
-                    if exp != ast::INT {
-                        return Err(anyhow!("expected int expression"));
-                    }
-                }
-                lexer::Type::Bool => {
-                    if exp != ast::BOOL {
-                        return Err(anyhow!("expected bool expression"));
-                    }
-                }
-                lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
-            },
-            ast::TypeType::Slice(left_type) => {
-                let right_type = match exp._type {
-                    ast::TypeType::Slice(v) => v,
-                    _ => return Err(anyhow!("slice type mismatch")),
-                };
+        println!("compile_variable_declaration: {exp:#?}");
 
-                // void slices are allowed
-                if *right_type.extract_slice_type() != ast::VOID && *left_type != right_type {
-                    return Err(anyhow!("slice type mismatch"));
-                }
-            }
-        };
+        if !declaration.variable._type.can_assign(&exp) {
+            return Err(anyhow!("type mismatch"));
+        }
 
         self.var_stack
             .push(VarStackItem::Var(declaration.variable.identifier.clone()));
@@ -538,14 +513,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             ast::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
-                let expected_item = match slice._type {
-                    ast::TypeType::Slice(v) => v,
-                    _type => return Err(anyhow!("can't index non slice")),
+                let ast::TypeType::Slice(slice_item) = &slice._type else {
+                    return Err(anyhow!("can only index slices"));
                 };
 
                 let item = self.compile_expression(&assignment.expression)?;
 
-                if item != *expected_item {
+                if !slice_item.can_assign(&item) {
                     return Err(anyhow!("slice index set type mismatch"));
                 }
 

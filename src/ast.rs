@@ -16,17 +16,45 @@ pub struct Type {
 }
 
 impl Type {
-    pub fn extract_slice_type(&self) -> &Type {
+    pub fn can_assign(&self, other: &Self) -> bool {
+        match &self._type {
+            TypeType::Slice(_) => self.can_assign_slice(other),
+            _ => other == self,
+        }
+    }
+
+    fn can_assign_slice(&self, other: &Self) -> bool {
+        let (me, me_depth) = self.extract_slice_type();
+        let (other, other_depth) = other.extract_slice_type();
+        // some safety checks
+        if other_depth == 0 && *other == VOID {
+            panic!("impossible other_depth=0 VOID type in slice");
+        }
+
+        if other_depth > me_depth {
+            return false;
+        }
+
+        if other_depth < me_depth {
+            return *other == VOID;
+        }
+
+        return *other == VOID || other == me;
+    }
+
+    fn extract_slice_type(&self) -> (&Type, usize) {
         let mut _type = self;
+        let mut i = 0;
         loop {
             if let TypeType::Slice(v) = &_type._type {
                 _type = v;
+                i += 1;
             } else {
                 break;
             }
         }
 
-        _type
+        (_type, i)
     }
 }
 
