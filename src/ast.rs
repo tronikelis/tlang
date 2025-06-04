@@ -7,6 +7,7 @@ use crate::lexer;
 pub enum TypeType {
     Slice(Box<Type>),
     Scalar(lexer::Type),
+    CompilerType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +59,11 @@ impl Type {
     }
 }
 
+pub const COMPILER_TYPE: Type = Type {
+    // dont look at this value, this type itself will be replaced by the compiler
+    size: 0,
+    _type: TypeType::CompilerType,
+};
 pub const VOID: Type = Type {
     size: 0,
     _type: TypeType::Scalar(lexer::Type::Void),
@@ -472,9 +478,10 @@ impl<'a> TokenParser<'a> {
                     lexer::Type::Void => VOID,
                     lexer::Type::Int => INT,
                     lexer::Type::Bool => BOOL,
+                    lexer::Type::CompilerType => COMPILER_TYPE,
                 }
             }
-            _ => return Err(anyhow!("parse_type: expected Type")),
+            _ => return Err(anyhow!("parse_type: expected type")),
         };
 
         match self.peek_token_err(0)? {

@@ -10,9 +10,20 @@ mod linker;
 fn main() {
     let code = String::from(
         "
+                fn append(slice Type, value Type) void {
+                    // compiler builtin
+                }
+
                 fn main() void {
-                    let slice int[][] = {{}}
-                    slice[0] = {}
+                    let slice int[] = {}
+                    for let i int = 0; i < 10; i++ {
+                        append(slice, i)
+                    }
+
+                    for let i int = 0; i < 10; i++ {
+                        let foo int = slice[i]
+                        __debug__
+                    }
                 }
             ",
     );

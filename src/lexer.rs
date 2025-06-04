@@ -5,6 +5,7 @@ pub enum Type {
     Int,
     Void,
     Bool,
+    CompilerType,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -70,6 +71,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "Type" => {
+                    tokens.push(Token::Type(Type::CompilerType));
+                    self.read_next_word();
+                    continue;
+                }
                 "true" | "false" => {
                     tokens.push(Token::Literal(Literal::Bool(
                         self.read_next_word() == "true",
@@ -152,6 +158,13 @@ impl Lexer {
                         continue;
                     }
                     '/' => {
+                        if let Some(ch) = self.peek_char(1) {
+                            if ch == '/' {
+                                self.skip_comment();
+                                continue;
+                            }
+                        }
+
                         tokens.push(Token::Slash);
                         self.next();
                         continue;
@@ -309,6 +322,15 @@ impl Lexer {
         let w = self.read_next_word();
         self.i -= w.len();
         w
+    }
+
+    fn skip_comment(&mut self) {
+        while let Some(ch) = self.peek_char(0) {
+            self.next();
+            if ch == '\n' {
+                break;
+            }
+        }
     }
 
     fn read_next_word(&mut self) -> String {

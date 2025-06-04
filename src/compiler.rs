@@ -151,7 +151,44 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    // append(slice Type, value Type) void {}
+    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        let slice_arg = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("append: expected first argument"))?;
+        let value_arg = call
+            .arguments
+            .get(1)
+            .ok_or(anyhow!("append: expected second argument"))?;
+
+        let slice_exp = self.compile_expression(slice_arg)?;
+        let value_exp = self.compile_expression(value_arg)?;
+
+        let ast::TypeType::Slice(slice_item) = &slice_exp._type else {
+            return Err(anyhow!("append: provide a slice as the first argument"));
+        };
+
+        if !slice_item.can_assign(&value_exp) {
+            return Err(anyhow!("append: value type does not match slice type"));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceAppend(
+                value_exp.size,
+            )));
+        self.var_stack
+            .push(VarStackItem::Reset(slice_exp.size + value_exp.size));
+
+        Ok(ast::VOID)
+    }
+
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        match call.function.identifier.as_str() {
+            "append" => return self.compile_function_builtin_append(call),
+            _ => {}
+        }
+
         let argument_size = call.arguments.iter().enumerate().try_fold(0, |acc, curr| {
             let expected_type = &call
                 .function
