@@ -1,7 +1,55 @@
-use std::alloc::{alloc, dealloc, Layout};
+use std::{
+    alloc::{alloc, dealloc, Layout},
+    ptr, slice,
+};
+
+fn layout_u8(size: usize) -> Layout {
+    Layout::from_size_align(size, 1).unwrap()
+}
+
+#[derive(Debug)]
+struct Slice {
+    data: Vec<u8>,
+    len: usize,
+}
+
+impl Slice {
+    fn new() -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            data: Vec::new(),
+            len: 0,
+        }))
+    }
+
+    fn index(&self, index: isize, size: usize) -> &[u8] {
+        let index = index as usize;
+        let from = index * size;
+        &self.data[from..(from + size)]
+    }
+
+    fn index_set(&mut self, index: isize, val: Vec<u8>) {
+        let from = index as usize * val.len();
+        for (i, v) in val.into_iter().enumerate() {
+            self.data[from + i] = v;
+        }
+    }
+
+    fn append(&mut self, val: Vec<u8>) {
+        self.len += 1;
+        self.data.reserve(val.len());
+        for v in val {
+            self.data.push(v);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    SliceLen,
+    SliceAppend(usize),
+    SliceIndexGet(usize),
+    SliceIndexSet(usize),
+    PushSlice,
     Increment(usize),
     PushI(isize),
     AddI,
@@ -33,18 +81,14 @@ pub struct Stack {
 impl Drop for Stack {
     fn drop(&mut self) {
         unsafe {
-            dealloc(
-                self.data,
-                Layout::from_size_align(self.size, Layout::new::<u8>().align()).unwrap(),
-            )
+            dealloc(self.data, layout_u8(self.size));
         };
     }
 }
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let data =
-            unsafe { alloc(Layout::from_size_align(size, Layout::new::<u8>().align()).unwrap()) };
+        let data = unsafe { alloc(layout_u8(size)) };
 
         Self {
             sp: unsafe { data.byte_offset(size as isize) },
@@ -53,9 +97,24 @@ impl Stack {
         }
     }
 
+    fn pop_size(&mut self, size: usize) -> &[u8] {
+        unsafe {
+            let slice = slice::from_raw_parts(self.sp, size);
+            self.reset(size);
+            slice
+        }
+    }
+
+    fn push_size(&mut self, val: &[u8]) {
+        unsafe {
+            self.increment(val.len());
+            ptr::copy_nonoverlapping(val.as_ptr(), self.sp, val.len());
+        }
+    }
+
     fn push<T: Copy>(&mut self, item: T) {
         unsafe {
-            self.sp = self.sp.byte_offset(-(size_of::<T>() as isize));
+            self.increment(size_of::<T>());
             *self.sp.cast() = item;
         };
     }
@@ -69,7 +128,7 @@ impl Stack {
     fn pop<T: Copy>(&mut self) -> T {
         unsafe {
             let item = *self.sp.cast();
-            self.sp = self.sp.byte_offset(size_of::<T>() as isize);
+            self.reset(size_of::<T>());
             item
         }
     }
@@ -93,7 +152,7 @@ impl Stack {
 
     fn copy(&mut self, dst: usize, src: usize, len: usize) {
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            ptr::copy_nonoverlapping(
                 self.sp.byte_offset(src as isize),
                 self.sp.byte_offset(dst as isize),
                 len,
@@ -206,6 +265,32 @@ impl Vm {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     self.stack.push(a * b);
+                }
+                Instruction::PushSlice => {
+                    self.stack.push(Slice::new());
+                }
+                Instruction::SliceAppend(size) => {
+                    let item = self.stack.pop_size(size).to_vec();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    slice.append(item);
+                }
+                Instruction::SliceIndexGet(size) => {
+                    let index = self.stack.pop::<isize>();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    self.stack.push_size(slice.index(index, size));
+                }
+                Instruction::SliceIndexSet(size) => {
+                    let index = self.stack.pop::<isize>();
+                    let item = self.stack.pop_size(size).to_vec();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    slice.index_set(index, item);
+                }
+                Instruction::SliceLen => {
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    self.stack.push(slice.len as isize);
                 }
             }
 

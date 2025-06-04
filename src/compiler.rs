@@ -14,13 +14,7 @@ pub enum Instruction {
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
-    Var(VarStackItemVar),
-}
-
-#[derive(Debug, Clone)]
-struct VarStackItemVar {
-    identifier: String,
-    _type: ast::Type,
+    Var(String),
 }
 
 struct VarStack {
@@ -59,7 +53,7 @@ impl VarStack {
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
         items.fold(0, |acc, curr| match curr {
-            VarStackItem::Var(var) => acc + var._type.size,
+            VarStackItem::Var(_) => acc,
             VarStackItem::Increment(size) => acc + size,
             VarStackItem::Reset(size) => acc - size,
         })
@@ -69,16 +63,15 @@ impl VarStack {
         Self::size_for(self.stack.iter().flatten())
     }
 
-    fn get_var(&self, identifier: &str) -> Option<(VarStackItemVar, usize)> {
+    fn get_var(&self, identifier: &str) -> Option<usize> {
         let mut offset: isize = 0;
 
         for item in self.stack.iter().flatten().rev() {
             match item {
                 VarStackItem::Var(var) => {
-                    if var.identifier == identifier {
-                        return Some((var.clone(), offset as usize));
+                    if var == identifier {
+                        return Some(offset as usize);
                     }
-                    offset += var._type.size as isize;
                 }
                 VarStackItem::Increment(size) => offset += *size as isize,
                 VarStackItem::Reset(size) => offset -= *size as isize,
@@ -158,7 +151,65 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        let slice_arg = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("len: expected first argument"))?;
+
+        let slice_exp = self.compile_expression(slice_arg)?;
+
+        let ast::TypeType::Slice(_) = &slice_exp._type else {
+            return Err(anyhow!("len: expected slice as the argument"));
+        };
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceLen));
+        self.var_stack.push(VarStackItem::Reset(slice_exp.size));
+        self.var_stack.push(VarStackItem::Increment(ast::INT.size));
+
+        Ok(ast::INT)
+    }
+
+    // append(slice Type, value Type) void {}
+    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        let slice_arg = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("append: expected first argument"))?;
+        let value_arg = call
+            .arguments
+            .get(1)
+            .ok_or(anyhow!("append: expected second argument"))?;
+
+        let slice_exp = self.compile_expression(slice_arg)?;
+        let value_exp = self.compile_expression(value_arg)?;
+
+        let ast::TypeType::Slice(slice_item) = &slice_exp._type else {
+            return Err(anyhow!("append: provide a slice as the first argument"));
+        };
+
+        if !slice_item.can_assign(&value_exp) {
+            return Err(anyhow!("append: value type does not match slice type"));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceAppend(
+                value_exp.size,
+            )));
+        self.var_stack
+            .push(VarStackItem::Reset(slice_exp.size + value_exp.size));
+
+        Ok(ast::VOID)
+    }
+
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        match call.function.identifier.as_str() {
+            "append" => return self.compile_function_builtin_append(call),
+            "len" => return self.compile_function_builtin_len(call),
+            _ => {}
+        }
+
         let argument_size = call.arguments.iter().enumerate().try_fold(0, |acc, curr| {
             let expected_type = &call
                 .function
@@ -205,22 +256,34 @@ impl<'a> FunctionCompiler<'a> {
         Ok(call.function.return_type.clone())
     }
 
-    fn compile_literal(&mut self, literal: &lexer::Literal) -> Result<ast::Type> {
-        match literal {
+    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ast::Type> {
+        match literal.literal {
             lexer::Literal::Int(int) => {
                 self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI(*int as isize)));
-                self.var_stack.push(VarStackItem::Increment(ast::INT.size));
-
-                Ok(ast::INT)
+                    .push(Instruction::Real(vm::Instruction::PushI(int as isize)));
+            }
+            lexer::Literal::Bool(bool) => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::PushI({
+                        if bool {
+                            1
+                        } else {
+                            0
+                        }
+                    })));
             }
         }
+
+        self.var_stack
+            .push(VarStackItem::Increment(literal._type.size));
+
+        Ok(literal._type.clone())
     }
 
-    fn compile_identifier(&mut self, identifier: &str) -> Result<ast::Type> {
-        let (variable, offset) = self
+    fn compile_variable(&mut self, variable: &ast::Variable) -> Result<ast::Type> {
+        let offset = self
             .var_stack
-            .get_var(identifier)
+            .get_var(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
         self.instructions
@@ -237,7 +300,7 @@ impl<'a> FunctionCompiler<'a> {
         self.var_stack
             .push(VarStackItem::Increment(variable._type.size));
 
-        Ok(variable._type)
+        Ok(variable._type.clone())
     }
 
     fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<ast::Type> {
@@ -327,13 +390,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::ToBool));
             }
-            ast::CompareType::Equals => match a._type {
-                lexer::Type::Int | lexer::Type::Bool => {
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::CompareInt));
-                }
-                _ => return Err(anyhow!("can only == int and bool")),
-            },
+            ast::CompareType::Equals => self
+                .instructions
+                .push(Instruction::Real(vm::Instruction::CompareInt)),
         }
 
         self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
@@ -390,84 +449,152 @@ impl<'a> FunctionCompiler<'a> {
         Ok(exp)
     }
 
+    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<ast::Type> {
+        let slice_size = size_of::<usize>();
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::PushSlice));
+        self.var_stack.push(VarStackItem::Increment(slice_size));
+
+        let mut curr_exp: Option<ast::Type> = None;
+
+        for v in list {
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Increment(slice_size)));
+            self.var_stack.push(VarStackItem::Increment(slice_size));
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::Copy(
+                    0, slice_size, slice_size,
+                )));
+
+            let exp = self.compile_expression(v)?;
+            if let Some(curr_exp) = curr_exp {
+                if curr_exp != exp {
+                    return Err(anyhow!("type mismatch"));
+                }
+            }
+            curr_exp = Some(exp.clone());
+
+            self.instructions
+                .push(Instruction::Real(vm::Instruction::SliceAppend(exp.size)));
+            self.var_stack
+                .push(VarStackItem::Reset(slice_size + exp.size));
+        }
+
+        Ok(ast::Type {
+            size: slice_size,
+            _type: curr_exp
+                .map(|v| ast::TypeType::Slice(Box::new(v)))
+                .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),
+        })
+    }
+
+    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<ast::Type> {
+        let exp_var = self.compile_expression(&index.var)?;
+
+        let ast::TypeType::Slice(expected_type) = exp_var._type else {
+            return Err(anyhow!("can't index this type"));
+        };
+
+        let exp_index = self.compile_expression(&index.expression)?;
+        if exp_index != ast::INT {
+            return Err(anyhow!("cant index with {exp_index:#?}"));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceIndexGet(
+                expected_type.size,
+            )));
+
+        self.var_stack
+            .push(VarStackItem::Reset(exp_var.size + exp_index.size));
+        self.var_stack
+            .push(VarStackItem::Increment(expected_type.size));
+
+        Ok(*expected_type)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
-        let _type = match expression {
+        match expression {
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Identifier(v) => self.compile_identifier(v),
+            ast::Expression::Variable(v) => self.compile_variable(v),
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
-        }?;
-
-        Ok(_type)
+            ast::Expression::List(v) => self.compile_list(v),
+            ast::Expression::Index(v) => self.compile_expression_index(v),
+        }
     }
 
-    fn compile_variable_declaration(&mut self, variable: &ast::VariableDeclaration) -> Result<()> {
-        match variable._type._type {
-            lexer::Type::Int => {
-                let exp = self.compile_expression(&variable.expression)?;
-                if exp != ast::INT {
-                    return Err(anyhow!("expected int expression"));
-                }
-
-                self.var_stack
-                    .push(VarStackItem::Reset(variable._type.size));
-                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                    identifier: variable.identifier.clone(),
-                    _type: variable._type.clone(),
-                }));
-            }
-            lexer::Type::Bool => {
-                let exp = self.compile_expression(&variable.expression)?;
-                if exp != ast::BOOL {
-                    return Err(anyhow!("expected bool expression"));
-                }
-
-                self.var_stack
-                    .push(VarStackItem::Reset(variable._type.size));
-                self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                    identifier: variable.identifier.clone(),
-                    _type: variable._type.clone(),
-                }));
-            }
-            lexer::Type::Void => return Err(anyhow!("cant declare void variable")),
+    fn compile_variable_declaration(
+        &mut self,
+        declaration: &ast::VariableDeclaration,
+    ) -> Result<()> {
+        let exp = self.compile_expression(&declaration.expression)?;
+        if exp == ast::VOID {
+            return Err(anyhow!("can't declare void variable"));
         }
+
+        if !declaration.variable._type.can_assign(&exp) {
+            return Err(anyhow!("type mismatch"));
+        }
+
+        self.var_stack
+            .push(VarStackItem::Var(declaration.variable.identifier.clone()));
 
         Ok(())
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
-        // push expression
-        // copy into assignment
-        // reset expression
-        let exp = self.compile_expression(&assignment.expression)?;
-        if exp != assignment.variable._type {
-            return Err(anyhow!(
-                "compile_variable_assignment: assignment does match expression"
-            ));
-        }
+        match &assignment.var {
+            ast::Expression::Variable(var) => {
+                let exp = self.compile_expression(&assignment.expression)?;
 
-        let (variable, offset) = self
-            .var_stack
-            .get_var(&assignment.variable.identifier)
-            .ok_or(anyhow!("compile_variable_assignment: variable not found"))?;
-        if variable._type != assignment.variable._type {
-            return Err(anyhow!("compile_variable_assignment: types don't match"));
-        }
+                let offset = self
+                    .var_stack
+                    .get_var(&var.identifier)
+                    .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
 
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Copy(
-                offset,
-                0,
-                variable._type.size,
-            )));
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                variable._type.size,
-            )));
-        self.var_stack
-            .push(VarStackItem::Reset(variable._type.size));
+                if var._type != exp {
+                    return Err(anyhow!("variable assignment type mismatch"));
+                }
+
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::Copy(
+                        offset,
+                        0,
+                        var._type.size,
+                    )));
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::Reset(var._type.size)));
+                self.var_stack.push(VarStackItem::Reset(var._type.size));
+            }
+            ast::Expression::Index(index) => {
+                let slice = self.compile_expression(&index.var)?;
+                let ast::TypeType::Slice(slice_item) = &slice._type else {
+                    return Err(anyhow!("can only index slices"));
+                };
+
+                let item = self.compile_expression(&assignment.expression)?;
+
+                if !slice_item.can_assign(&item) {
+                    return Err(anyhow!("slice index set type mismatch"));
+                }
+
+                let item_index = self.compile_expression(&index.expression)?;
+                if item_index != ast::INT {
+                    return Err(anyhow!("can only index with int type"));
+                }
+
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::SliceIndexSet(item.size)));
+                self.var_stack.push(VarStackItem::Reset(
+                    slice.size + item.size + item_index.size,
+                ));
+            }
+            node => return Err(anyhow!("can't assign {node:#?}")),
+        }
 
         Ok(())
     }
@@ -547,19 +674,13 @@ impl<'a> FunctionCompiler<'a> {
         match node {
             ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
             ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
-            ast::Node::FunctionCall(fn_call) => {
-                let exp = self.compile_function_call(fn_call)?;
-                if exp != fn_call.function.return_type.clone() {
-                    return Err(anyhow!("incorrect type"));
-                }
+            ast::Node::Expression(exp) => {
+                let exp = self.compile_expression(exp)?;
 
                 // no variable to store result in, reset instantly
                 self.instructions
-                    .push(Instruction::Real(vm::Instruction::Reset(
-                        fn_call.function.return_type.size,
-                    )));
-                self.var_stack
-                    .push(VarStackItem::Reset(fn_call.function.return_type.size));
+                    .push(Instruction::Real(vm::Instruction::Reset(exp.size)));
+                self.var_stack.push(VarStackItem::Reset(exp.size));
             }
             ast::Node::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
@@ -627,10 +748,9 @@ impl<'a> FunctionCompiler<'a> {
 
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         for arg in &self.function.arguments {
-            self.var_stack.push(VarStackItem::Var(VarStackItemVar {
-                _type: arg._type.clone(),
-                identifier: arg.identifier.clone(),
-            }));
+            self.var_stack.push(VarStackItem::Increment(arg._type.size));
+            self.var_stack
+                .push(VarStackItem::Var(arg.identifier.clone()));
         }
 
         if self.function.identifier != "main" {
