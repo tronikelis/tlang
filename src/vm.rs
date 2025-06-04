@@ -10,11 +10,15 @@ fn layout_u8(size: usize) -> Layout {
 #[derive(Debug)]
 struct Slice {
     data: Vec<u8>,
+    len: usize,
 }
 
 impl Slice {
     fn new() -> *mut Self {
-        Box::into_raw(Box::new(Self { data: Vec::new() }))
+        Box::into_raw(Box::new(Self {
+            data: Vec::new(),
+            len: 0,
+        }))
     }
 
     fn index(&self, index: isize, size: usize) -> &[u8] {
@@ -31,6 +35,7 @@ impl Slice {
     }
 
     fn append(&mut self, val: Vec<u8>) {
+        self.len += 1;
         self.data.reserve(val.len());
         for v in val {
             self.data.push(v);
@@ -40,6 +45,7 @@ impl Slice {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    SliceLen,
     SliceAppend(usize),
     SliceIndexGet(usize),
     SliceIndexSet(usize),
@@ -281,6 +287,10 @@ impl Vm {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     slice.index_set(index, item);
+                }
+                Instruction::SliceLen => {
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    self.stack.push(slice.len as isize);
                 }
             }
 

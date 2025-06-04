@@ -151,6 +151,26 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        let slice_arg = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("len: expected first argument"))?;
+
+        let slice_exp = self.compile_expression(slice_arg)?;
+
+        let ast::TypeType::Slice(_) = &slice_exp._type else {
+            return Err(anyhow!("len: expected slice as the argument"));
+        };
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SliceLen));
+        self.var_stack.push(VarStackItem::Reset(slice_exp.size));
+        self.var_stack.push(VarStackItem::Increment(ast::INT.size));
+
+        Ok(ast::INT)
+    }
+
     // append(slice Type, value Type) void {}
     fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         let slice_arg = call
@@ -186,6 +206,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
+            "len" => return self.compile_function_builtin_len(call),
             _ => {}
         }
 
