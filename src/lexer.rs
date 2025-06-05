@@ -6,6 +6,7 @@ pub enum Type {
     Void,
     Bool,
     CompilerType,
+    Uint8,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -71,6 +72,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "uint8" => {
+                    tokens.push(Token::Type(Type::Uint8));
+                    self.read_next_word();
+                    continue;
+                }
                 "Type" => {
                     tokens.push(Token::Type(Type::CompilerType));
                     self.read_next_word();

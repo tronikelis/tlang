@@ -52,6 +52,7 @@ pub enum Instruction {
     PushSlice,
     Increment(usize),
     PushI(isize),
+    PushU8(u8),
     AddI,
     MultiplyI,
     DivideI,
@@ -291,6 +292,9 @@ impl Vm {
                 Instruction::SliceLen => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     self.stack.push(slice.len as isize);
+                }
+                Instruction::PushU8(v) => {
+                    self.stack.push(v);
                 }
             }
 

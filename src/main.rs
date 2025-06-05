@@ -18,15 +18,9 @@ fn main() {
                 }
 
                 fn main() void {
-                    let slice int[] = {}
-                    for let i int = 0; i < 10; i++ {
-                        append(slice, i * 69)
-                    }
-
-                    for let i int = 0; i < len(slice); i++ {
-                        let foo int = slice[i]
-                        __debug__
-                    }
+                    let str uint8[] = {0,1,2,3,4,5,6,7,8,9}
+                    let first uint8 = str[0]
+                    __debug__
                 }
             ",
     );

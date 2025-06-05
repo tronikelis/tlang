@@ -258,20 +258,30 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ast::Type> {
         match literal.literal {
-            lexer::Literal::Int(int) => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI(int as isize)));
-            }
-            lexer::Literal::Bool(bool) => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI({
-                        if bool {
-                            1
-                        } else {
-                            0
-                        }
-                    })));
-            }
+            lexer::Literal::Int(int) => match &literal._type {
+                &ast::UINT8 => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushU8(int.try_into()?)));
+                }
+                &ast::INT => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushI(int.try_into()?)));
+                }
+                _type => return Err(anyhow!("can't cast int to {_type:#?}")),
+            },
+            lexer::Literal::Bool(bool) => match &literal._type {
+                &ast::BOOL => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushI({
+                            if bool {
+                                1
+                            } else {
+                                0
+                            }
+                        })));
+                }
+                _type => return Err(anyhow!("can't cast bool to {_type:#?}")),
+            },
         }
 
         self.var_stack
