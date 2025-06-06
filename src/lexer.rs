@@ -7,11 +7,13 @@ pub enum Type {
     Bool,
     CompilerType,
     Uint8,
+    String,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Int(usize), // - will be with infix expression
+    String(String),
     Bool(bool),
 }
 
@@ -50,8 +52,8 @@ pub enum Token {
     Semicolon,
 }
 
-const CONTROL_CHAR: [char; 17] = [
-    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']',
+const CONTROL_CHAR: [char; 18] = [
+    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"',
 ];
 
 pub struct Lexer {
@@ -72,6 +74,11 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "string" => {
+                    tokens.push(Token::Type(Type::String));
+                    self.read_next_word();
+                    continue;
+                }
                 "uint8" => {
                     tokens.push(Token::Type(Type::Uint8));
                     self.read_next_word();
@@ -258,6 +265,12 @@ impl Lexer {
                         self.next();
                         continue;
                     }
+                    '"' => {
+                        tokens.push(Token::Literal(Literal::String(
+                            self.parse_string_literal()?,
+                        )));
+                        continue;
+                    }
                     _ => {}
                 }
             }
@@ -304,6 +317,48 @@ impl Lexer {
         }
 
         Ok(tokens)
+    }
+
+    fn parse_string_literal(&mut self) -> Result<String> {
+        let mut string = String::new();
+        self.next();
+
+        while let Some(ch) = self.peek_char(0) {
+            match ch {
+                '"' => {
+                    self.next();
+                    return Ok(string);
+                }
+                '\\' => {
+                    match self
+                        .peek_char(1)
+                        .ok_or(anyhow!("parse_string_literal: expected char after escape"))?
+                    {
+                        '"' => {
+                            string.push('"');
+                        }
+                        'n' => {
+                            string.push('\n');
+                        }
+                        '\\' => {
+                            string.push('\\');
+                        }
+                        ch => {
+                            return Err(anyhow!(
+                                "parse_string_literal: unknown escape char {ch:#?}"
+                            ))
+                        }
+                    }
+
+                    self.next();
+                }
+                ch => string.push(ch),
+            }
+
+            self.next();
+        }
+
+        Err(anyhow!("parse_string_literal: undeterminate string"))
     }
 
     fn next(&mut self) {

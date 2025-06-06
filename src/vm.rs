@@ -2,6 +2,7 @@ use std::{
     alloc::{alloc, dealloc, Layout},
     fs::File,
     io::Write,
+    mem,
     os::{fd::IntoRawFd, unix::io::FromRawFd},
     ptr, slice,
 };
@@ -11,17 +12,23 @@ fn layout_u8(size: usize) -> Layout {
 }
 
 #[derive(Debug)]
-struct Slice {
+pub struct Slice {
     data: Vec<u8>,
     len: usize,
 }
 
 impl Slice {
-    fn new() -> *mut Self {
+    pub fn new() -> *mut Self {
         Box::into_raw(Box::new(Self {
             data: Vec::new(),
             len: 0,
         }))
+    }
+
+    pub fn new_from_string(v: &str) -> *mut Self {
+        let mut data = Vec::new();
+        data.extend_from_slice(v.as_bytes());
+        Box::into_raw(Box::new(Self { len: v.len(), data }))
     }
 
     fn index(&self, index: isize, size: usize) -> &[u8] {
@@ -39,10 +46,7 @@ impl Slice {
 
     fn append(&mut self, val: Vec<u8>) {
         self.len += 1;
-        self.data.reserve(val.len());
-        for v in val {
-            self.data.push(v);
-        }
+        self.data.extend_from_slice(&val);
     }
 }
 
@@ -52,25 +56,32 @@ pub enum Instruction {
     SliceAppend(usize),
     SliceIndexGet(usize),
     SliceIndexSet(usize),
-    PushSlice,
+
     Increment(usize),
+    // dst = src * len
+    Copy(usize, usize, usize),
+    Reset(usize),
     PushI(isize),
     PushU8(u8),
+    PushSlice,
+    // index, len
+    PushStatic(usize, usize),
+
+    MinusInt,
     AddI,
     MultiplyI,
     DivideI,
-    // dst = src * len
-    Copy(usize, usize, usize),
+
     Exit,
     Debug,
-    Reset(usize),
+
     JumpAndLink(usize),
     Jump(usize),
     Return,
     JumpIfTrue(usize),
+
     ToBool,
     NegateBool,
-    MinusInt,
     CompareInt,
     And,
     Or,
@@ -167,16 +178,44 @@ impl Stack {
     }
 }
 
+pub struct StaticMemory {
+    data: Vec<u8>,
+}
+
+impl StaticMemory {
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    pub fn push_string_slice(&mut self, string: &str) -> usize {
+        let slice = Slice::new_from_string(string);
+        let as_raw: [u8; size_of::<*mut Slice>()] = unsafe { mem::transmute(slice) };
+        self.push(&as_raw)
+    }
+
+    pub fn push(&mut self, val: &[u8]) -> usize {
+        let old_len = self.data.len();
+        self.data.extend_from_slice(val);
+        old_len
+    }
+
+    fn index(&self, index: usize, len: usize) -> &[u8] {
+        &self.data[index..(index + len)]
+    }
+}
+
 pub struct Vm {
     stack: Stack,
     instructions: Vec<Instruction>,
+    static_memory: StaticMemory,
 }
 
 impl Vm {
-    pub fn new(instructions: Vec<Instruction>) -> Self {
+    pub fn new(instructions: Vec<Instruction>, static_memory: StaticMemory) -> Self {
         return Self {
             stack: Stack::new(4096),
             instructions,
+            static_memory,
         };
     }
 
@@ -308,6 +347,9 @@ impl Vm {
                     let mut file = unsafe { File::from_raw_fd(fd as i32) };
                     file.write_all(&slice.data).unwrap();
                     let _ = file.into_raw_fd(); // don't close the file descriptor
+                }
+                Instruction::PushStatic(index, len) => {
+                    self.stack.push_size(self.static_memory.index(index, len));
                 }
             }
 

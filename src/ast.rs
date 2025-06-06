@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 use crate::lexer;
@@ -80,6 +81,18 @@ pub const UINT8: Type = Type {
     size: size_of::<u8>(),
     _type: TypeType::Scalar(lexer::Type::Uint8),
 };
+pub const SLICE_SIZE: usize = size_of::<usize>();
+
+lazy_static! {
+    pub static ref STRING: Type = Type {
+        size: SLICE_SIZE,
+        _type: TypeType::Scalar(lexer::Type::String),
+    };
+    pub static ref SLICE_UINT8: Type = Type {
+        size: SLICE_SIZE,
+        _type: TypeType::Slice(Box::new(UINT8)),
+    };
+}
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
@@ -439,6 +452,7 @@ impl<'a> TokenParser<'a> {
                     _type: prev_type.map(|v| v.clone()).unwrap_or(match v {
                         lexer::Literal::Int(_) => INT,
                         lexer::Literal::Bool(_) => BOOL,
+                        lexer::Literal::String(_) => STRING.clone(),
                     }),
                 })
             }
@@ -464,7 +478,7 @@ impl<'a> TokenParser<'a> {
 
         let _type = Type {
             _type: TypeType::Slice(Box::new(parent)),
-            size: size_of::<usize>(),
+            size: SLICE_SIZE,
         };
 
         if let Ok(v) = self.parse_type_slice(_type.clone()) {
@@ -484,6 +498,7 @@ impl<'a> TokenParser<'a> {
                     lexer::Type::Bool => BOOL,
                     lexer::Type::CompilerType => COMPILER_TYPE,
                     lexer::Type::Uint8 => UINT8,
+                    lexer::Type::String => STRING.clone(),
                 }
             }
             _ => return Err(anyhow!("parse_type: expected type")),

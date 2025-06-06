@@ -21,10 +21,8 @@ fn main() {
                 }
 
                 fn main() void {
-                    let str uint8[] = {72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
-                    for let i int = 0; i < 100; i++ {
-                        syscall_write(1, str)
-                    }
+                    let str string = \"foobar \\\" lol\"
+                    syscall_write(1, str)
                 }
             ",
     );
@@ -35,9 +33,12 @@ fn main() {
     println!("{:#?}", ast);
 
     let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
+    let mut static_memory = vm::StaticMemory::new();
 
     for v in &ast.functions {
-        let compiled = compiler::FunctionCompiler::new(v).compile().unwrap();
+        let compiled = compiler::FunctionCompiler::new(v, &mut static_memory)
+            .compile()
+            .unwrap();
         println!("{:#?}", compiled);
         functions.insert(v.identifier.clone(), compiled);
     }
@@ -46,5 +47,5 @@ fn main() {
 
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
-    vm::Vm::new(instructions).run();
+    vm::Vm::new(instructions, static_memory).run();
 }
