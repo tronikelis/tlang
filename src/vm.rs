@@ -1,5 +1,8 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
+    fs::File,
+    io::Write,
+    os::{fd::IntoRawFd, unix::io::FromRawFd},
     ptr, slice,
 };
 
@@ -71,6 +74,8 @@ pub enum Instruction {
     CompareInt,
     And,
     Or,
+
+    SyscallWrite,
 }
 
 pub struct Stack {
@@ -295,6 +300,14 @@ impl Vm {
                 }
                 Instruction::PushU8(v) => {
                     self.stack.push(v);
+                }
+                Instruction::SyscallWrite => {
+                    let fd = self.stack.pop::<isize>();
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    let mut file = unsafe { File::from_raw_fd(fd as i32) };
+                    file.write_all(&slice.data).unwrap();
+                    let _ = file.into_raw_fd(); // don't close the file descriptor
                 }
             }
 

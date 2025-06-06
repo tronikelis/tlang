@@ -203,10 +203,50 @@ impl<'a> FunctionCompiler<'a> {
         Ok(ast::VOID)
     }
 
+    fn compile_function_builtin_syscall_write(
+        &mut self,
+        call: &ast::FunctionCall,
+    ) -> Result<ast::Type> {
+        let fd = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("syscall_write: expected first argument"))?;
+        let slice = call
+            .arguments
+            .get(1)
+            .ok_or(anyhow!("syscall_write: expected second argument"))?;
+
+        let exp_slice = self.compile_expression(slice)?;
+        let exp_fd = self.compile_expression(fd)?;
+
+        if exp_fd != ast::INT {
+            return Err(anyhow!("syscall_write: first argument not an integer"));
+        }
+
+        if exp_slice
+            != (ast::Type {
+                size: size_of::<usize>(),
+                _type: ast::TypeType::Slice(Box::new(ast::UINT8)),
+            })
+        {
+            return Err(anyhow!(
+                "syscall_write: second argument should be uint8 slice"
+            ));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SyscallWrite));
+        self.var_stack
+            .push(VarStackItem::Reset(exp_fd.size + exp_slice.size));
+
+        Ok(ast::VOID)
+    }
+
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
+            "syscall_write" => return self.compile_function_builtin_syscall_write(call),
             _ => {}
         }
 

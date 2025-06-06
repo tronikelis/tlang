@@ -16,11 +16,15 @@ fn main() {
                 fn append(slice Type, value Type) void {
                     // compiler builtin
                 }
+                fn syscall_write(fd int, slice uint8[]) void {
+                    // compiler builtin
+                }
 
                 fn main() void {
-                    let str uint8[] = {0,1,2,3,4,5,6,7,8,9}
-                    let first uint8 = str[0]
-                    __debug__
+                    let str uint8[] = {72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
+                    for let i int = 0; i < 100; i++ {
+                        syscall_write(1, str)
+                    }
                 }
             ",
     );
