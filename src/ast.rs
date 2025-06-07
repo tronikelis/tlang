@@ -154,7 +154,21 @@ pub struct Index {
 }
 
 #[derive(Debug, Clone)]
+pub struct AndOr {
+    left: Expression,
+    right: Expression,
+    _type: AndOrType,
+}
+
+#[derive(Debug, Clone)]
+pub enum AndOrType {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    AndOr(Box<AndOr>),
     Infix(Infix),
     Literal(Literal),
     Variable(Variable),
@@ -179,17 +193,10 @@ pub enum CompareType {
 }
 
 #[derive(Debug, Clone)]
-pub enum AndOr {
-    And(Expression),
-    Or(Expression),
-}
-
-#[derive(Debug, Clone)]
 pub struct Compare {
     pub left: Expression,
     pub right: Expression,
     pub compare_type: CompareType,
-    pub andor: Option<AndOr>,
 }
 
 #[derive(Debug, Clone)]
@@ -611,29 +618,6 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    // this does not have "prev_type" because indexing only supports ints
-    // and we don't need to change that into something else
-    fn parse_expression_index(&mut self, var: Expression) -> Result<Index> {
-        self.expect_next_token(lexer::Token::BOpen)?;
-        self.next();
-
-        let expression = self.parse_expression(None)?;
-
-        self.expect_next_token(lexer::Token::BClose)?;
-        self.next();
-
-        let index = Index {
-            var: Box::new(var),
-            expression: Box::new(expression),
-        };
-
-        if let lexer::Token::BOpen = self.peek_token_err(0)? {
-            Ok(self.parse_expression_index(Expression::Index(index))?)
-        } else {
-            Ok(index)
-        }
-    }
-
     fn parse_expression_identifier(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
         match self.peek_token_err(1)? {
             lexer::Token::POpen => Ok(Expression::FunctionCall(
@@ -658,44 +642,7 @@ impl<'a> TokenParser<'a> {
         Ok(Expression::Literal(self.parse_literal(prev_type)?))
     }
 
-    fn parse_pratt(
-        &mut self,
-        min_bp: usize,
-        mut left: Expression,
-        prev_type: Option<&Type>,
-    ) -> Result<Expression> {
-        loop {
-            let token = self.peek_token_err(0)?.clone();
-            let (l_bp, r_bp) = match pratt_binding_power(&token) {
-                Some(v) => v,
-                None => break,
-            };
-
-            if l_bp < min_bp {
-                break;
-            }
-
-            self.next();
-            let right = self.parse_expression_in_pratt(prev_type)?;
-            let right = self.parse_pratt(r_bp, right, prev_type)?;
-
-            left = Expression::Arithmetic(Box::new(Arithmetic {
-                left,
-                right,
-                _type: match token {
-                    lexer::Token::Plus => ArithmeticType::Plus,
-                    lexer::Token::Minus => ArithmeticType::Minus,
-                    lexer::Token::Slash => ArithmeticType::Divide,
-                    lexer::Token::Star => ArithmeticType::Multiply,
-                    token => return Err(anyhow!("parse_pratt: unknown token {token:#?}")),
-                },
-            }));
-        }
-
-        Ok(left)
-    }
-
-    fn parse_expression_list(&mut self, prev_type: Option<&Type>) -> Result<Vec<Expression>> {
+    fn parse_expression_list(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
         self.expect_next_token(lexer::Token::COpen)?;
         self.next();
 
@@ -723,93 +670,130 @@ impl<'a> TokenParser<'a> {
             }
         }
 
-        Ok(expressions)
+        Ok(Expression::List(expressions))
     }
 
-    fn parse_expression_in_pratt(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
-        match self.peek_token_err(0)? {
-            lexer::Token::COpen => {
-                return Ok(Expression::List(self.parse_expression_list(prev_type)?))
-            }
-            _ => {}
-        };
-
-        let infix_type;
-        match self.peek_token_err(0)? {
-            lexer::Token::Minus => {
-                infix_type = Some(InfixType::Minus);
-                self.next();
-            }
-            lexer::Token::Plus => {
-                infix_type = Some(InfixType::Plus);
-                self.next();
-            }
-            _ => infix_type = None,
-        };
-
-        let mut expression = match self.peek_token_err(0)?.clone() {
-            lexer::Token::Identifier(_) => self.parse_expression_identifier(prev_type)?,
-            lexer::Token::Literal(_) => self.parse_expression_literal(prev_type)?,
-            token => return Err(anyhow!("parse_expression: wrong token {token:#?}")),
-        };
-
-        if let Some(_type) = infix_type {
-            expression = Expression::Infix(Infix {
-                expression: Box::new(expression),
-                _type,
-            });
-        }
-
-        let token = self.peek_token_err(0)?.clone();
+    fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
-            lexer::Token::Gt | lexer::Token::Lt | lexer::Token::EqualsEquals => {
-                self.next();
-                let right = self.parse_expression(prev_type)?;
-
-                let mut andor = None;
-
-                match self.peek_token_err(0)? {
-                    lexer::Token::AmperAmper => {
-                        self.next();
-                        andor = Some(AndOr::And(self.parse_expression(prev_type)?));
-                    }
-                    lexer::Token::PipePipe => {
-                        self.next();
-                        andor = Some(AndOr::Or(self.parse_expression(prev_type)?));
-                    }
-                    _ => {}
-                }
-
-                return Ok(Expression::Compare(Box::new(Compare {
-                    compare_type: match token {
-                        lexer::Token::Gt => CompareType::Gt,
-                        lexer::Token::Lt => CompareType::Lt,
-                        lexer::Token::EqualsEquals => CompareType::Equals,
-                        token => return Err(anyhow!("token not supported {token:#?}")),
-                    },
-                    left: expression,
-                    right,
-                    andor,
-                })));
-            }
-            lexer::Token::BOpen => {
-                return Ok(Expression::Index(self.parse_expression_index(expression)?))
-            }
-            _ => {}
+            lexer::Token::Plus | lexer::Token::Minus => Some((1, 2)),
+            lexer::Token::Star | lexer::Token::Slash => Some((3, 4)),
+            lexer::Token::PipePipe => Some((100, 101)),
+            lexer::Token::AmperAmper => Some((102, 103)),
+            _ => None,
         }
-
-        Ok(expression)
     }
 
     fn parse_expression(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
-        let expression = self.parse_expression_in_pratt(prev_type)?;
-        if let lexer::Token::Plus | lexer::Token::Minus | lexer::Token::Star | lexer::Token::Slash =
-            self.peek_token_err(0)?
-        {
-            Ok(self.parse_pratt(0, expression, prev_type)?)
-        } else {
-            Ok(expression)
+        self.parse_expression_pratt(prev_type, 0)
+    }
+
+    fn parse_expression_pratt(
+        &mut self,
+        prev_type: Option<&Type>,
+        min_bp: usize,
+    ) -> Result<Expression> {
+        let mut left: Expression = {
+            let token = self.peek_token_err(0)?.clone();
+            match token {
+                lexer::Token::POpen => {
+                    self.next();
+                    let exp = self.parse_expression(prev_type)?;
+                    self.expect_next_token(lexer::Token::PClose)?;
+                    self.next();
+                    exp
+                }
+                lexer::Token::Plus | lexer::Token::Minus => {
+                    self.next();
+                    Expression::Infix(Infix {
+                        expression: Box::new(self.parse_expression(prev_type)?),
+                        _type: match token {
+                            lexer::Token::Plus => InfixType::Plus,
+                            lexer::Token::Minus => InfixType::Minus,
+                            _ => unreachable!(),
+                        },
+                    })
+                }
+                lexer::Token::COpen => self.parse_expression_list(prev_type)?,
+                lexer::Token::Identifier(_) => self.parse_expression_identifier(prev_type)?,
+                lexer::Token::Literal(_) => self.parse_expression_literal(prev_type)?,
+                token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
+            }
+        };
+
+        loop {
+            let token = self.peek_token_err(0)?.clone();
+            match token {
+                lexer::Token::BOpen => {
+                    self.next();
+                    left = Expression::Index(Index {
+                        var: Box::new(left),
+                        expression: Box::new(self.parse_expression(prev_type)?),
+                    });
+                    self.expect_next_token(lexer::Token::BClose)?;
+                    self.next();
+                    continue;
+                }
+                lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => {
+                    self.next();
+                    left = Expression::Compare(Box::new(Compare {
+                        left,
+                        right: self.parse_expression(prev_type)?,
+                        compare_type: match token {
+                            lexer::Token::Lt => CompareType::Lt,
+                            lexer::Token::Gt => CompareType::Gt,
+                            lexer::Token::EqualsEquals => CompareType::Equals,
+                            _ => unreachable!(),
+                        },
+                    }))
+                }
+                _ => {}
+            }
+
+            let token = self.peek_token_err(0)?.clone();
+            let (l_bp, r_bp) = match Self::pratt_binding_power(&token) {
+                Some(v) => v,
+                None => break,
+            };
+
+            if l_bp < min_bp {
+                break;
+            }
+            self.next();
+            let right = self.parse_expression_pratt(prev_type, r_bp)?;
+
+            match token {
+                lexer::Token::Plus
+                | lexer::Token::Minus
+                | lexer::Token::Star
+                | lexer::Token::Slash => {
+                    left = Expression::Arithmetic(Box::new(Arithmetic {
+                        left,
+                        right,
+                        _type: match token {
+                            lexer::Token::Plus => ArithmeticType::Plus,
+                            lexer::Token::Minus => ArithmeticType::Minus,
+                            lexer::Token::Star => ArithmeticType::Multiply,
+                            lexer::Token::Slash => ArithmeticType::Divide,
+                            _ => unreachable!(),
+                        },
+                    }));
+                }
+                lexer::Token::AmperAmper | lexer::Token::PipePipe => {
+                    left = Expression::AndOr(Box::new(AndOr {
+                        left,
+                        right,
+                        _type: match token {
+                            lexer::Token::AmperAmper => AndOrType::And,
+                            lexer::Token::PipePipe => AndOrType::Or,
+                            _ => unreachable!(),
+                        },
+                    }))
+                }
+                token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
+            }
         }
+
+        Ok(left)
     }
 
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration> {
@@ -858,14 +842,6 @@ impl<'a> TokenParser<'a> {
     fn peek_token_err(&self, n: usize) -> Result<&lexer::Token> {
         self.peek_token(n)
             .ok_or(anyhow!("peek_token_err: expected Some"))
-    }
-}
-
-fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
-    match token {
-        lexer::Token::Plus | lexer::Token::Minus => Some((1, 2)),
-        lexer::Token::Star | lexer::Token::Slash => Some((3, 4)),
-        _ => None,
     }
 }
 
