@@ -136,15 +136,17 @@ impl LabelInstructions {
     }
 }
 
-pub struct FunctionCompiler<'a> {
+pub struct FunctionCompiler<'a, 'b> {
     var_stack: VarStack,
     instructions: LabelInstructions,
     function: &'a ast::Function,
+    static_memory: &'b mut vm::StaticMemory,
 }
 
-impl<'a> FunctionCompiler<'a> {
-    pub fn new(function: &'a ast::Function) -> Self {
+impl<'a, 'b> FunctionCompiler<'a, 'b> {
+    pub fn new(function: &'a ast::Function, static_memory: &'b mut vm::StaticMemory) -> Self {
         Self {
+            static_memory,
             function,
             var_stack: VarStack::new(),
             instructions: LabelInstructions::new(),
@@ -203,10 +205,45 @@ impl<'a> FunctionCompiler<'a> {
         Ok(ast::VOID)
     }
 
+    fn compile_function_builtin_syscall_write(
+        &mut self,
+        call: &ast::FunctionCall,
+    ) -> Result<ast::Type> {
+        let fd = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("syscall_write: expected first argument"))?;
+        let slice = call
+            .arguments
+            .get(1)
+            .ok_or(anyhow!("syscall_write: expected second argument"))?;
+
+        let exp_slice = self.compile_expression(slice)?;
+        let exp_fd = self.compile_expression(fd)?;
+
+        if exp_fd != ast::INT {
+            return Err(anyhow!("syscall_write: first argument not an integer"));
+        }
+
+        if exp_slice != *ast::SLICE_UINT8 {
+            return Err(anyhow!(
+                "syscall_write: second argument should be uint8 slice"
+            ));
+        }
+
+        self.instructions
+            .push(Instruction::Real(vm::Instruction::SyscallWrite));
+        self.var_stack
+            .push(VarStackItem::Reset(exp_fd.size + exp_slice.size));
+
+        Ok(ast::VOID)
+    }
+
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
+            "syscall_write" => return self.compile_function_builtin_syscall_write(call),
             _ => {}
         }
 
@@ -257,20 +294,42 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ast::Type> {
-        match literal.literal {
-            lexer::Literal::Int(int) => {
+        match &literal.literal {
+            lexer::Literal::Int(int) => match &literal._type {
+                &ast::UINT8 => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushU8(
+                            (*int).try_into()?,
+                        )));
+                }
+                &ast::INT => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushI(
+                            (*int).try_into()?,
+                        )));
+                }
+                _type => return Err(anyhow!("can't cast int to {_type:#?}")),
+            },
+            lexer::Literal::Bool(bool) => match &literal._type {
+                &ast::BOOL => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::PushI({
+                            if *bool {
+                                1
+                            } else {
+                                0
+                            }
+                        })));
+                }
+                _type => return Err(anyhow!("can't cast bool to {_type:#?}")),
+            },
+            lexer::Literal::String(string) => {
+                let index = self.static_memory.push_string_slice(&string);
                 self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI(int as isize)));
-            }
-            lexer::Literal::Bool(bool) => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::PushI({
-                        if bool {
-                            1
-                        } else {
-                            0
-                        }
-                    })));
+                    .push(Instruction::Real(vm::Instruction::PushStatic(
+                        index,
+                        ast::SLICE_SIZE,
+                    )));
             }
         }
 
@@ -450,21 +509,25 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_list(&mut self, list: &[ast::Expression]) -> Result<ast::Type> {
-        let slice_size = size_of::<usize>();
-
         self.instructions
             .push(Instruction::Real(vm::Instruction::PushSlice));
-        self.var_stack.push(VarStackItem::Increment(slice_size));
+        self.var_stack
+            .push(VarStackItem::Increment(ast::SLICE_SIZE));
 
         let mut curr_exp: Option<ast::Type> = None;
 
         for v in list {
             self.instructions
-                .push(Instruction::Real(vm::Instruction::Increment(slice_size)));
-            self.var_stack.push(VarStackItem::Increment(slice_size));
+                .push(Instruction::Real(vm::Instruction::Increment(
+                    ast::SLICE_SIZE,
+                )));
+            self.var_stack
+                .push(VarStackItem::Increment(ast::SLICE_SIZE));
             self.instructions
                 .push(Instruction::Real(vm::Instruction::Copy(
-                    0, slice_size, slice_size,
+                    0,
+                    ast::SLICE_SIZE,
+                    ast::SLICE_SIZE,
                 )));
 
             let exp = self.compile_expression(v)?;
@@ -478,11 +541,11 @@ impl<'a> FunctionCompiler<'a> {
             self.instructions
                 .push(Instruction::Real(vm::Instruction::SliceAppend(exp.size)));
             self.var_stack
-                .push(VarStackItem::Reset(slice_size + exp.size));
+                .push(VarStackItem::Reset(ast::SLICE_SIZE + exp.size));
         }
 
         Ok(ast::Type {
-            size: slice_size,
+            size: ast::SLICE_SIZE,
             _type: curr_exp
                 .map(|v| ast::TypeType::Slice(Box::new(v)))
                 .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),

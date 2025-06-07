@@ -16,17 +16,13 @@ fn main() {
                 fn append(slice Type, value Type) void {
                     // compiler builtin
                 }
+                fn syscall_write(fd int, slice uint8[]) void {
+                    // compiler builtin
+                }
 
                 fn main() void {
-                    let slice int[] = {}
-                    for let i int = 0; i < 10; i++ {
-                        append(slice, i * 69)
-                    }
-
-                    for let i int = 0; i < len(slice); i++ {
-                        let foo int = slice[i]
-                        __debug__
-                    }
+                    let str string = \"foobar \\\" lol\"
+                    syscall_write(1, str)
                 }
             ",
     );
@@ -37,9 +33,12 @@ fn main() {
     println!("{:#?}", ast);
 
     let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
+    let mut static_memory = vm::StaticMemory::new();
 
     for v in &ast.functions {
-        let compiled = compiler::FunctionCompiler::new(v).compile().unwrap();
+        let compiled = compiler::FunctionCompiler::new(v, &mut static_memory)
+            .compile()
+            .unwrap();
         println!("{:#?}", compiled);
         functions.insert(v.identifier.clone(), compiled);
     }
@@ -48,5 +47,5 @@ fn main() {
 
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
-    vm::Vm::new(instructions).run();
+    vm::Vm::new(instructions, static_memory).run();
 }
