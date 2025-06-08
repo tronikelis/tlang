@@ -304,7 +304,7 @@ impl Vm {
                 Instruction::DivideI => {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
-                    self.stack.push(a / b);
+                    self.stack.push(b / a);
                 }
                 Instruction::MultiplyI => {
                     let a = self.stack.pop::<isize>();

@@ -403,8 +403,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_compare(&mut self, compare: &ast::Compare) -> Result<ast::Type> {
-        self.instructions.jump();
-
         let a: ast::Type;
         let b: ast::Type;
 
@@ -455,44 +453,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
 
         self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
-
-        if let Some(andor) = &compare.andor {
-            match andor {
-                ast::AndOr::And(exp) => {
-                    // jump to after if false
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::NegateBool));
-                    self.instructions.back_if_true(1); // actual code will jump to after if
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::NegateBool));
-
-                    let exp = self.compile_expression(exp)?;
-                    if exp != ast::BOOL {
-                        return Err(anyhow!("incorrect type"));
-                    }
-
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::And));
-                    self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
-                }
-                ast::AndOr::Or(exp) => {
-                    // jump to after if true
-                    self.instructions.back_if_true(1);
-
-                    let exp = self.compile_expression(exp)?;
-                    if exp != ast::BOOL {
-                        return Err(anyhow!("incorrect type"));
-                    }
-
-                    self.instructions
-                        .push(Instruction::Real(vm::Instruction::Or));
-                    self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
-                }
-            }
-        }
-
-        self.instructions.back(1);
-        self.instructions.pop_index();
 
         Ok(ast::BOOL)
     }
@@ -577,8 +537,56 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(*expected_type)
     }
 
+    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<ast::Type> {
+        self.instructions.jump();
+
+        let left = self.compile_expression(&andor.left)?;
+        if left != ast::BOOL {
+            return Err(anyhow!("compile_andor: expected bool expression"));
+        }
+
+        match andor._type {
+            // skip over if this is true
+            ast::AndOrType::Or => {
+                self.instructions.back_if_true(1);
+
+                let right = self.compile_expression(&andor.right)?;
+                if right != ast::BOOL {
+                    return Err(anyhow!("compile_andor: expected bool expression"));
+                }
+
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::Or));
+                self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
+            }
+            // continue if this is true
+            ast::AndOrType::And => {
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::NegateBool));
+                self.instructions.back_if_true(1);
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::NegateBool));
+
+                let right = self.compile_expression(&andor.right)?;
+                if right != ast::BOOL {
+                    return Err(anyhow!("compile_andor: expected bool expression"));
+                }
+
+                self.instructions
+                    .push(Instruction::Real(vm::Instruction::And));
+                self.var_stack.push(VarStackItem::Reset(ast::BOOL.size));
+            }
+        }
+
+        self.instructions.back(1);
+        self.instructions.pop_index();
+
+        Ok(ast::BOOL)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         match expression {
+            ast::Expression::AndOr(v) => self.compile_andor(v),
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
             ast::Expression::Variable(v) => self.compile_variable(v),
@@ -663,7 +671,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
-        self.compile_expression(expression)?;
+        let exp = self.compile_expression(expression)?;
+        if exp != ast::BOOL {
+            return Err(anyhow!("compile_if_block: expected bool expression"));
+        }
 
         self.instructions.jump_if_true();
 

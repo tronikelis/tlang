@@ -21,8 +21,8 @@ fn main() {
                 }
 
                 fn main() void {
-                    let str string = \"foobar \\\" lol\"
-                    syscall_write(1, str)
+                    let foo int = -5-10 + 15
+                    __debug__
                 }
             ",
     );

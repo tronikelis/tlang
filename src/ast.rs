@@ -155,9 +155,9 @@ pub struct Index {
 
 #[derive(Debug, Clone)]
 pub struct AndOr {
-    left: Expression,
-    right: Expression,
-    _type: AndOrType,
+    pub left: Expression,
+    pub right: Expression,
+    pub _type: AndOrType,
 }
 
 #[derive(Debug, Clone)]
@@ -705,7 +705,7 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Plus | lexer::Token::Minus => {
                     self.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression(prev_type)?),
+                        expression: Box::new(self.parse_expression_pratt(prev_type, 5)?),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
