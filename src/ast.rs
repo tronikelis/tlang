@@ -325,7 +325,7 @@ impl<'a> TokenParser<'a> {
         self.expect_next_token(lexer::Token::Semicolon)?;
         self.next();
 
-        let expression = self.parse_expression(None)?;
+        let expression = self.parse_expression()?;
 
         self.expect_next_token(lexer::Token::Semicolon)?;
         self.next();
@@ -342,14 +342,14 @@ impl<'a> TokenParser<'a> {
     }
 
     fn parse_token_else(&mut self) -> Result<Node> {
-        let exp = self.parse_expression(None)?;
+        let exp = self.parse_expression()?;
 
         match self.peek_token_err(0)? {
             lexer::Token::Equals => {
                 self.next();
                 Ok(Node::VariableAssignment(VariableAssignment {
                     var: exp,
-                    expression: self.parse_expression(None)?,
+                    expression: self.parse_expression()?,
                 }))
             }
             lexer::Token::PlusPlus | lexer::Token::MinusMinus => {
@@ -389,7 +389,7 @@ impl<'a> TokenParser<'a> {
             )),
             lexer::Token::Return => {
                 self.next();
-                Ok(Node::Return(self.parse_expression(None).ok()))
+                Ok(Node::Return(self.parse_expression().ok()))
             }
             lexer::Token::If => Ok(Node::If(self.parse_if()?)),
             lexer::Token::For => Ok(Node::For(self.parse_for()?)),
@@ -404,14 +404,14 @@ impl<'a> TokenParser<'a> {
         }
         self.next();
 
-        let expression = self.parse_expression(None)?;
+        let expression = self.parse_expression()?;
         let body = self.parse_body()?;
 
         let mut elseif = Vec::<ElseIf>::new();
         while let lexer::Token::ElseIf = self.peek_token_err(0)? {
             self.next();
             elseif.push(ElseIf {
-                expression: self.parse_expression(None)?,
+                expression: self.parse_expression()?,
                 body: self.parse_body()?,
             });
         }
@@ -450,17 +450,17 @@ impl<'a> TokenParser<'a> {
         Ok(nodes)
     }
 
-    fn parse_literal(&mut self, prev_type: Option<&Type>) -> Result<Literal> {
+    fn parse_literal(&mut self) -> Result<Literal> {
         match self.peek_token_err(0)?.clone() {
             lexer::Token::Literal(v) => {
                 self.next();
                 Ok(Literal {
                     literal: v.clone(),
-                    _type: prev_type.map(|v| v.clone()).unwrap_or(match v {
+                    _type: match v {
                         lexer::Literal::Int(_) => INT,
                         lexer::Literal::Bool(_) => BOOL,
                         lexer::Literal::String(_) => STRING.clone(),
-                    }),
+                    },
                 })
             }
             _ => Err(anyhow!("parse_literal: expected Literal")),
@@ -580,7 +580,7 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_function_call(&mut self, prev_type: Option<&Type>) -> Result<FunctionCall> {
+    fn parse_function_call(&mut self) -> Result<FunctionCall> {
         let identifier = self.parse_identifier()?;
 
         self.expect_next_token(lexer::Token::POpen)?;
@@ -600,7 +600,7 @@ impl<'a> TokenParser<'a> {
                 _ => {}
             }
 
-            arguments.push(self.parse_expression(prev_type)?);
+            arguments.push(self.parse_expression()?);
         }
 
         let function = self
@@ -618,11 +618,9 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_expression_identifier(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
+    fn parse_expression_identifier(&mut self) -> Result<Expression> {
         match self.peek_token_err(1)? {
-            lexer::Token::POpen => Ok(Expression::FunctionCall(
-                self.parse_function_call(prev_type)?,
-            )),
+            lexer::Token::POpen => Ok(Expression::FunctionCall(self.parse_function_call()?)),
             _ => {
                 let identifier = self.parse_identifier()?;
                 Ok(Expression::Variable(
@@ -638,11 +636,11 @@ impl<'a> TokenParser<'a> {
         }
     }
 
-    fn parse_expression_literal(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
-        Ok(Expression::Literal(self.parse_literal(prev_type)?))
+    fn parse_expression_literal(&mut self) -> Result<Expression> {
+        Ok(Expression::Literal(self.parse_literal()?))
     }
 
-    fn parse_expression_list(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
+    fn parse_expression_list(&mut self) -> Result<Expression> {
         self.expect_next_token(lexer::Token::COpen)?;
         self.next();
 
@@ -654,15 +652,7 @@ impl<'a> TokenParser<'a> {
                 break;
             }
 
-            let prev_type = prev_type
-                .map(|v| match &v._type {
-                    TypeType::Slice(slice_item) => Ok(slice_item.as_ref()),
-                    _type => Err(anyhow!(
-                        "parse_expression_list: trying to cast to non slice {_type:#?}"
-                    )),
-                })
-                .transpose()?;
-            expressions.push(self.parse_expression(prev_type)?);
+            expressions.push(self.parse_expression()?);
 
             if *self.peek_token_err(0)? != lexer::Token::CClose {
                 self.expect_next_token(lexer::Token::Comma)?;
@@ -675,29 +665,26 @@ impl<'a> TokenParser<'a> {
 
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
-            lexer::Token::Plus | lexer::Token::Minus => Some((1, 2)),
-            lexer::Token::Star | lexer::Token::Slash => Some((3, 4)),
-            lexer::Token::PipePipe => Some((100, 101)),
-            lexer::Token::AmperAmper => Some((102, 103)),
+            lexer::Token::Star | lexer::Token::Slash => Some((9, 10)),
+            lexer::Token::Plus | lexer::Token::Minus => Some((7, 8)),
+            lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => Some((5, 6)),
+            lexer::Token::AmperAmper => Some((3, 4)),
+            lexer::Token::PipePipe => Some((1, 2)),
             _ => None,
         }
     }
 
-    fn parse_expression(&mut self, prev_type: Option<&Type>) -> Result<Expression> {
-        self.parse_expression_pratt(prev_type, 0)
+    fn parse_expression(&mut self) -> Result<Expression> {
+        self.parse_expression_pratt(0)
     }
 
-    fn parse_expression_pratt(
-        &mut self,
-        prev_type: Option<&Type>,
-        min_bp: usize,
-    ) -> Result<Expression> {
+    fn parse_expression_pratt(&mut self, min_bp: usize) -> Result<Expression> {
         let mut left: Expression = {
             let token = self.peek_token_err(0)?.clone();
             match token {
                 lexer::Token::POpen => {
                     self.next();
-                    let exp = self.parse_expression(prev_type)?;
+                    let exp = self.parse_expression()?;
                     self.expect_next_token(lexer::Token::PClose)?;
                     self.next();
                     exp
@@ -705,7 +692,7 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Plus | lexer::Token::Minus => {
                     self.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression_pratt(prev_type, 5)?),
+                        expression: Box::new(self.parse_expression_pratt(11)?),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
@@ -713,9 +700,9 @@ impl<'a> TokenParser<'a> {
                         },
                     })
                 }
-                lexer::Token::COpen => self.parse_expression_list(prev_type)?,
-                lexer::Token::Identifier(_) => self.parse_expression_identifier(prev_type)?,
-                lexer::Token::Literal(_) => self.parse_expression_literal(prev_type)?,
+                lexer::Token::COpen => self.parse_expression_list()?,
+                lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
+                lexer::Token::Literal(_) => self.parse_expression_literal()?,
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };
@@ -727,24 +714,11 @@ impl<'a> TokenParser<'a> {
                     self.next();
                     left = Expression::Index(Index {
                         var: Box::new(left),
-                        expression: Box::new(self.parse_expression(prev_type)?),
+                        expression: Box::new(self.parse_expression()?),
                     });
                     self.expect_next_token(lexer::Token::BClose)?;
                     self.next();
                     continue;
-                }
-                lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => {
-                    self.next();
-                    left = Expression::Compare(Box::new(Compare {
-                        left,
-                        right: self.parse_expression(prev_type)?,
-                        compare_type: match token {
-                            lexer::Token::Lt => CompareType::Lt,
-                            lexer::Token::Gt => CompareType::Gt,
-                            lexer::Token::EqualsEquals => CompareType::Equals,
-                            _ => unreachable!(),
-                        },
-                    }))
                 }
                 _ => {}
             }
@@ -759,7 +733,7 @@ impl<'a> TokenParser<'a> {
                 break;
             }
             self.next();
-            let right = self.parse_expression_pratt(prev_type, r_bp)?;
+            let right = self.parse_expression_pratt(r_bp)?;
 
             match token {
                 lexer::Token::Plus
@@ -789,6 +763,18 @@ impl<'a> TokenParser<'a> {
                         },
                     }))
                 }
+                lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => {
+                    left = Expression::Compare(Box::new(Compare {
+                        left,
+                        right,
+                        compare_type: match token {
+                            lexer::Token::Lt => CompareType::Lt,
+                            lexer::Token::Gt => CompareType::Gt,
+                            lexer::Token::EqualsEquals => CompareType::Equals,
+                            _ => unreachable!(),
+                        },
+                    }))
+                }
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         }
@@ -807,7 +793,7 @@ impl<'a> TokenParser<'a> {
         self.expect_next_token(lexer::Token::Equals)?;
         self.next();
 
-        let expression = self.parse_expression(Some(&_type))?;
+        let expression = self.parse_expression()?;
 
         self.context.variables.insert(
             identifier.clone(),

@@ -21,7 +21,7 @@ fn main() {
                 }
 
                 fn main() void {
-                    let foo int = -5-10 + 15
+                    let foo bool = 20 > 5 && 30 > 20 + 5
                     __debug__
                 }
             ",
