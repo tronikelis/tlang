@@ -584,6 +584,57 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::BOOL)
     }
 
+    fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<ast::Type> {
+        let target = self.compile_expression(&type_cast.expression)?;
+        self.var_stack.push(VarStackItem::Reset(target.size));
+
+        match target {
+            ast::INT => match &type_cast._type {
+                &ast::UINT8 => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::CastIntUint8));
+                    self.var_stack
+                        .push(VarStackItem::Increment(ast::UINT8.size));
+                    Ok(ast::UINT8)
+                }
+                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
+            },
+            ast::UINT8 => match &type_cast._type {
+                &ast::INT => {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::CastUint8Int));
+                    self.var_stack.push(VarStackItem::Increment(ast::INT.size));
+                    Ok(ast::INT)
+                }
+                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
+            },
+            // we have to do this because other types are runtime created
+            target => {
+                if target == *ast::STRING {
+                    if &type_cast._type == &*ast::SLICE_UINT8 {
+                        Ok(ast::SLICE_UINT8.clone())
+                    } else {
+                        Err(anyhow!(
+                            "compile_type_cast: cant cast into {:#?}",
+                            &type_cast._type
+                        ))
+                    }
+                } else if target == *ast::SLICE_UINT8 {
+                    if &type_cast._type == &*ast::STRING {
+                        Ok(ast::STRING.clone())
+                    } else {
+                        Err(anyhow!(
+                            "compile_type_cast: cant cast into {:#?}",
+                            &type_cast._type
+                        ))
+                    }
+                } else {
+                    Err(anyhow!("compile_type_cast: cant cast {target:#?}"))
+                }
+            }
+        }
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         match expression {
             ast::Expression::AndOr(v) => self.compile_andor(v),
@@ -595,6 +646,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::List(v) => self.compile_list(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
+            ast::Expression::TypeCast(v) => self.compile_type_cast(v),
         }
     }
 

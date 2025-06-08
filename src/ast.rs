@@ -167,7 +167,14 @@ pub enum AndOrType {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeCast {
+    pub expression: Expression,
+    pub _type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
     Infix(Infix),
     Literal(Literal),
@@ -678,6 +685,23 @@ impl<'a> TokenParser<'a> {
         self.parse_expression_pratt(0)
     }
 
+    fn parse_expression_type(&mut self) -> Result<Expression> {
+        let _type = self.parse_type()?;
+
+        self.expect_next_token(lexer::Token::POpen)?;
+        self.next();
+
+        let expression = self.parse_expression()?;
+
+        self.expect_next_token(lexer::Token::PClose)?;
+        self.next();
+
+        Ok(Expression::TypeCast(Box::new(TypeCast {
+            expression,
+            _type,
+        })))
+    }
+
     fn parse_expression_pratt(&mut self, min_bp: usize) -> Result<Expression> {
         let mut left: Expression = {
             let token = self.peek_token_err(0)?.clone();
@@ -703,6 +727,7 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::COpen => self.parse_expression_list()?,
                 lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
+                lexer::Token::Type(_) => self.parse_expression_type()?,
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };

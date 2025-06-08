@@ -21,7 +21,8 @@ fn main() {
                 }
 
                 fn main() void {
-                    let foo bool = 20 > 5 && 30 > 20 + 5
+                    let foo string = \"hello world!!\\n\"
+                    syscall_write(1, uint8[](foo))
                     __debug__
                 }
             ",

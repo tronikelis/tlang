@@ -86,6 +86,9 @@ pub enum Instruction {
     And,
     Or,
 
+    CastIntUint8,
+    CastUint8Int,
+
     SyscallWrite,
 }
 
@@ -350,6 +353,14 @@ impl Vm {
                 }
                 Instruction::PushStatic(index, len) => {
                     self.stack.push_size(self.static_memory.index(index, len));
+                }
+                Instruction::CastIntUint8 => {
+                    let target = self.stack.pop::<isize>();
+                    self.stack.push::<u8>(target as u8);
+                }
+                Instruction::CastUint8Int => {
+                    let target = self.stack.pop::<u8>();
+                    self.stack.push::<isize>(target as isize);
                 }
             }
 
