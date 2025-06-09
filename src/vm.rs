@@ -1,3 +1,4 @@
+use core::str;
 use std::{
     alloc::{alloc, dealloc, Layout},
     fs::File,
@@ -44,6 +45,11 @@ impl Slice {
         }
     }
 
+    fn concat(&mut self, other: &Self) {
+        self.len += other.len;
+        self.data.extend_from_slice(&other.data);
+    }
+
     fn append(&mut self, val: Vec<u8>) {
         self.len += 1;
         self.data.extend_from_slice(&val);
@@ -69,6 +75,7 @@ pub enum Instruction {
 
     MinusInt,
     AddI,
+    AddString,
     MultiplyI,
     DivideI,
 
@@ -361,6 +368,15 @@ impl Vm {
                 Instruction::CastUint8Int => {
                     let target = self.stack.pop::<u8>();
                     self.stack.push::<isize>(target as isize);
+                }
+                Instruction::AddString => {
+                    let a = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    let slice =
+                        unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
+                    slice.concat(a);
+                    self.stack.push(slice as *mut Slice);
                 }
             }
 

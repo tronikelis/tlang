@@ -372,28 +372,44 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         if a == ast::VOID {
             return Err(anyhow!("can't add void type"));
         }
-        if a != ast::INT {
-            return Err(anyhow!("can only arithmetic on int"));
-        }
 
         match arithmetic._type {
             ast::ArithmeticType::Minus => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::MinusInt));
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::AddI));
+                if let ast::INT = a {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::MinusInt));
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::AddI));
+                } else {
+                    return Err(anyhow!("can only minus int"));
+                }
             }
             ast::ArithmeticType::Plus => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::AddI));
+                if let ast::INT = a {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::AddI));
+                } else if a == *ast::STRING {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::AddString));
+                } else {
+                    return Err(anyhow!("can only plus int and string"));
+                }
             }
             ast::ArithmeticType::Multiply => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::MultiplyI));
+                if let ast::INT = a {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::MultiplyI));
+                } else {
+                    return Err(anyhow!("can only multiply int"));
+                }
             }
             ast::ArithmeticType::Divide => {
-                self.instructions
-                    .push(Instruction::Real(vm::Instruction::DivideI));
+                if let ast::INT = a {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::DivideI));
+                } else {
+                    return Err(anyhow!("can only divide int"));
+                }
             }
         }
 
