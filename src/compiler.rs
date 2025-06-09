@@ -411,6 +411,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                     return Err(anyhow!("can only divide int"));
                 }
             }
+            ast::ArithmeticType::Modulo => {
+                if let ast::INT = a {
+                    self.instructions
+                        .push(Instruction::Real(vm::Instruction::ModuloI));
+                } else {
+                    return Err(anyhow!("can only modulo int"));
+                }
+            }
         }
 
         self.var_stack.push(VarStackItem::Reset(a.size));

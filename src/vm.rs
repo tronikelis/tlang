@@ -78,6 +78,7 @@ pub enum Instruction {
     AddString,
     MultiplyI,
     DivideI,
+    ModuloI,
 
     Exit,
     Debug,
@@ -377,6 +378,12 @@ impl Vm {
                         unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
                     slice.concat(a);
                     self.stack.push(slice as *mut Slice);
+                }
+                Instruction::ModuloI => {
+                    let a = self.stack.pop::<isize>();
+                    let b = self.stack.pop::<isize>();
+
+                    self.stack.push(b % a);
                 }
             }
 

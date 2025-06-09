@@ -50,10 +50,11 @@ pub enum Token {
     MinusMinus,
     For,
     Semicolon,
+    Percent,
 }
 
-const CONTROL_CHAR: [char; 18] = [
-    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"',
+const CONTROL_CHAR: [char; 19] = [
+    ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"', '%',
 ];
 
 pub struct Lexer {
@@ -155,6 +156,11 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    '%' => {
+                        tokens.push(Token::Percent);
+                        self.next();
+                        continue;
+                    }
                     '[' => {
                         tokens.push(Token::BOpen);
                         self.next();

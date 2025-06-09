@@ -121,6 +121,7 @@ pub enum ArithmeticType {
     Minus,
     Divide,
     Multiply,
+    Modulo,
 }
 
 #[derive(Debug, Clone)]
@@ -672,8 +673,9 @@ impl<'a> TokenParser<'a> {
 
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
-            lexer::Token::Star | lexer::Token::Slash => Some((9, 10)),
-            lexer::Token::Plus | lexer::Token::Minus => Some((7, 8)),
+            lexer::Token::Star | lexer::Token::Slash => Some((11, 12)),
+            lexer::Token::Plus | lexer::Token::Minus => Some((9, 10)),
+            lexer::Token::Percent => Some((7, 8)),
             lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => Some((5, 6)),
             lexer::Token::AmperAmper => Some((3, 4)),
             lexer::Token::PipePipe => Some((1, 2)),
@@ -716,7 +718,7 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Plus | lexer::Token::Minus => {
                     self.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression_pratt(11)?),
+                        expression: Box::new(self.parse_expression_pratt(100)?),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
@@ -764,7 +766,8 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Plus
                 | lexer::Token::Minus
                 | lexer::Token::Star
-                | lexer::Token::Slash => {
+                | lexer::Token::Slash
+                | lexer::Token::Percent => {
                     left = Expression::Arithmetic(Box::new(Arithmetic {
                         left,
                         right,
@@ -773,6 +776,7 @@ impl<'a> TokenParser<'a> {
                             lexer::Token::Minus => ArithmeticType::Minus,
                             lexer::Token::Star => ArithmeticType::Multiply,
                             lexer::Token::Slash => ArithmeticType::Divide,
+                            lexer::Token::Percent => ArithmeticType::Modulo,
                             _ => unreachable!(),
                         },
                     }));
