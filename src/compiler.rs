@@ -388,7 +388,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 if let ast::INT = a {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::AddI));
-                } else if a == *ast::STRING {
+                } else if a == ast::STRING {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::AddString));
                 } else {
@@ -639,7 +639,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             },
             // we have to do this because other types are runtime created
             target => {
-                if target == *ast::STRING {
+                if target == ast::STRING {
                     if &type_cast._type == &*ast::SLICE_UINT8 {
                         Ok(ast::SLICE_UINT8.clone())
                     } else {
@@ -649,7 +649,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                         ))
                     }
                 } else if target == *ast::SLICE_UINT8 {
-                    if &type_cast._type == &*ast::STRING {
+                    if type_cast._type == ast::STRING {
                         Ok(ast::STRING.clone())
                     } else {
                         Err(anyhow!(
