@@ -21,11 +21,22 @@ fn main() {
                 }
 
                 fn main() void {
-                    let count int = 0
-                    for let i int = 0; i < 1; i++ {
-                        syscall_write(1, uint8[](\"foo\"))
+                    for let i int = 0; i < 8; i++ {
+
+                        for let j int = 8-i-1; j > 0; j-- {
+                            syscall_write(1, uint8[](\" \"))
+                        }
+
+                        for let j int = i; j > 0; j-- {
+                            syscall_write(1, uint8[](\"#\"))
+                        }
+
+                        for let j int = i; j > 0; j-- {
+                            syscall_write(1, uint8[](\"#\"))
+                        }
+
+                        syscall_write(1, uint8[](\"\\n\"))
                     }
-                    __debug__
                 }
             ",
     );
