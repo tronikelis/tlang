@@ -374,7 +374,7 @@ impl Vm {
                     let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     let slice =
-                        unsafe { &mut *Slice::new_from_string(str::from_utf8(&b.data).unwrap()) };
+                        unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
                     slice.concat(a);
                     self.stack.push(slice as *mut Slice);
                 }
