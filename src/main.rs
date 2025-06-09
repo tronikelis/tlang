@@ -21,9 +21,11 @@ fn main() {
                 }
 
                 fn main() void {
-                    for let i int = 0; i < 8; i++ {
+                    let SIZE int = 20
 
-                        for let j int = 8-i-1; j > 0; j-- {
+                    for let i int = 0; i < SIZE; i++ {
+
+                        for let j int = SIZE-i-1; j > 0; j-- {
                             syscall_write(1, uint8[](\" \"))
                         }
 
