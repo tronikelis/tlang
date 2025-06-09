@@ -21,8 +21,9 @@ fn main() {
                 }
 
                 fn main() void {
-                    let str string = \"foobar \\\" lol\"
-                    syscall_write(1, str)
+                    let foo string = \"hello world!!\\n\"
+                    syscall_write(1, uint8[](foo))
+                    __debug__
                 }
             ",
     );
