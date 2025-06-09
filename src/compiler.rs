@@ -610,15 +610,17 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
     fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<ast::Type> {
         let target = self.compile_expression(&type_cast.expression)?;
-        self.var_stack.push(VarStackItem::Reset(target.size));
 
         match target {
             ast::INT => match &type_cast._type {
                 &ast::UINT8 => {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::CastIntUint8));
+
+                    self.var_stack.push(VarStackItem::Reset(target.size));
                     self.var_stack
                         .push(VarStackItem::Increment(ast::UINT8.size));
+
                     Ok(ast::UINT8)
                 }
                 _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
@@ -627,7 +629,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 &ast::INT => {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::CastUint8Int));
+
+                    self.var_stack.push(VarStackItem::Reset(target.size));
                     self.var_stack.push(VarStackItem::Increment(ast::INT.size));
+
                     Ok(ast::INT)
                 }
                 _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),

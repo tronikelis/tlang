@@ -21,9 +21,10 @@ fn main() {
                 }
 
                 fn main() void {
-                    let foo int = 10 % 2
-
-
+                    let count int = 0
+                    for let i int = 0; i < 1; i++ {
+                        syscall_write(1, uint8[](\"foo\"))
+                    }
                     __debug__
                 }
             ",
