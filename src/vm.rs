@@ -231,7 +231,7 @@ impl Vm {
     }
 
     pub fn run(mut self) {
-        let mut pc = 0;
+        let mut pc: usize = 0;
 
         loop {
             match self.instructions[pc] {
