@@ -105,7 +105,7 @@ impl Instructions {
 
     fn pop_stack_frame(&mut self) {
         let size = self.var_stack.pop_frame();
-        self.push(Instruction::Real(vm::Instruction::Reset(size)));
+        self.push_instruction_no_sync(Instruction::Real(vm::Instruction::Reset(size)));
     }
 
     fn push_stack_identifier(&mut self, identifier: String) {
@@ -116,8 +116,8 @@ impl Instructions {
         self.var_stack.get_var(identifier)
     }
 
-    fn push_alignment_for(&mut self, size: usize, frame_size: usize) -> usize {
-        let alignment = Self::alignment_for(size, frame_size);
+    fn push_alignment_for(&mut self, size: usize, stack_size: usize) -> usize {
+        let alignment = Self::alignment_for(size, stack_size);
         if alignment != 0 {
             self.push(Instruction::Real(vm::Instruction::Increment(alignment)));
         }
@@ -125,11 +125,11 @@ impl Instructions {
     }
 
     // 0 means no alignment necessary
-    fn alignment_for(size: usize, frame_size: usize) -> usize {
-        if size == 0 || frame_size == 0 {
+    fn alignment_for(size: usize, stack_size: usize) -> usize {
+        if size == 0 || stack_size == 0 {
             0
         } else {
-            let modulo = frame_size % size;
+            let modulo = stack_size % size;
             if modulo == 0 {
                 0
             } else {
@@ -138,31 +138,27 @@ impl Instructions {
         }
     }
 
-    fn stack_frame_size(&self) -> usize {
-        self.var_stack
-            .stack
-            .last()
-            .map(|v| VarStack::size_for(v.iter()))
-            .unwrap_or(0)
+    fn stack_total_size(&self) -> usize {
+        self.var_stack.total_size()
     }
 
     fn align_for(&mut self, instruction: &vm::Instruction) {
-        let frame_size = self.stack_frame_size();
+        let stack_size = self.stack_total_size();
         match instruction {
             vm::Instruction::PushI(_) => {
-                self.push_alignment_for(ast::INT.size, frame_size);
+                self.push_alignment_for(ast::INT.size, stack_size);
             }
             vm::Instruction::PushU8(_) => {
-                self.push_alignment_for(ast::UINT8.size, frame_size);
+                self.push_alignment_for(ast::UINT8.size, stack_size);
             }
             vm::Instruction::PushSlice => {
-                self.push_alignment_for(ast::SLICE_SIZE, frame_size);
+                self.push_alignment_for(ast::SLICE_SIZE, stack_size);
             }
             vm::Instruction::JumpAndLink(_) => {
-                self.push_alignment_for(ast::PTR_SIZE, frame_size);
+                self.push_alignment_for(ast::PTR_SIZE, stack_size);
             }
             vm::Instruction::PushStatic(_index, size) => {
-                self.push_alignment_for(*size, frame_size);
+                self.push_alignment_for(*size, stack_size);
             }
             _ => {}
         };
@@ -190,6 +186,10 @@ impl Instructions {
                 vm::Instruction::Reset(size) => self.var_stack.push(VarStackItem::Reset(*size)),
                 vm::Instruction::Increment(size) => {
                     self.var_stack.push(VarStackItem::Increment(*size))
+                }
+                vm::Instruction::SliceIndexSet(size) => {
+                    self.var_stack
+                        .push(VarStackItem::Reset(ast::SLICE_SIZE + ast::INT.size + size));
                 }
                 vm::Instruction::SliceLen => {
                     self.var_stack.push(VarStackItem::Reset(ast::SLICE_SIZE));
@@ -238,9 +238,22 @@ impl Instructions {
                     self.var_stack.push(VarStackItem::Reset(ast::INT.size));
                     self.var_stack.push(VarStackItem::Increment(ast::BOOL.size));
                 }
+                vm::Instruction::CastIntUint8 => {
+                    self.var_stack.push(VarStackItem::Reset(ast::INT.size));
+                    self.var_stack
+                        .push(VarStackItem::Increment(ast::UINT8.size));
+                }
+                vm::Instruction::CastUint8Int => {
+                    self.var_stack.push(VarStackItem::Reset(ast::UINT8.size));
+                    self.var_stack.push(VarStackItem::Increment(ast::INT.size));
+                }
                 _ => {}
             }
         }
+        self.push_instruction_no_sync(instruction);
+    }
+
+    fn push_instruction_no_sync(&mut self, instruction: Instruction) {
         self.instructions[*self.index.last().unwrap()].push(instruction);
     }
 
@@ -382,9 +395,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             _ => {}
         }
 
-        self.instructions.push_alignment_for(
+        let return_alignment = self.instructions.push_alignment_for(
             call.function.return_type.size,
-            self.instructions.stack_frame_size(),
+            self.instructions.stack_total_size(),
         );
 
         let argument_size = call.arguments.iter().enumerate().try_fold(0, |acc, curr| {
@@ -421,14 +434,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let return_pc_align = self
             .instructions
-            .push_alignment_for(ast::PTR_SIZE, self.instructions.stack_frame_size());
+            .push_alignment_for(ast::PTR_SIZE, self.instructions.stack_total_size());
 
         self.instructions
             .push(Instruction::JumpAndLink(call.function.identifier.clone()));
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::Reset(
-                reset_size + return_pc_align,
+                reset_size + return_pc_align + return_alignment,
             )));
 
         Ok(call.function.return_type.clone())
@@ -727,6 +740,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<ast::Type> {
+        self.instructions
+            .push_alignment_for(type_cast._type.size, self.instructions.stack_total_size());
+
         let target = self.compile_expression(&type_cast.expression)?;
 
         match target {
@@ -734,10 +750,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 &ast::UINT8 => {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::CastIntUint8));
-
-                    self.var_stack.push(VarStackItem::Reset(target.size));
-                    self.var_stack
-                        .push(VarStackItem::Increment(ast::UINT8.size));
 
                     Ok(ast::UINT8)
                 }
@@ -747,9 +759,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 &ast::INT => {
                     self.instructions
                         .push(Instruction::Real(vm::Instruction::CastUint8Int));
-
-                    self.var_stack.push(VarStackItem::Reset(target.size));
-                    self.var_stack.push(VarStackItem::Increment(ast::INT.size));
 
                     Ok(ast::INT)
                 }
@@ -810,8 +819,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             return Err(anyhow!("type mismatch"));
         }
 
-        self.var_stack
-            .push(VarStackItem::Var(declaration.variable.identifier.clone()));
+        self.instructions
+            .push_stack_identifier(declaration.variable.identifier.clone());
 
         Ok(())
     }
@@ -822,8 +831,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 let exp = self.compile_expression(&assignment.expression)?;
 
                 let offset = self
-                    .var_stack
-                    .get_var(&var.identifier)
+                    .instructions
+                    .get_stack_identifier(&var.identifier)
                     .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
 
                 if var._type != exp {
@@ -838,7 +847,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                     )));
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::Reset(var._type.size)));
-                self.var_stack.push(VarStackItem::Reset(var._type.size));
             }
             ast::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
@@ -846,22 +854,19 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                     return Err(anyhow!("can only index slices"));
                 };
 
+                let item_index = self.compile_expression(&index.expression)?;
+                if item_index != ast::INT {
+                    return Err(anyhow!("can only index with int type"));
+                }
+
                 let item = self.compile_expression(&assignment.expression)?;
 
                 if !slice_item.can_assign(&item) {
                     return Err(anyhow!("slice index set type mismatch"));
                 }
 
-                let item_index = self.compile_expression(&index.expression)?;
-                if item_index != ast::INT {
-                    return Err(anyhow!("can only index with int type"));
-                }
-
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::SliceIndexSet(item.size)));
-                self.var_stack.push(VarStackItem::Reset(
-                    slice.size + item.size + item_index.size,
-                ));
             }
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
@@ -885,7 +890,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
-        self.var_stack.push_frame();
+        self.instructions.push_stack_frame();
 
         self.instructions.jump();
 
@@ -902,20 +907,21 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.back(1);
         self.instructions.pop_index();
 
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                self.var_stack.pop_frame(),
-            )));
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
 
     fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
-        self.var_stack.push_frame();
+        self.instructions.push_stack_frame();
         self.compile_node(&_for.initializer)?;
 
         self.instructions.jump();
-        self.var_stack.push_frame();
+        self.instructions.push_stack_frame();
+
+        let bool_alignment = self
+            .instructions
+            .push_alignment_for(ast::BOOL.size, self.instructions.stack_total_size());
 
         let exp = self.compile_expression(&_for.expression)?;
         if exp != ast::BOOL {
@@ -928,16 +934,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.compile_body(&_for.body)?;
         self.compile_node(&_for.after_each)?;
 
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                self.var_stack.pop_frame(),
-            )));
+        self.instructions.pop_stack_frame();
         self.instructions.again();
         self.instructions.pop_index();
 
+        self.instructions.pop_stack_frame();
         self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                ast::BOOL.size + self.var_stack.pop_frame(),
+            .push_instruction_no_sync(Instruction::Real(vm::Instruction::Reset(
+                ast::BOOL.size + bool_alignment,
             )));
 
         Ok(())
@@ -953,7 +957,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 // no variable to store result in, reset instantly
                 self.instructions
                     .push(Instruction::Real(vm::Instruction::Reset(exp.size)));
-                self.var_stack.push(VarStackItem::Reset(exp.size));
             }
             ast::Node::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
@@ -972,16 +975,13 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
-        self.var_stack.push_frame();
+        self.instructions.push_stack_frame();
 
         for node in body {
             self.compile_node(node)?;
         }
 
-        self.instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
-                self.var_stack.pop_frame(),
-            )));
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
@@ -997,7 +997,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 .push(Instruction::Real(vm::Instruction::Copy(
                     // -size because .total_size() gets you total stack size,
                     // while we want to index into first item
-                    self.var_stack.total_size() - exp.size,
+                    self.instructions.stack_total_size() - exp.size,
                     0,
                     exp.size,
                 )));
@@ -1005,7 +1005,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         self.instructions
             .push(Instruction::Real(vm::Instruction::Reset(
-                self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
+                self.instructions.stack_total_size()
+                    - self.instructions.var_stack.arg_size.unwrap(),
             )));
 
         if self.function.identifier == "main" {
@@ -1032,10 +1033,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
 
         for arg in arguments_iter {
-            let frame_size = self.instructions.stack_frame_size();
+            let stack_size = self.instructions.stack_total_size();
 
             self.instructions.var_stack.push(VarStackItem::Increment(
-                arg._type.size + Instructions::alignment_for(arg._type.size, frame_size),
+                arg._type.size + Instructions::alignment_for(arg._type.size, stack_size),
             ));
 
             self.instructions
@@ -1044,10 +1045,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
 
         if self.function.identifier != "main" {
-            let frame_size = self.instructions.stack_frame_size();
+            let stack_size = self.instructions.stack_total_size();
             // return address
             self.instructions.var_stack.push(VarStackItem::Increment(
-                ast::PTR_SIZE + Instructions::alignment_for(ast::PTR_SIZE, frame_size),
+                ast::PTR_SIZE + Instructions::alignment_for(ast::PTR_SIZE, stack_size),
             ));
         }
 

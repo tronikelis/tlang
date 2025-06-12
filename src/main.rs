@@ -21,24 +21,25 @@ fn main() {
                 }
 
                 fn main() void {
-                    let SIZE int = 20
+                    let SIZE uint8 = uint8(20)
+                    let SIZE2 int = 69
 
-                    for let i int = 0; i < SIZE; i++ {
-
-                        for let j int = SIZE-i-1; j > 0; j-- {
-                            syscall_write(1, uint8[](\" \"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        syscall_write(1, uint8[](\"\\n\"))
-                    }
+                    // for let i int = 0; i < SIZE; i++ {
+                    //
+                    //     for let j int = SIZE-i-1; j > 0; j-- {
+                    //         syscall_write(1, uint8[](\" \"))
+                    //     }
+                    //
+                    //     for let j int = i; j > 0; j-- {
+                    //         syscall_write(1, uint8[](\"#\"))
+                    //     }
+                    //
+                    //     for let j int = i; j > 0; j-- {
+                    //         syscall_write(1, uint8[](\"#\"))
+                    //     }
+                    //
+                    //     syscall_write(1, uint8[](\"\\n\"))
+                    // }
                 }
             ",
     );

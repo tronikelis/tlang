@@ -338,8 +338,8 @@ impl Vm {
                     self.stack.push_size(slice.index(index, size));
                 }
                 Instruction::SliceIndexSet(size) => {
-                    let index = self.stack.pop::<isize>();
                     let item = self.stack.pop_size(size).to_vec();
+                    let index = self.stack.pop::<isize>();
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     slice.index_set(index, item);
