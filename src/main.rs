@@ -20,6 +20,14 @@ fn main() {
                     // compiler builtin
                 }
 
+                fn factorial(n int) int {
+                    if n == 1 {
+                        return n
+                    }
+
+                    return n*factorial(n-1)
+                }
+
                 fn main() void {
                     let SIZE int = 20
 
@@ -39,6 +47,9 @@ fn main() {
 
                         syscall_write(1, uint8[](\"\\n\"))
                     }
+
+                    let foo int = factorial(5)
+                    __debug__
                 }
             ",
     );
