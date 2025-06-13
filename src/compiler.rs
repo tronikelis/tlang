@@ -480,6 +480,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
+        self.instructions.push_stack_frame();
+
         match &assignment.var {
             ast::Expression::Variable(var) => {
                 let exp = self.compile_expression(&assignment.expression)?;
@@ -494,7 +496,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 }
 
                 self.instructions.instr_copy(offset, 0, exp.size);
-                self.instructions.instr_reset(exp.size);
             }
             ast::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
@@ -516,6 +517,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             }
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
+
+        self.instructions.pop_stack_frame(0);
 
         Ok(())
     }
