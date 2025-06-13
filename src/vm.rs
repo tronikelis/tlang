@@ -88,9 +88,9 @@ pub enum Instruction {
     Return,
     JumpIfTrue(usize),
 
-    ToBool,
+    ToBoolI,
     NegateBool,
-    CompareInt,
+    CompareI,
     And,
     Or,
 
@@ -277,7 +277,7 @@ impl Vm {
                         continue;
                     }
                 }
-                Instruction::ToBool => {
+                Instruction::ToBoolI => {
                     let int = self.stack.pop::<isize>();
                     if int > 0 {
                         self.stack.push::<isize>(1);
@@ -293,7 +293,7 @@ impl Vm {
                     let int = self.stack.pop::<isize>();
                     self.stack.push(-int);
                 }
-                Instruction::CompareInt => {
+                Instruction::CompareI => {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     if a == b {
@@ -338,8 +338,8 @@ impl Vm {
                     self.stack.push_size(slice.index(index, size));
                 }
                 Instruction::SliceIndexSet(size) => {
-                    let index = self.stack.pop::<isize>();
                     let item = self.stack.pop_size(size).to_vec();
+                    let index = self.stack.pop::<isize>();
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     slice.index_set(index, item);

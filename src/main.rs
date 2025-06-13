@@ -4,6 +4,7 @@ mod vm;
 
 mod ast;
 mod compiler;
+mod instructions;
 mod lexer;
 mod linker;
 
@@ -30,25 +31,6 @@ fn main() {
 
                 fn main() void {
                     let SIZE int = 20
-
-                    for let i int = 0; i < SIZE; i++ {
-
-                        for let j int = SIZE-i-1; j > 0; j-- {
-                            syscall_write(1, uint8[](\" \"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        syscall_write(1, uint8[](\"\\n\"))
-                    }
-
-                    let foo int = factorial(5)
                     __debug__
                 }
             ",
@@ -59,7 +41,7 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
+    let mut functions = HashMap::<String, Vec<Vec<instructions::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
     for v in &ast.functions {

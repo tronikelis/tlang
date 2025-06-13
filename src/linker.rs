@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
-use crate::{compiler, vm};
+use crate::{instructions, vm};
 
 fn link_jumps(
-    instructions: &Vec<Vec<compiler::Instruction>>,
+    instructions: &Vec<Vec<instructions::Instruction>>,
     offset: usize,
-) -> Result<Vec<compiler::Instruction>> {
-    let mut ins = Vec::<compiler::Instruction>::new();
+) -> Result<Vec<instructions::Instruction>> {
+    let mut ins = Vec::<instructions::Instruction>::new();
     let mut index_to_len = HashMap::<usize, usize>::new();
 
     for (i, v) in instructions.iter().enumerate() {
@@ -20,16 +20,16 @@ fn link_jumps(
 
     for v in &mut ins {
         match v {
-            compiler::Instruction::Jump((i, inner_offset)) => {
-                *v = compiler::Instruction::Jump((
+            instructions::Instruction::Jump((i, inner_offset)) => {
+                *v = instructions::Instruction::Jump((
                     *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
                         + offset
                         + *inner_offset,
                     0,
                 ));
             }
-            compiler::Instruction::JumpIfTrue((i, inner_offset)) => {
-                *v = compiler::Instruction::JumpIfTrue((
+            instructions::Instruction::JumpIfTrue((i, inner_offset)) => {
+                *v = instructions::Instruction::JumpIfTrue((
                     *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
                         + offset
                         + *inner_offset,
@@ -44,7 +44,7 @@ fn link_jumps(
 }
 
 pub fn link(
-    functions: &HashMap<String, Vec<Vec<compiler::Instruction>>>,
+    functions: &HashMap<String, Vec<Vec<instructions::Instruction>>>,
 ) -> Result<Vec<vm::Instruction>> {
     let main = functions
         .get("main")
@@ -66,15 +66,15 @@ pub fn link(
         .iter()
         .map(|v| {
             Ok(match v {
-                compiler::Instruction::Real(v) => v.clone(),
-                compiler::Instruction::JumpAndLink(identifier) => {
+                instructions::Instruction::Real(v) => v.clone(),
+                instructions::Instruction::JumpAndLink(identifier) => {
                     let index = fn_to_offset
                         .get(identifier as &str)
                         .ok_or(anyhow!("unknown identifier"))?;
                     vm::Instruction::JumpAndLink(*index)
                 }
-                compiler::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
-                compiler::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
+                instructions::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
+                instructions::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
             })
         })
         .collect::<Result<Vec<vm::Instruction>>>()?;
