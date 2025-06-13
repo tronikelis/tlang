@@ -29,14 +29,15 @@ fn main() {
                     return n*factorial(n-1)
                 }
 
-                fn foobar() void {
-                    let byte1 uint8 = uint8(2)
-                    let byte8 int = 20
+                fn foobar(first_arg uint8, second_arg int) int {
+                    return second_arg
                 }
 
                 fn main() void {
                     let SIZE int = 20
-                    foobar()
+                    let SIZE8 uint8 = uint8(20)
+
+                    let nice_man int = foobar(uint8(8), 20)
 
                     for let i int = 0; i < SIZE; i++ {
 
