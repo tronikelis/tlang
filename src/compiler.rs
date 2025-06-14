@@ -446,7 +446,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
-        match expression {
+        let old_stack_size = self.instructions.stack_total_size();
+
+        let exp = match expression {
             ast::Expression::AndOr(v) => self.compile_andor(v),
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
@@ -457,7 +459,17 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::List(v) => self.compile_list(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
+        }?;
+
+        let new_stack_size = self.instructions.stack_total_size();
+        let delta_stack_size = new_stack_size - old_stack_size;
+
+        if exp.size != 0 && old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
+            self.instructions
+                .instr_shift(exp.size, delta_stack_size - exp.size - 1);
         }
+
+        Ok(exp)
     }
 
     fn compile_variable_declaration(

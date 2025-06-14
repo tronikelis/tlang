@@ -356,6 +356,14 @@ impl Instructions {
             .push(Instruction::JumpAndLink(identifier));
     }
 
+    pub fn instr_shift(&mut self, size: usize, amount: usize) {
+        for i in 0..amount {
+            self.stack_instructions
+                .push(Instruction::Real(vm::Instruction::Shift(size + amount - i)));
+        }
+        self.var_stack.push(VarStackItem::Reset(amount));
+    }
+
     pub fn push_alignment(&mut self, size: usize) {
         let alignment = align(size, self.var_stack.total_size());
         if alignment != 0 {

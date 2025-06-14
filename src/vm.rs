@@ -66,6 +66,8 @@ pub enum Instruction {
     Increment(usize),
     // dst = src * len
     Copy(usize, usize, usize),
+    // len
+    Shift(usize),
     Reset(usize),
     PushI(isize),
     PushU8(u8),
@@ -164,6 +166,17 @@ impl Stack {
     fn reset(&mut self, offset: usize) {
         unsafe {
             self.sp = self.sp.byte_offset(offset as isize);
+        }
+    }
+
+    fn shift(&mut self, len: usize) {
+        unsafe {
+            self.reset(len + 1);
+            for _ in 0..len {
+                self.increment(1);
+                let prev: u8 = *self.sp.byte_offset(-1);
+                *self.sp.cast() = prev;
+            }
         }
     }
 
@@ -384,6 +397,9 @@ impl Vm {
                     let b = self.stack.pop::<isize>();
 
                     self.stack.push(b % a);
+                }
+                Instruction::Shift(len) => {
+                    self.stack.shift(len);
                 }
             }
 
