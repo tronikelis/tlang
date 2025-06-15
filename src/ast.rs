@@ -259,10 +259,58 @@ impl Ast {
     }
 }
 
+struct AstVariables {
+    stack: Vec<Vec<Variable>>,
+}
+
+impl AstVariables {
+    fn new() -> Self {
+        let mut stack = Vec::new();
+        stack.push(Vec::new());
+        Self { stack }
+    }
+
+    fn push_frame(&mut self) {
+        self.stack.push(Vec::new());
+    }
+
+    fn pop_frame(&mut self) {
+        self.stack.pop();
+    }
+
+    fn push_variable(&mut self, variable: Variable) -> Result<()> {
+        if self
+            .stack
+            .last()
+            .unwrap()
+            .iter()
+            .find(|v| v.identifier == variable.identifier)
+            .is_some()
+        {
+            return Err(anyhow!(
+                "cant push {}, it's already defined",
+                variable.identifier,
+            ));
+        }
+
+        self.stack.last_mut().unwrap().push(variable);
+
+        Ok(())
+    }
+
+    fn get_variable(&self, identifier: &str) -> Option<&Variable> {
+        self.stack
+            .iter()
+            .flatten()
+            .find(|v| v.identifier == identifier)
+    }
+}
+
 struct TokenParser<'a> {
     tokens: &'a Vec<lexer::Token>,
     i: usize,
-    context: TokenParserContext,
+    functions: HashMap<String, Function>,
+    variables: AstVariables,
 }
 
 #[derive(Debug, Clone)]
@@ -271,30 +319,24 @@ pub struct Variable {
     pub identifier: String,
 }
 
-struct TokenParserContext {
-    functions: HashMap<String, Function>,
-    variables: HashMap<String, Variable>,
-}
-
 impl<'a> TokenParser<'a> {
     fn new(tokens: &'a Vec<lexer::Token>) -> Self {
         Self {
             tokens,
             i: 0,
-            context: TokenParserContext {
-                functions: HashMap::new(),
-                variables: HashMap::new(),
-            },
+            functions: HashMap::new(),
+            variables: AstVariables::new(),
         }
     }
 
     fn parse_context_function_declarations(&self) -> Result<HashMap<String, Function>> {
         let mut declarations = HashMap::<String, Function>::new();
-        let mut temp_parser = TokenParser::new(self.tokens);
 
         for (i, token) in self.tokens.iter().enumerate() {
-            temp_parser.i = i;
             if let lexer::Token::Function = token {
+                let mut temp_parser = TokenParser::new(self.tokens);
+                temp_parser.i = i;
+
                 let function = temp_parser.parse_function_declaration()?;
                 declarations.insert(function.identifier.clone(), function);
             }
@@ -303,15 +345,8 @@ impl<'a> TokenParser<'a> {
         Ok(declarations)
     }
 
-    fn parse_context(&self) -> Result<TokenParserContext> {
-        Ok(TokenParserContext {
-            functions: self.parse_context_function_declarations()?,
-            variables: HashMap::new(),
-        })
-    }
-
     fn parse_functions(mut self) -> Result<Vec<Function>> {
-        self.context = self.parse_context()?;
+        self.functions = self.parse_context_function_declarations()?;
 
         let mut functions = Vec::<Function>::new();
 
@@ -329,6 +364,8 @@ impl<'a> TokenParser<'a> {
         self.expect_next_token(lexer::Token::For)?;
         self.next();
 
+        self.variables.push_frame();
+
         let initializer = self.parse_token()?;
 
         self.expect_next_token(lexer::Token::Semicolon)?;
@@ -341,6 +378,8 @@ impl<'a> TokenParser<'a> {
 
         let after_each = self.parse_token()?;
         let body = self.parse_body()?;
+
+        self.variables.pop_frame();
 
         Ok(For {
             initializer: Box::new(initializer),
@@ -442,6 +481,8 @@ impl<'a> TokenParser<'a> {
     }
 
     fn parse_body(&mut self) -> Result<Vec<Node>> {
+        self.variables.push_frame();
+
         let mut nodes = Vec::new();
 
         self.expect_next_token(lexer::Token::COpen)?;
@@ -455,6 +496,8 @@ impl<'a> TokenParser<'a> {
 
             nodes.push(self.parse_token()?);
         }
+
+        self.variables.pop_frame();
 
         Ok(nodes)
     }
@@ -560,13 +603,7 @@ impl<'a> TokenParser<'a> {
         let return_type = self.parse_type()?;
 
         for v in &function_arguments {
-            self.context.variables.insert(
-                v.identifier.clone(),
-                Variable {
-                    identifier: v.identifier.clone(),
-                    _type: v._type.clone(),
-                },
-            );
+            self.variables.push_variable(v.clone())?;
         }
 
         Ok(Function {
@@ -578,7 +615,7 @@ impl<'a> TokenParser<'a> {
     }
 
     fn parse_function(&mut self) -> Result<Function> {
-        self.context.variables = HashMap::new();
+        self.variables = AstVariables::new();
 
         let function = self.parse_function_declaration()?;
         let body = self.parse_body()?;
@@ -613,7 +650,6 @@ impl<'a> TokenParser<'a> {
         }
 
         let function = self
-            .context
             .functions
             .get(&identifier)
             .ok_or(anyhow!(
@@ -633,9 +669,9 @@ impl<'a> TokenParser<'a> {
             _ => {
                 let identifier = self.parse_identifier()?;
                 Ok(Expression::Variable(
-                    self.context
+                    self
                         .variables
-                        .get(&identifier)
+                        .get_variable(&identifier)
                         .ok_or(anyhow!(
                             "parse_expression_identifier: identifier variable {identifier} not found"
                         ))?
@@ -825,13 +861,10 @@ impl<'a> TokenParser<'a> {
 
         let expression = self.parse_expression()?;
 
-        self.context.variables.insert(
-            identifier.clone(),
-            Variable {
-                _type: _type.clone(),
-                identifier: identifier.clone(),
-            },
-        );
+        self.variables.push_variable(Variable {
+            _type: _type.clone(),
+            identifier: identifier.clone(),
+        })?;
 
         Ok(VariableDeclaration {
             variable: Variable { identifier, _type },

@@ -34,9 +34,8 @@ fn main() {
                 }
 
                 fn main() void {
-                    let SIZE int = 20
+                    let SIZE int = 40
                     let SIZE8 uint8 = uint8(20)
-                    let SIZE8 uint8 = uint8(30)
                     let ok uint8 = uint8(40)
 
                     let nice_man int = foobar(uint8(8), 20)
