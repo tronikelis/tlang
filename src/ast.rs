@@ -81,6 +81,7 @@ pub const UINT8: Type = Type {
     size: size_of::<u8>(),
     _type: TypeType::Scalar(lexer::Type::Uint8),
 };
+pub const PTR_SIZE: usize = size_of::<usize>();
 pub const SLICE_SIZE: usize = size_of::<usize>();
 pub const STRING: Type = Type {
     size: SLICE_SIZE,

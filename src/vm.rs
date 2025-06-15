@@ -66,6 +66,8 @@ pub enum Instruction {
     Increment(usize),
     // dst = src * len
     Copy(usize, usize, usize),
+    // len
+    Shift(usize),
     Reset(usize),
     PushI(isize),
     PushU8(u8),
@@ -88,9 +90,9 @@ pub enum Instruction {
     Return,
     JumpIfTrue(usize),
 
-    ToBool,
+    ToBoolI,
     NegateBool,
-    CompareInt,
+    CompareI,
     And,
     Or,
 
@@ -164,6 +166,17 @@ impl Stack {
     fn reset(&mut self, offset: usize) {
         unsafe {
             self.sp = self.sp.byte_offset(offset as isize);
+        }
+    }
+
+    fn shift(&mut self, len: usize) {
+        unsafe {
+            self.reset(len + 1);
+            for _ in 0..len {
+                self.increment(1);
+                let prev: u8 = *self.sp.byte_offset(-1);
+                *self.sp.cast() = prev;
+            }
         }
     }
 
@@ -277,7 +290,7 @@ impl Vm {
                         continue;
                     }
                 }
-                Instruction::ToBool => {
+                Instruction::ToBoolI => {
                     let int = self.stack.pop::<isize>();
                     if int > 0 {
                         self.stack.push::<isize>(1);
@@ -293,7 +306,7 @@ impl Vm {
                     let int = self.stack.pop::<isize>();
                     self.stack.push(-int);
                 }
-                Instruction::CompareInt => {
+                Instruction::CompareI => {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     if a == b {
@@ -338,8 +351,8 @@ impl Vm {
                     self.stack.push_size(slice.index(index, size));
                 }
                 Instruction::SliceIndexSet(size) => {
-                    let index = self.stack.pop::<isize>();
                     let item = self.stack.pop_size(size).to_vec();
+                    let index = self.stack.pop::<isize>();
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     slice.index_set(index, item);
@@ -384,6 +397,9 @@ impl Vm {
                     let b = self.stack.pop::<isize>();
 
                     self.stack.push(b % a);
+                }
+                Instruction::Shift(len) => {
+                    self.stack.shift(len);
                 }
             }
 

@@ -4,6 +4,7 @@ mod vm;
 
 mod ast;
 mod compiler;
+mod instructions;
 mod lexer;
 mod linker;
 
@@ -28,8 +29,17 @@ fn main() {
                     return n*factorial(n-1)
                 }
 
+                fn foobar(first_arg uint8, second_arg int) int {
+                    return second_arg
+                }
+
                 fn main() void {
                     let SIZE int = 20
+                    let SIZE8 uint8 = uint8(20)
+                    let SIZE8 uint8 = uint8(30)
+                    let ok uint8 = uint8(40)
+
+                    let nice_man int = foobar(uint8(8), 20)
 
                     for let i int = 0; i < SIZE; i++ {
 
@@ -59,7 +69,7 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
+    let mut functions = HashMap::<String, Vec<Vec<instructions::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
     for v in &ast.functions {
