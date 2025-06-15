@@ -637,7 +637,7 @@ impl<'a> TokenParser<'a> {
                         .variables
                         .get(&identifier)
                         .ok_or(anyhow!(
-                            "parse_expression_identifier: identifier variable not found"
+                            "parse_expression_identifier: identifier variable {identifier} not found"
                         ))?
                         .clone(),
                 ))
