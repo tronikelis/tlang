@@ -58,7 +58,20 @@ fn main() {
 
                 fn main() void {
                     let one_two_three string = itoa(69420)
-                    syscall_write(1, uint8[](\"\\n\" + one_two_three + \"\\n\"))
+
+                    for let i int = 0; i < 100; i++ {
+                        let str string = \"\"
+
+                        if i % 3 == 0 {
+                            str = str + \"Fizz\"
+                        }
+                        if i % 5 == 0 {
+                            str = str + \"Buzz\"
+                        }
+
+                        syscall_write(1, uint8[](itoa(i) + \" \" + str + \"\\n\"))
+                    }
+
                     __debug__
                 }
             ",
