@@ -593,10 +593,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.push_stack_frame();
         self.instructions.var_mark_label();
 
-        let exp = self.compile_expression(&_for.expression)?;
-        if exp != ast::BOOL {
-            return Err(anyhow!("compile_for: expected expression to return bool"));
-        }
+        let bool_size = {
+            self.instructions.push_stack_frame();
+            let exp = self.compile_expression(&_for.expression)?;
+            if exp != ast::BOOL {
+                return Err(anyhow!("compile_for: expected expression to return bool"));
+            }
+            self.instructions.pop_stack_frame_size()
+        };
 
         self.instructions.instr_negate_bool();
         self.instructions.stack_instructions.back_if_true(2);
@@ -615,7 +619,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         // normal loop exit will jump here
         self.instructions
-            .instr_reset_dangerous_not_synced(ast::BOOL.size);
+            .instr_reset_dangerous_not_synced(bool_size);
 
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
