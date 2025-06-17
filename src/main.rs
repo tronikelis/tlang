@@ -33,31 +33,26 @@ fn main() {
                     return second_arg
                 }
 
+                // fn itoa(x int) string {
+                //     let str uint8[] = {}
+                //     let div int = 1
+                //     for {
+                //         x = x / div
+                //         div = div * 10
+                //         append(str, 48 + x % 10)
+                //     }
+                //
+                //     return string(str)
+                // }
+
                 fn main() void {
-                    let SIZE int = 40
-                    let SIZE8 uint8 = uint8(20)
-                    let ok uint8 = uint8(40)
-
-                    let nice_man int = foobar(uint8(8), 20)
-
-                    for let i int = 0; i < SIZE; i++ {
-
-                        for let j int = SIZE-i-1; j > 0; j-- {
-                            syscall_write(1, uint8[](\" \"))
+                    let f int = 0
+                    for let i int = 0; i < 1337; i++ {
+                        if i == 10 {
+                            f = i
+                            break
                         }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        syscall_write(1, uint8[](\"\\n\"))
                     }
-
-                    let foo int = factorial(5)
                     __debug__
                 }
             ",

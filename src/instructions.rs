@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 use crate::{ast, vm};
 
@@ -10,11 +10,12 @@ pub enum Instruction {
     JumpIfTrue((usize, usize)),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
     Var(String),
+    Label,
 }
 
 #[derive(Debug, Clone)]
@@ -49,40 +50,56 @@ impl VarStack {
         self.stack.last_mut().unwrap().push(item);
     }
 
+    fn total_size(&self) -> usize {
+        Self::size_for(self.stack.iter().flatten())
+    }
+
+    fn offset_for(&self, target: &VarStackItem) -> Option<usize> {
+        let mut offset: isize = 0;
+
+        for item in self.stack.iter().flatten().rev() {
+            if item == target {
+                return Some(offset.try_into().unwrap());
+            }
+
+            match item {
+                VarStackItem::Label | VarStackItem::Var(_) => {}
+                VarStackItem::Increment(size) => offset += *size as isize,
+                VarStackItem::Reset(size) => offset -= *size as isize,
+            }
+        }
+
+        None
+    }
+
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
         items.fold(0, |acc, curr| match curr {
             VarStackItem::Var(_) => acc,
             VarStackItem::Increment(size) => acc + size,
             VarStackItem::Reset(size) => acc - size,
+            VarStackItem::Label => acc,
         })
     }
 
-    fn total_size(&self) -> usize {
-        Self::size_for(self.stack.iter().flatten())
+    fn get_var_offset(&self, identifier: &str) -> Option<usize> {
+        self.offset_for(&VarStackItem::Var(identifier.to_string()))
     }
 
-    fn get_var(&self, identifier: &str) -> Option<usize> {
-        let mut offset: isize = 0;
-
-        for item in self.stack.iter().flatten().rev() {
-            match item {
-                VarStackItem::Var(var) => {
-                    if var == identifier {
-                        return Some(offset as usize);
-                    }
-                }
-                VarStackItem::Increment(size) => offset += *size as isize,
-                VarStackItem::Reset(size) => offset -= *size as isize,
-            };
-        }
-
-        None
+    fn get_label_offset(&self) -> Option<usize> {
+        self.offset_for(&VarStackItem::Label)
     }
+}
+
+#[derive(Debug, PartialEq)]
+struct StackLabel {
+    identifier: String,
+    index: usize,
 }
 
 pub struct StackInstructions {
     instructions: Vec<Vec<Instruction>>,
     index: Vec<usize>,
+    labels: Vec<StackLabel>,
 }
 
 impl StackInstructions {
@@ -92,6 +109,7 @@ impl StackInstructions {
         Self {
             index: Vec::from([0]),
             instructions,
+            labels: Vec::new(),
         }
     }
 
@@ -104,6 +122,31 @@ impl StackInstructions {
         self.push(Instruction::Jump((index, 0)));
         self.instructions.push(Vec::new());
         self.index.push(index);
+    }
+
+    pub fn label_new(&mut self, identifier: String) {
+        let index = *self.index.last().unwrap();
+        self.labels.push(StackLabel { index, identifier });
+    }
+
+    pub fn label_pop(&mut self) {
+        self.labels.pop();
+    }
+
+    pub fn label_jump(&mut self, identifier: &str) -> Result<()> {
+        let label = self
+            .labels
+            .iter()
+            .rev()
+            .find(|v| &v.identifier == identifier)
+            .ok_or(anyhow!("label_jump: {:#?} not found", identifier))?;
+
+        self.push(Instruction::Jump((
+            label.index,
+            self.instructions[label.index].len(),
+        )));
+
+        Ok(())
     }
 
     pub fn jump_if_true(&mut self) {
@@ -164,8 +207,19 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Var(identifier));
     }
 
-    pub fn get_var_offset(&mut self, identifier: &str) -> Option<usize> {
-        self.var_stack.get_var(identifier)
+    pub fn var_mark_label(&mut self) {
+        self.var_stack.push(VarStackItem::Label);
+    }
+
+    pub fn var_get_offset(&mut self, identifier: &str) -> Option<usize> {
+        self.var_stack.get_var_offset(identifier)
+    }
+
+    pub fn var_reset_label(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Reset(
+                self.var_stack.get_label_offset().unwrap(),
+            )));
     }
 
     pub fn instr_slice_index_set(&mut self, size: usize) {

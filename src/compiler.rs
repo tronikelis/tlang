@@ -179,7 +179,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let offset = self
             .instructions
-            .get_var_offset(&variable.identifier)
+            .var_get_offset(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
         self.instructions.instr_increment(variable._type.size);
@@ -500,7 +500,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 let offset = self
                     .instructions
-                    .get_var_offset(&var.identifier)
+                    .var_get_offset(&var.identifier)
                     .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
 
                 if var._type != exp {
@@ -577,8 +577,20 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.push_stack_frame();
         self.compile_node(&_for.initializer)?;
 
+        self.instructions
+            .stack_instructions
+            .label_new("for_break".to_string());
+
         self.instructions.stack_instructions.jump();
+
+        self.instructions
+            .stack_instructions
+            .label_new("for_continue".to_string());
+
+        self.instructions.stack_instructions.jump();
+
         self.instructions.push_stack_frame();
+        self.instructions.var_mark_label();
 
         let exp = self.compile_expression(&_for.expression)?;
         if exp != ast::BOOL {
@@ -586,17 +598,47 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
 
         self.instructions.instr_negate_bool();
-        self.instructions.stack_instructions.back_if_true(1);
+        self.instructions.stack_instructions.back_if_true(2);
 
         self.compile_body(&_for.body)?;
-        self.compile_node(&_for.after_each)?;
 
         self.instructions.pop_stack_frame(0);
+
+        self.instructions.stack_instructions.back(1);
+        self.instructions.stack_instructions.pop_index();
+
+        self.compile_node(&_for.after_each)?;
+
         self.instructions.stack_instructions.again();
         self.instructions.stack_instructions.pop_index();
 
         // reset the bool as well, because if we jumped out (we always do), we left it in there
         self.instructions.pop_stack_frame(ast::BOOL.size);
+
+        self.instructions.stack_instructions.label_pop(); // After
+        self.instructions.stack_instructions.label_pop(); // Exact
+
+        Ok(())
+    }
+
+    fn compile_for_break(&mut self) -> Result<()> {
+        self.instructions.var_reset_label();
+        // HACK: to fix pop_stack_frame ast::BOOL.size above
+        self.instructions.instr_increment(ast::BOOL.size);
+
+        self.instructions
+            .stack_instructions
+            .label_jump("for_break")?;
+
+        Ok(())
+    }
+
+    fn compile_for_continue(&mut self) -> Result<()> {
+        self.instructions.var_reset_label();
+
+        self.instructions
+            .stack_instructions
+            .label_jump("for_continue")?;
 
         Ok(())
     }
@@ -620,6 +662,12 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 self.instructions.instr_debug();
             }
             ast::Node::For(v) => self.compile_for(v)?,
+            ast::Node::Break => {
+                self.compile_for_break()?;
+            }
+            ast::Node::Continue => {
+                self.compile_for_continue()?;
+            }
         };
 
         Ok(())

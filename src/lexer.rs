@@ -51,6 +51,8 @@ pub enum Token {
     For,
     Semicolon,
     Percent,
+    Break,
+    Continue,
 }
 
 const CONTROL_CHAR: [char; 19] = [
@@ -75,6 +77,16 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "break" => {
+                    tokens.push(Token::Break);
+                    self.read_next_word();
+                    continue;
+                }
+                "continue" => {
+                    tokens.push(Token::Continue);
+                    self.read_next_word();
+                    continue;
+                }
                 "string" => {
                     tokens.push(Token::Type(Type::String));
                     self.read_next_word();

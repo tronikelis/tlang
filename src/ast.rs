@@ -244,6 +244,8 @@ pub enum Node {
     If(If),
     For(For),
     Debug,
+    Break,
+    Continue,
 }
 
 #[derive(Debug)]
@@ -441,6 +443,14 @@ impl<'a> TokenParser<'a> {
             }
             lexer::Token::If => Ok(Node::If(self.parse_if()?)),
             lexer::Token::For => Ok(Node::For(self.parse_for()?)),
+            lexer::Token::Break => {
+                self.next();
+                Ok(Node::Break)
+            }
+            lexer::Token::Continue => {
+                self.next();
+                Ok(Node::Continue)
+            }
             _ => self.parse_token_else(),
         }
     }
