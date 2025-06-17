@@ -281,6 +281,11 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Increment(size));
     }
 
+    pub fn instr_reset_dangerous_not_synced(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Reset(size)));
+    }
+
     pub fn instr_reset(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(size)));
@@ -433,11 +438,10 @@ impl Instructions {
         self.var_stack.push_frame(Vec::new());
     }
 
-    // use extra if you know what you are doing, this should almost always be 0
-    pub fn pop_stack_frame(&mut self, extra: usize) {
+    pub fn pop_stack_frame(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
-                VarStack::size_for(self.var_stack.pop_frame().iter()) + extra,
+                VarStack::size_for(self.var_stack.pop_frame().iter()),
             )));
     }
 

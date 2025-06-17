@@ -48,10 +48,7 @@ fn main() {
                 fn main() void {
                     let f int = 0
                     for let i int = 0; i < 1337; i++ {
-                        if i == 10 {
-                            f = i
-                            break
-                        }
+                        continue
                     }
                     __debug__
                 }

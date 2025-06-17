@@ -327,7 +327,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
             self.instructions.instr_slice_append(exp.size);
 
-            self.instructions.pop_stack_frame(0);
+            self.instructions.pop_stack_frame();
         }
 
         Ok(ast::Type {
@@ -530,7 +530,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
@@ -568,7 +568,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
@@ -581,6 +581,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .stack_instructions
             .label_new("for_break".to_string());
 
+        self.instructions.stack_instructions.jump();
         self.instructions.stack_instructions.jump();
 
         self.instructions
@@ -601,30 +602,39 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.stack_instructions.back_if_true(2);
 
         self.compile_body(&_for.body)?;
-
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
+        // continue will jump here
         self.compile_node(&_for.after_each)?;
 
         self.instructions.stack_instructions.again();
         self.instructions.stack_instructions.pop_index();
 
-        // reset the bool as well, because if we jumped out (we always do), we left it in there
-        self.instructions.pop_stack_frame(ast::BOOL.size);
+        // normal loop exit will jump here
+        self.instructions
+            .instr_reset_dangerous_not_synced(ast::BOOL.size);
 
-        self.instructions.stack_instructions.label_pop(); // After
-        self.instructions.stack_instructions.label_pop(); // Exact
+        self.instructions.stack_instructions.back(1);
+        self.instructions.stack_instructions.pop_index();
+
+        // break will jump here
+        // have to go through all this jumping,
+        // because continue & break resets their stack,
+        // so we have to skip normal loop exit cleanup and pop
+        // only the initializer
+        self.instructions.pop_stack_frame();
+
+        self.instructions.stack_instructions.label_pop();
+        self.instructions.stack_instructions.label_pop();
 
         Ok(())
     }
 
     fn compile_for_break(&mut self) -> Result<()> {
         self.instructions.var_reset_label();
-        // HACK: to fix pop_stack_frame ast::BOOL.size above
-        self.instructions.instr_increment(ast::BOOL.size);
 
         self.instructions
             .stack_instructions
@@ -650,7 +660,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Node::Expression(exp) => {
                 self.instructions.push_stack_frame();
                 self.compile_expression(exp)?;
-                self.instructions.pop_stack_frame(0);
+                self.instructions.pop_stack_frame();
             }
             ast::Node::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
@@ -680,7 +690,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             self.compile_node(node)?;
         }
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
