@@ -33,23 +33,32 @@ fn main() {
                     return second_arg
                 }
 
-                // fn itoa(x int) string {
-                //     let str uint8[] = {}
-                //     let div int = 1
-                //     for {
-                //         x = x / div
-                //         div = div * 10
-                //         append(str, 48 + x % 10)
-                //     }
-                //
-                //     return string(str)
-                // }
+                fn slice_reverse(slice uint8[]) void {
+                    for let i int = 0; i < len(slice) / 2; i++ {
+                        let j int = len(slice)-1-i
+                        let temp uint8 = slice[i]
+                        slice[i] = slice[j]
+                        slice[j] = temp
+                    }
+                }
+
+                fn itoa(x int) string {
+                    let str uint8[] = {}
+                    for {
+                        append(str, uint8(48 + x % 10))
+                        x = x / 10
+                        if x == 0 {
+                            break
+                        }
+                    }
+
+                    slice_reverse(str)
+                    return string(str)
+                }
 
                 fn main() void {
-                    let f int = 0
-                    for let i int = 0; i < 1337; i++ {
-                        continue
-                    }
+                    let one_two_three string = itoa(69420)
+                    syscall_write(1, uint8[](\"\\n\" + one_two_three + \"\\n\"))
                     __debug__
                 }
             ",

@@ -23,6 +23,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(0)
             .ok_or(anyhow!("len: expected first argument"))?;
 
+        // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
 
         let ast::TypeType::Slice(_) = &slice_exp._type else {
@@ -45,6 +46,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
 
+        // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
         let value_exp = self.compile_expression(value_arg)?;
 
@@ -56,7 +58,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             return Err(anyhow!("append: value type does not match slice type"));
         }
 
-        self.instructions.instr_slice_append(slice_exp.size);
+        self.instructions.instr_slice_append(value_exp.size);
 
         Ok(ast::VOID)
     }
@@ -74,6 +76,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(1)
             .ok_or(anyhow!("syscall_write: expected second argument"))?;
 
+        // cleanup align here?
         let exp_slice = self.compile_expression(slice)?;
         let exp_fd = self.compile_expression(fd)?;
 
@@ -461,12 +464,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
         }?;
 
-        let new_stack_size = self.instructions.stack_total_size();
-        let delta_stack_size = new_stack_size - old_stack_size;
+        if exp.size != 0 {
+            let new_stack_size = self.instructions.stack_total_size();
+            let delta_stack_size = new_stack_size - old_stack_size;
 
-        if exp.size != 0 && old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
-            self.instructions
-                .instr_shift(exp.size, delta_stack_size - exp.size - 1);
+            if old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
+                self.instructions
+                    .instr_shift(exp.size, delta_stack_size - exp.size - 1);
+            }
         }
 
         Ok(exp)
@@ -575,7 +580,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
     fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
         self.instructions.push_stack_frame();
-        self.compile_node(&_for.initializer)?;
+        if let Some(v) = &_for.initializer {
+            self.compile_node(v)?;
+        }
 
         self.instructions
             .stack_instructions
@@ -594,16 +601,22 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.var_mark_label();
 
         let bool_size = {
-            self.instructions.push_stack_frame();
-            let exp = self.compile_expression(&_for.expression)?;
-            if exp != ast::BOOL {
-                return Err(anyhow!("compile_for: expected expression to return bool"));
-            }
-            self.instructions.pop_stack_frame_size()
-        };
+            if let Some(v) = &_for.expression {
+                self.instructions.push_stack_frame();
+                let exp = self.compile_expression(v)?;
+                if exp != ast::BOOL {
+                    return Err(anyhow!("compile_for: expected expression to return bool"));
+                }
+                let size = self.instructions.pop_stack_frame_size();
 
-        self.instructions.instr_negate_bool();
-        self.instructions.stack_instructions.back_if_true(2);
+                self.instructions.instr_negate_bool();
+                self.instructions.stack_instructions.back_if_true(2);
+
+                size
+            } else {
+                0
+            }
+        };
 
         self.compile_body(&_for.body)?;
         self.instructions.pop_stack_frame();
@@ -612,7 +625,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.stack_instructions.pop_index();
 
         // continue will jump here
-        self.compile_node(&_for.after_each)?;
+        if let Some(v) = &_for.after_each {
+            self.compile_node(v)?;
+        }
 
         self.instructions.stack_instructions.again();
         self.instructions.stack_instructions.pop_index();
@@ -625,6 +640,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.stack_instructions.pop_index();
 
         // break will jump here
+        //
         // have to go through all this jumping,
         // because continue & break resets their stack,
         // so we have to skip normal loop exit cleanup and pop

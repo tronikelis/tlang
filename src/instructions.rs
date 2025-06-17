@@ -439,9 +439,10 @@ impl Instructions {
     }
 
     pub fn pop_stack_frame(&mut self) {
+        let frame = self.var_stack.pop_frame();
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
-                VarStack::size_for(self.var_stack.pop_frame().iter()),
+                VarStack::size_for(frame.iter()),
             )));
     }
 
