@@ -23,6 +23,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(0)
             .ok_or(anyhow!("len: expected first argument"))?;
 
+        // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
 
         let ast::TypeType::Slice(_) = &slice_exp._type else {
@@ -45,6 +46,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
 
+        // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
         let value_exp = self.compile_expression(value_arg)?;
 
@@ -56,7 +58,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             return Err(anyhow!("append: value type does not match slice type"));
         }
 
-        self.instructions.instr_slice_append(slice_exp.size);
+        self.instructions.instr_slice_append(value_exp.size);
 
         Ok(ast::VOID)
     }
@@ -74,6 +76,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             .get(1)
             .ok_or(anyhow!("syscall_write: expected second argument"))?;
 
+        // cleanup align here?
         let exp_slice = self.compile_expression(slice)?;
         let exp_fd = self.compile_expression(fd)?;
 
@@ -179,7 +182,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let offset = self
             .instructions
-            .get_var_offset(&variable.identifier)
+            .var_get_offset(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
         self.instructions.instr_increment(variable._type.size);
@@ -327,7 +330,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
             self.instructions.instr_slice_append(exp.size);
 
-            self.instructions.pop_stack_frame(0);
+            self.instructions.pop_stack_frame();
         }
 
         Ok(ast::Type {
@@ -461,12 +464,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
         }?;
 
-        let new_stack_size = self.instructions.stack_total_size();
-        let delta_stack_size = new_stack_size - old_stack_size;
+        if exp.size != 0 {
+            let new_stack_size = self.instructions.stack_total_size();
+            let delta_stack_size = new_stack_size - old_stack_size;
 
-        if exp.size != 0 && old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
-            self.instructions
-                .instr_shift(exp.size, delta_stack_size - exp.size - 1);
+            if old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
+                self.instructions
+                    .instr_shift(exp.size, delta_stack_size - exp.size - 1);
+            }
         }
 
         Ok(exp)
@@ -500,7 +505,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 let offset = self
                     .instructions
-                    .get_var_offset(&var.identifier)
+                    .var_get_offset(&var.identifier)
                     .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
 
                 if var._type != exp {
@@ -530,7 +535,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
@@ -568,35 +573,102 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }
 
     fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
         self.instructions.push_stack_frame();
-        self.compile_node(&_for.initializer)?;
-
-        self.instructions.stack_instructions.jump();
-        self.instructions.push_stack_frame();
-
-        let exp = self.compile_expression(&_for.expression)?;
-        if exp != ast::BOOL {
-            return Err(anyhow!("compile_for: expected expression to return bool"));
+        if let Some(v) = &_for.initializer {
+            self.compile_node(v)?;
         }
 
-        self.instructions.instr_negate_bool();
-        self.instructions.stack_instructions.back_if_true(1);
+        self.instructions
+            .stack_instructions
+            .label_new("for_break".to_string());
+
+        self.instructions.stack_instructions.jump();
+        self.instructions.stack_instructions.jump();
+
+        self.instructions
+            .stack_instructions
+            .label_new("for_continue".to_string());
+
+        self.instructions.stack_instructions.jump();
+
+        self.instructions.push_stack_frame();
+        self.instructions.var_mark_label();
+
+        let bool_size = {
+            if let Some(v) = &_for.expression {
+                self.instructions.push_stack_frame();
+                let exp = self.compile_expression(v)?;
+                if exp != ast::BOOL {
+                    return Err(anyhow!("compile_for: expected expression to return bool"));
+                }
+                let size = self.instructions.pop_stack_frame_size();
+
+                self.instructions.instr_negate_bool();
+                self.instructions.stack_instructions.back_if_true(2);
+
+                size
+            } else {
+                0
+            }
+        };
 
         self.compile_body(&_for.body)?;
-        self.compile_node(&_for.after_each)?;
+        self.instructions.pop_stack_frame();
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.stack_instructions.back(1);
+        self.instructions.stack_instructions.pop_index();
+
+        // continue will jump here
+        if let Some(v) = &_for.after_each {
+            self.compile_node(v)?;
+        }
+
         self.instructions.stack_instructions.again();
         self.instructions.stack_instructions.pop_index();
 
-        // reset the bool as well, because if we jumped out (we always do), we left it in there
-        self.instructions.pop_stack_frame(ast::BOOL.size);
+        // normal loop exit will jump here
+        self.instructions
+            .instr_reset_dangerous_not_synced(bool_size);
+
+        self.instructions.stack_instructions.back(1);
+        self.instructions.stack_instructions.pop_index();
+
+        // break will jump here
+        //
+        // have to go through all this jumping,
+        // because continue & break resets their stack,
+        // so we have to skip normal loop exit cleanup and pop
+        // only the initializer
+        self.instructions.pop_stack_frame();
+
+        self.instructions.stack_instructions.label_pop();
+        self.instructions.stack_instructions.label_pop();
+
+        Ok(())
+    }
+
+    fn compile_for_break(&mut self) -> Result<()> {
+        self.instructions.var_reset_label();
+
+        self.instructions
+            .stack_instructions
+            .label_jump("for_break")?;
+
+        Ok(())
+    }
+
+    fn compile_for_continue(&mut self) -> Result<()> {
+        self.instructions.var_reset_label();
+
+        self.instructions
+            .stack_instructions
+            .label_jump("for_continue")?;
 
         Ok(())
     }
@@ -608,7 +680,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Node::Expression(exp) => {
                 self.instructions.push_stack_frame();
                 self.compile_expression(exp)?;
-                self.instructions.pop_stack_frame(0);
+                self.instructions.pop_stack_frame();
             }
             ast::Node::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
@@ -620,6 +692,12 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 self.instructions.instr_debug();
             }
             ast::Node::For(v) => self.compile_for(v)?,
+            ast::Node::Break => {
+                self.compile_for_break()?;
+            }
+            ast::Node::Continue => {
+                self.compile_for_continue()?;
+            }
         };
 
         Ok(())
@@ -632,7 +710,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             self.compile_node(node)?;
         }
 
-        self.instructions.pop_stack_frame(0);
+        self.instructions.pop_stack_frame();
 
         Ok(())
     }

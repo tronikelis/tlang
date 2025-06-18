@@ -33,31 +33,45 @@ fn main() {
                     return second_arg
                 }
 
-                fn main() void {
-                    let SIZE int = 40
-                    let SIZE8 uint8 = uint8(20)
-                    let ok uint8 = uint8(40)
+                fn slice_reverse(slice uint8[]) void {
+                    for let i int = 0; i < len(slice) / 2; i++ {
+                        let j int = len(slice)-1-i
+                        let temp uint8 = slice[i]
+                        slice[i] = slice[j]
+                        slice[j] = temp
+                    }
+                }
 
-                    let nice_man int = foobar(uint8(8), 20)
-
-                    for let i int = 0; i < SIZE; i++ {
-
-                        for let j int = SIZE-i-1; j > 0; j-- {
-                            syscall_write(1, uint8[](\" \"))
+                fn itoa(x int) string {
+                    let str uint8[] = {}
+                    for {
+                        append(str, uint8(48 + x % 10))
+                        x = x / 10
+                        if x == 0 {
+                            break
                         }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        for let j int = i; j > 0; j-- {
-                            syscall_write(1, uint8[](\"#\"))
-                        }
-
-                        syscall_write(1, uint8[](\"\\n\"))
                     }
 
-                    let foo int = factorial(5)
+                    slice_reverse(str)
+                    return string(str)
+                }
+
+                fn main() void {
+                    let one_two_three string = itoa(69420)
+
+                    for let i int = 0; i < 100; i++ {
+                        let str string = \"\"
+
+                        if i % 3 == 0 {
+                            str = str + \"Fizz\"
+                        }
+                        if i % 5 == 0 {
+                            str = str + \"Buzz\"
+                        }
+
+                        syscall_write(1, uint8[](itoa(i) + \" \" + str + \"\\n\"))
+                    }
+
                     __debug__
                 }
             ",

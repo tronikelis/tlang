@@ -229,9 +229,9 @@ pub struct Else {
 
 #[derive(Debug, Clone)]
 pub struct For {
-    pub initializer: Box<Node>,
-    pub expression: Expression,
-    pub after_each: Box<Node>,
+    pub initializer: Option<Box<Node>>,
+    pub expression: Option<Expression>,
+    pub after_each: Option<Box<Node>>,
     pub body: Vec<Node>,
 }
 
@@ -244,6 +244,8 @@ pub enum Node {
     If(If),
     For(For),
     Debug,
+    Break,
+    Continue,
 }
 
 #[derive(Debug)]
@@ -366,6 +368,26 @@ impl<'a> TokenParser<'a> {
 
         self.variables.push_frame();
 
+        // for {}
+        if let lexer::Token::COpen = self.peek_token_err(0)? {
+            return Ok(For {
+                body: self.parse_body()?,
+                initializer: None,
+                expression: None,
+                after_each: None,
+            });
+        }
+
+        // for false {}
+        if let Ok(expression) = self.parse_expression() {
+            return Ok(For {
+                body: self.parse_body()?,
+                expression: Some(expression),
+                initializer: None,
+                after_each: None,
+            });
+        }
+
         let initializer = self.parse_token()?;
 
         self.expect_next_token(lexer::Token::Semicolon)?;
@@ -382,9 +404,9 @@ impl<'a> TokenParser<'a> {
         self.variables.pop_frame();
 
         Ok(For {
-            initializer: Box::new(initializer),
-            expression,
-            after_each: Box::new(after_each),
+            initializer: Some(Box::new(initializer)),
+            expression: Some(expression),
+            after_each: Some(Box::new(after_each)),
             body,
         })
     }
@@ -441,6 +463,14 @@ impl<'a> TokenParser<'a> {
             }
             lexer::Token::If => Ok(Node::If(self.parse_if()?)),
             lexer::Token::For => Ok(Node::For(self.parse_for()?)),
+            lexer::Token::Break => {
+                self.next();
+                Ok(Node::Break)
+            }
+            lexer::Token::Continue => {
+                self.next();
+                Ok(Node::Continue)
+            }
             _ => self.parse_token_else(),
         }
     }
@@ -710,9 +740,9 @@ impl<'a> TokenParser<'a> {
 
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
-            lexer::Token::Star | lexer::Token::Slash => Some((11, 12)),
-            lexer::Token::Plus | lexer::Token::Minus => Some((9, 10)),
-            lexer::Token::Percent => Some((7, 8)),
+            lexer::Token::Percent => Some((11, 12)),
+            lexer::Token::Star | lexer::Token::Slash => Some((9, 10)),
+            lexer::Token::Plus | lexer::Token::Minus => Some((7, 8)),
             lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => Some((5, 6)),
             lexer::Token::AmperAmper => Some((3, 4)),
             lexer::Token::PipePipe => Some((1, 2)),
