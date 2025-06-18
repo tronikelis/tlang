@@ -45,6 +45,7 @@ pub enum Token {
     AmperAmper,
     PipePipe,
     EqualsEquals,
+    BangEquals,
     Debug,
     PlusPlus,
     MinusMinus,
@@ -53,10 +54,12 @@ pub enum Token {
     Percent,
     Break,
     Continue,
+    Bang,
 }
 
-const CONTROL_CHAR: [char; 19] = [
+const CONTROL_CHAR: [char; 20] = [
     ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"', '%',
+    '!',
 ];
 
 pub struct Lexer {
@@ -168,6 +171,19 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    '!' => {
+                        match self.peek_char(1).ok_or(anyhow!("todo"))? {
+                            '=' => {
+                                self.next();
+                                tokens.push(Token::BangEquals);
+                            }
+                            _ => {
+                                tokens.push(Token::Bang);
+                            }
+                        }
+                        self.next();
+                        continue;
+                    }
                     '%' => {
                         tokens.push(Token::Percent);
                         self.next();

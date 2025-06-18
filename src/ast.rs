@@ -179,6 +179,7 @@ pub enum Expression {
     TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
     Infix(Infix),
+    Negate(Box<Expression>),
     Literal(Literal),
     Variable(Variable),
     Arithmetic(Box<Arithmetic>),
@@ -199,6 +200,7 @@ pub enum CompareType {
     Gt,
     Lt,
     Equals,
+    NotEquals,
 }
 
 #[derive(Debug, Clone)]
@@ -741,11 +743,18 @@ impl<'a> TokenParser<'a> {
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
             lexer::Token::Percent => Some((11, 12)),
+
             lexer::Token::Star | lexer::Token::Slash => Some((9, 10)),
             lexer::Token::Plus | lexer::Token::Minus => Some((7, 8)),
-            lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => Some((5, 6)),
+
+            lexer::Token::Lt
+            | lexer::Token::Gt
+            | lexer::Token::EqualsEquals
+            | lexer::Token::BangEquals => Some((5, 6)),
+
             lexer::Token::AmperAmper => Some((3, 4)),
             lexer::Token::PipePipe => Some((1, 2)),
+
             _ => None,
         }
     }
@@ -792,6 +801,10 @@ impl<'a> TokenParser<'a> {
                             _ => unreachable!(),
                         },
                     })
+                }
+                lexer::Token::Bang => {
+                    self.next();
+                    Expression::Negate(Box::new(self.parse_expression_pratt(100)?))
                 }
                 lexer::Token::COpen => self.parse_expression_list()?,
                 lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
@@ -859,7 +872,10 @@ impl<'a> TokenParser<'a> {
                         },
                     }))
                 }
-                lexer::Token::Lt | lexer::Token::Gt | lexer::Token::EqualsEquals => {
+                lexer::Token::Lt
+                | lexer::Token::Gt
+                | lexer::Token::EqualsEquals
+                | lexer::Token::BangEquals => {
                     left = Expression::Compare(Box::new(Compare {
                         left,
                         right,
@@ -867,6 +883,7 @@ impl<'a> TokenParser<'a> {
                             lexer::Token::Lt => CompareType::Lt,
                             lexer::Token::Gt => CompareType::Gt,
                             lexer::Token::EqualsEquals => CompareType::Equals,
+                            lexer::Token::BangEquals => CompareType::NotEquals,
                             _ => unreachable!(),
                         },
                     }))
@@ -906,7 +923,11 @@ impl<'a> TokenParser<'a> {
         if token == *self.peek_token_err(0)? {
             Ok(())
         } else {
-            Err(anyhow!("expect_next_token: assertion failed"))
+            Err(anyhow!(
+                "expect_next_token: assertion failed, want: {:#?}, got: {:#?}",
+                token,
+                self.peek_token_err(0)
+            ))
         }
     }
 

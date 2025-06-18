@@ -8,6 +8,7 @@ pub enum Instruction {
     JumpAndLink(String),
     Jump((usize, usize)),
     JumpIfTrue((usize, usize)),
+    JumpIfFalse((usize, usize)),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +161,12 @@ impl StackInstructions {
         let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
         self.push(Instruction::JumpIfTrue((target, target_last)));
+    }
+
+    pub fn back_if_false(&mut self, offset: usize) {
+        let target = self.index[self.index.len() - 1 - offset];
+        let target_last = self.instructions[target].len();
+        self.push(Instruction::JumpIfFalse((target, target_last)));
     }
 
     pub fn again(&mut self) {
