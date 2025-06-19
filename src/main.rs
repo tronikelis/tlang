@@ -59,6 +59,10 @@ fn main() {
                 fn main() void {
                     let one_two_three string = itoa(69420)
 
+                    if false && true {
+                        syscall_write(1, uint8[](\"NICE GUYS\\n\"))
+                    }
+
                     for let i int = 0; i < 100; i++ {
                         let str string = \"\"
 
@@ -69,7 +73,11 @@ fn main() {
                             str = str + \"Buzz\"
                         }
 
-                        syscall_write(1, uint8[](itoa(i) + \" \" + str + \"\\n\"))
+                        if i % 3 != 0 && i % 5 != 0 {
+                            str = str + itoa(i)
+                        }
+
+                        syscall_write(1, uint8[](str + \"\\n\"))
                     }
 
                     __debug__

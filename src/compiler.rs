@@ -263,7 +263,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 a = self.compile_expression(&compare.left)?;
             }
             // dont matter
-            ast::CompareType::Equals => {
+            ast::CompareType::Equals | ast::CompareType::NotEquals => {
                 a = self.compile_expression(&compare.right)?;
                 b = self.compile_expression(&compare.left)?;
             }
@@ -291,6 +291,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             }
             ast::CompareType::Equals => {
                 self.instructions.instr_compare_i();
+            }
+            ast::CompareType::NotEquals => {
+                self.instructions.instr_compare_i();
+                self.instructions.instr_negate_bool();
             }
         }
 
@@ -367,7 +371,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
 
         match andor._type {
-            // skip over if this is true
             ast::AndOrType::Or => {
                 self.instructions.stack_instructions.back_if_true(1);
 
@@ -378,11 +381,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 self.instructions.instr_or();
             }
-            // continue if this is true
             ast::AndOrType::And => {
-                self.instructions.instr_negate_bool();
-                self.instructions.stack_instructions.back_if_true(1);
-                self.instructions.instr_negate_bool();
+                self.instructions.stack_instructions.back_if_false(1);
 
                 let right = self.compile_expression(&andor.right)?;
                 if right != ast::BOOL {
@@ -448,6 +448,17 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
     }
 
+    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<ast::Type> {
+        let exp_bool = self.compile_expression(negate)?;
+        if exp_bool != ast::BOOL {
+            return Err(anyhow!("can only negate bools"));
+        }
+
+        self.instructions.instr_negate_bool();
+
+        Ok(ast::BOOL)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -462,6 +473,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::List(v) => self.compile_list(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
+            ast::Expression::Negate(v) => self.compile_negate(v),
         }?;
 
         if exp.size != 0 {

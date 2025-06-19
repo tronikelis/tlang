@@ -89,6 +89,7 @@ pub enum Instruction {
     Jump(usize),
     Return,
     JumpIfTrue(usize),
+    JumpIfFalse(usize),
 
     ToBoolI,
     NegateBool,
@@ -281,6 +282,14 @@ impl Vm {
                 }
                 Instruction::Increment(by) => {
                     self.stack.increment(by);
+                }
+                Instruction::JumpIfFalse(i) => {
+                    let boolean = self.stack.pop::<isize>();
+                    self.stack.push(boolean);
+                    if boolean != 1 {
+                        pc = i;
+                        continue;
+                    }
                 }
                 Instruction::JumpIfTrue(i) => {
                     let boolean = self.stack.pop::<isize>();

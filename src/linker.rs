@@ -36,6 +36,14 @@ fn link_jumps(
                     0,
                 ));
             }
+            instructions::Instruction::JumpIfFalse((i, inner_offset)) => {
+                *v = instructions::Instruction::JumpIfFalse((
+                    *index_to_len.get(i).ok_or(anyhow!("index_to_len None"))?
+                        + offset
+                        + *inner_offset,
+                    0,
+                ));
+            }
             _ => {}
         }
     }
@@ -75,6 +83,7 @@ pub fn link(
                 }
                 instructions::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
                 instructions::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
+                instructions::Instruction::JumpIfFalse((v, _)) => vm::Instruction::JumpIfFalse(*v),
             })
         })
         .collect::<Result<Vec<vm::Instruction>>>()?;
