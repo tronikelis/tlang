@@ -64,6 +64,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        if call.arguments.len() != call.function.arguments.len() {
+            return Err(anyhow!("compile_function_call: argument count mismatch"));
+        }
+
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
