@@ -87,6 +87,14 @@ pub const STRING: Type = Type {
     size: SLICE_SIZE,
     _type: TypeType::Scalar(lexer::Type::String),
 };
+pub const PTR: Type = Type {
+    size: size_of::<usize>(),
+    _type: TypeType::Scalar(lexer::Type::Ptr),
+};
+pub const UINT: Type = Type {
+    size: size_of::<usize>(),
+    _type: TypeType::Scalar(lexer::Type::Uint),
+};
 
 lazy_static! {
     pub static ref SLICE_UINT8: Type = Type {
@@ -590,6 +598,8 @@ impl<'a> TokenParser<'a> {
                     lexer::Type::CompilerType => COMPILER_TYPE,
                     lexer::Type::Uint8 => UINT8,
                     lexer::Type::String => STRING,
+                    lexer::Type::Ptr => PTR,
+                    lexer::Type::Uint => UINT,
                 }
             }
             _ => return Err(anyhow!("parse_type: expected type")),

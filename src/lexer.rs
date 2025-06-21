@@ -8,6 +8,8 @@ pub enum Type {
     CompilerType,
     Uint8,
     String,
+    Ptr,
+    Uint,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -80,6 +82,16 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
+                "uint" => {
+                    tokens.push(Token::Type(Type::Uint));
+                    self.read_next_word();
+                    continue;
+                }
+                "ptr" => {
+                    tokens.push(Token::Type(Type::Ptr));
+                    self.read_next_word();
+                    continue;
+                }
                 "break" => {
                     tokens.push(Token::Break);
                     self.read_next_word();

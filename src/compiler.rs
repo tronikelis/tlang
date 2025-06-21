@@ -63,43 +63,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::VOID)
     }
 
-    fn compile_function_builtin_syscall_write(
-        &mut self,
-        call: &ast::FunctionCall,
-    ) -> Result<ast::Type> {
-        let fd = call
-            .arguments
-            .get(0)
-            .ok_or(anyhow!("syscall_write: expected first argument"))?;
-        let slice = call
-            .arguments
-            .get(1)
-            .ok_or(anyhow!("syscall_write: expected second argument"))?;
-
-        // cleanup align here?
-        let exp_slice = self.compile_expression(slice)?;
-        let exp_fd = self.compile_expression(fd)?;
-
-        if exp_fd != ast::INT {
-            return Err(anyhow!("syscall_write: first argument not an integer"));
-        }
-
-        if exp_slice != *ast::SLICE_UINT8 {
-            return Err(anyhow!(
-                "syscall_write: second argument should be uint8 slice"
-            ));
-        }
-
-        self.instructions.instr_syscall_write();
-
-        Ok(ast::VOID)
-    }
-
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
-            "syscall_write" => return self.compile_function_builtin_syscall_write(call),
             _ => {}
         }
 
@@ -123,6 +90,38 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             }
             self.instructions.pop_stack_frame_size()
         };
+
+        match call.function.identifier.as_str() {
+            "syscall0" => {
+                self.instructions.instr_syscall0();
+                return Ok(ast::UINT);
+            }
+            "syscall1" => {
+                self.instructions.instr_syscall1();
+                return Ok(ast::UINT);
+            }
+            "syscall2" => {
+                self.instructions.instr_syscall2();
+                return Ok(ast::UINT);
+            }
+            "syscall3" => {
+                self.instructions.instr_syscall3();
+                return Ok(ast::UINT);
+            }
+            "syscall4" => {
+                self.instructions.instr_syscall4();
+                return Ok(ast::UINT);
+            }
+            "syscall5" => {
+                self.instructions.instr_syscall5();
+                return Ok(ast::UINT);
+            }
+            "syscall6" => {
+                self.instructions.instr_syscall6();
+                return Ok(ast::UINT);
+            }
+            _ => {}
+        }
 
         let return_size = call.function.return_type.size;
 
@@ -408,17 +407,23 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::INT => match &type_cast._type {
                 &ast::UINT8 => {
                     self.instructions.instr_cast_int_uint8();
-
                     Ok(ast::UINT8)
+                }
+                &ast::UINT => {
+                    self.instructions.instr_cast_int_uint();
+                    Ok(ast::UINT)
                 }
                 _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
             },
             ast::UINT8 => match &type_cast._type {
                 &ast::INT => {
                     self.instructions.instr_cast_uint8_int();
-
                     Ok(ast::INT)
                 }
+                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
+            },
+            ast::PTR => match &type_cast._type {
+                &ast::UINT => Ok(ast::UINT),
                 _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
             },
             // we have to do this because other types are runtime created
@@ -435,6 +440,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 } else if target == *ast::SLICE_UINT8 {
                     if type_cast._type == ast::STRING {
                         Ok(ast::STRING.clone())
+                    } else if type_cast._type == ast::PTR {
+                        self.instructions.instr_cast_slice_ptr();
+                        Ok(ast::PTR)
                     } else {
                         Err(anyhow!(
                             "compile_type_cast: cant cast into {:#?}",
