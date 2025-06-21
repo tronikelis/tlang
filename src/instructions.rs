@@ -258,13 +258,6 @@ impl Instructions {
             .push(VarStackItem::Reset(ast::SLICE_SIZE + size));
     }
 
-    pub fn instr_syscall_write(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::SyscallWrite));
-        self.var_stack
-            .push(VarStackItem::Reset(ast::SLICE_SIZE + ast::INT.size));
-    }
-
     pub fn instr_and(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::And));
@@ -412,6 +405,16 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Increment(ast::INT.size));
     }
 
+    pub fn instr_cast_slice_ptr(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::CastSlicePtr));
+    }
+
+    pub fn instr_cast_int_uint(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::CastIntUint));
+    }
+
     pub fn instr_debug(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Debug));
@@ -428,6 +431,47 @@ impl Instructions {
                 .push(Instruction::Real(vm::Instruction::Shift(size + amount - i)));
         }
         self.var_stack.push(VarStackItem::Reset(amount));
+    }
+
+    pub fn instr_syscall0(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall0));
+    }
+
+    pub fn instr_syscall1(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall1));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 1));
+    }
+
+    pub fn instr_syscall2(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall2));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 2));
+    }
+
+    pub fn instr_syscall3(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall3));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 3));
+    }
+
+    pub fn instr_syscall4(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall4));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 4));
+    }
+
+    pub fn instr_syscall5(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall5));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 5));
+    }
+
+    pub fn instr_syscall6(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Syscall6));
+        self.var_stack.push(VarStackItem::Reset(ast::UINT.size * 6));
     }
 
     pub fn push_alignment(&mut self, size: usize) {

@@ -11,14 +11,21 @@ mod linker;
 fn main() {
     let code = String::from(
         "
-                fn len(slice Type) int {
-                    // compiler builtin
-                }
-                fn append(slice Type, value Type) void {
-                    // compiler builtin
-                }
-                fn syscall_write(fd int, slice uint8[]) void {
-                    // compiler builtin
+                fn len(slice Type) int {}
+                fn append(slice Type, value Type) void {}
+
+                fn syscall0(sysno uint) uint {}
+                fn syscall1(sysno uint, arg1 uint) uint {}
+                fn syscall2(sysno uint, arg1 uint, arg2 uint) uint {}
+                fn syscall2(sysno uint, arg1 uint, arg2 uint) uint {}
+                fn syscall3(sysno uint, arg1 uint, arg2 uint, arg3 uint) uint {}
+                fn syscall4(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint) uint {}
+                fn syscall5(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint) uint {}
+                fn syscall6(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint, arg6 uint) uint {}
+
+                fn syscall_write(fd int, slice uint8[]) uint {
+                    // ssize_t write(int fd, const void buf[.count], size_t count);
+                    return syscall3(uint(1), uint(fd), uint(ptr(slice)), uint(len(slice)))
                 }
 
                 fn factorial(n int) int {
