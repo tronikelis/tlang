@@ -5,8 +5,8 @@ use std::{
 };
 use syscalls::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6, Sysno};
 
-fn layout_u8(size: usize) -> Layout {
-    Layout::from_size_align(size, 1).unwrap()
+fn layout(size: usize) -> Layout {
+    Layout::from_size_align(size, size_of::<usize>()).unwrap()
 }
 
 #[derive(Debug)]
@@ -117,14 +117,14 @@ pub struct Stack {
 impl Drop for Stack {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.data, layout_u8(self.size));
+            dealloc(self.data, layout(self.size));
         };
     }
 }
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let data = unsafe { alloc(layout_u8(size)) };
+        let data = unsafe { alloc(layout(size)) };
 
         Self {
             sp: unsafe { data.byte_offset(size as isize) },
