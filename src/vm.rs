@@ -27,28 +27,27 @@ impl GcObject {
 }
 
 struct Gc {
-    objects: RefCell<HashMap<*const u8, GcObject>>,
+    objects: HashMap<*const u8, RefCell<GcObject>>,
 }
 
 impl Gc {
     fn new() -> Self {
         Self {
-            objects: RefCell::new(HashMap::new()),
+            objects: HashMap::new(),
         }
     }
 
-    fn add_object(&self, object: GcObject) {
+    fn add_object(&mut self, object: GcObject) {
         let addr: *const u8 = match object.data {
             GcObjectData::Slice(slice) => slice.cast(),
         };
-        self.objects.borrow_mut().insert(addr, object);
+        self.objects.insert(addr, RefCell::new(object));
     }
 
-    fn mark_object(&self, object: &mut GcObject) {
-        println!("mark_object: {object:#?}");
-        object.marked = true;
+    fn mark_object(&self, object: &RefCell<GcObject>) {
+        object.borrow_mut().marked = true;
 
-        match object.data {
+        match object.borrow().data {
             GcObjectData::Slice(slice) => {
                 let slice = unsafe { &mut *slice };
                 let len = slice.data.len();
@@ -66,7 +65,7 @@ impl Gc {
                         val
                     };
 
-                    if let Some(obj) = self.objects.borrow_mut().get_mut(&addr) {
+                    if let Some(obj) = self.objects.get(&addr) {
                         self.mark_object(obj)
                     }
                 }
@@ -77,8 +76,8 @@ impl Gc {
     // [align 8] sp_end end is pointing to the end address + 1
     // [align ?] sp is pointing to current address unknown size
     fn mark(&self, sp: *const u8, mut sp_end: *const u8) {
-        self.objects.borrow_mut().iter_mut().for_each(|(_, obj)| {
-            obj.marked = false;
+        self.objects.iter().for_each(|(_, obj)| {
+            obj.borrow_mut().marked = false;
         });
 
         while unsafe { sp_end.byte_offset(size_of::<usize>() as isize) } >= sp {
@@ -87,18 +86,18 @@ impl Gc {
             };
 
             let addr: *const u8 = unsafe { *sp_end.cast() };
-            if let Some(obj) = self.objects.borrow_mut().get_mut(&addr) {
+            if let Some(obj) = self.objects.get(&addr) {
                 self.mark_object(obj);
             }
         }
     }
 
-    fn sweep(&self) {
+    fn sweep(&mut self) {
         let mut to_remove = Vec::new();
 
-        for (addr, obj) in self.objects.borrow().iter() {
-            if !obj.marked {
-                match obj.data {
+        for (addr, obj) in &self.objects {
+            if !obj.borrow().marked {
+                match obj.borrow().data {
                     GcObjectData::Slice(slice) => {
                         let _ = unsafe { Box::from_raw(slice) };
                     }
@@ -109,11 +108,11 @@ impl Gc {
         }
 
         for v in to_remove {
-            self.objects.borrow_mut().remove(&v);
+            self.objects.remove(&v);
         }
     }
 
-    fn run(&self, sp: *const u8, sp_end: *const u8) {
+    fn run(&mut self, sp: *const u8, sp_end: *const u8) {
         self.mark(sp, sp_end);
         self.sweep();
     }
