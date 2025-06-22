@@ -1,9 +1,123 @@
-use core::str;
+use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
+    collections::HashMap,
     mem, ptr, slice,
 };
 use syscalls::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6, Sysno};
+
+#[derive(Debug)]
+enum GcObjectData {
+    Slice(*mut Slice),
+}
+
+#[derive(Debug)]
+struct GcObject {
+    marked: bool,
+    data: GcObjectData,
+}
+
+impl GcObject {
+    fn new(data: GcObjectData) -> Self {
+        Self {
+            marked: false,
+            data,
+        }
+    }
+}
+
+struct Gc {
+    objects: RefCell<HashMap<*const u8, GcObject>>,
+}
+
+impl Gc {
+    fn new() -> Self {
+        Self {
+            objects: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn add_object(&self, object: GcObject) {
+        let addr: *const u8 = match object.data {
+            GcObjectData::Slice(slice) => slice.cast(),
+        };
+        self.objects.borrow_mut().insert(addr, object);
+    }
+
+    fn mark_object(&self, object: &mut GcObject) {
+        println!("mark_object: {object:#?}");
+        object.marked = true;
+
+        match object.data {
+            GcObjectData::Slice(slice) => {
+                let slice = unsafe { &mut *slice };
+                let len = slice.data.len();
+
+                // check if addresses are even possible
+                if len % size_of::<usize>() != 0 {
+                    return;
+                }
+
+                let mut ptr = slice.data.as_ptr();
+                for _ in 0..len / size_of::<usize>() {
+                    let addr: *const u8 = unsafe {
+                        let val = *ptr.cast();
+                        ptr = ptr.byte_offset(size_of::<usize>() as isize);
+                        val
+                    };
+
+                    if let Some(obj) = self.objects.borrow_mut().get_mut(&addr) {
+                        self.mark_object(obj)
+                    }
+                }
+            }
+        }
+    }
+
+    // [align 8] sp_end end is pointing to the end address + 1
+    // [align ?] sp is pointing to current address unknown size
+    fn mark(&self, sp: *const u8, mut sp_end: *const u8) {
+        self.objects.borrow_mut().iter_mut().for_each(|(_, obj)| {
+            obj.marked = false;
+        });
+
+        while unsafe { sp_end.byte_offset(size_of::<usize>() as isize) } >= sp {
+            unsafe {
+                sp_end = sp_end.byte_offset(-(size_of::<usize>() as isize));
+            };
+
+            let addr: *const u8 = unsafe { *sp_end.cast() };
+            if let Some(obj) = self.objects.borrow_mut().get_mut(&addr) {
+                self.mark_object(obj);
+            }
+        }
+    }
+
+    fn sweep(&self) {
+        let mut to_remove = Vec::new();
+
+        for (addr, obj) in self.objects.borrow().iter() {
+            if !obj.marked {
+                match obj.data {
+                    GcObjectData::Slice(slice) => {
+                        let _ = unsafe { Box::from_raw(slice) };
+                    }
+                }
+
+                to_remove.push(*addr);
+            }
+        }
+
+        for v in to_remove {
+            self.objects.borrow_mut().remove(&v);
+        }
+    }
+
+    fn run(&self, sp: *const u8, sp_end: *const u8) {
+        self.mark(sp, sp_end);
+        self.sweep();
+    }
+}
 
 fn layout(size: usize) -> Layout {
     Layout::from_size_align(size, size_of::<usize>()).unwrap()
@@ -133,6 +247,10 @@ impl Stack {
         }
     }
 
+    fn sp_end(&self) -> *mut u8 {
+        unsafe { self.data.byte_offset(self.size as isize) }
+    }
+
     fn pop_size(&mut self, size: usize) -> &[u8] {
         unsafe {
             let slice = slice::from_raw_parts(self.sp, size);
@@ -238,6 +356,7 @@ pub struct Vm {
     stack: Stack,
     instructions: Vec<Instruction>,
     static_memory: StaticMemory,
+    gc: Gc,
 }
 
 impl Vm {
@@ -246,6 +365,7 @@ impl Vm {
             stack: Stack::new(4096),
             instructions,
             static_memory,
+            gc: Gc::new(),
         };
     }
 
@@ -356,7 +476,10 @@ impl Vm {
                     self.stack.push(a * b);
                 }
                 Instruction::PushSlice => {
-                    self.stack.push(Slice::new());
+                    let slice = Slice::new();
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                    self.stack.push(slice);
                 }
                 Instruction::SliceAppend(size) => {
                     let item = self.stack.pop_size(size).to_vec();
@@ -410,7 +533,10 @@ impl Vm {
                     let slice =
                         unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
                     slice.concat(a);
-                    self.stack.push(slice as *mut Slice);
+                    let slice = slice as *mut Slice;
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                    self.stack.push(slice);
                 }
                 Instruction::ModuloI => {
                     let a = self.stack.pop::<isize>();
@@ -477,6 +603,7 @@ impl Vm {
                 }
             }
 
+            self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
     }
