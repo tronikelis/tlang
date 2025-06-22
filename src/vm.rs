@@ -45,6 +45,9 @@ impl Gc {
     }
 
     fn mark_object(&self, object: &RefCell<GcObject>) {
+        if object.borrow().marked {
+            return;
+        }
         object.borrow_mut().marked = true;
 
         match object.borrow().data {
@@ -80,7 +83,7 @@ impl Gc {
             obj.borrow_mut().marked = false;
         });
 
-        while unsafe { sp_end.byte_offset(size_of::<usize>() as isize) } >= sp {
+        while unsafe { sp_end.byte_offset(-(size_of::<usize>() as isize)) } >= sp {
             unsafe {
                 sp_end = sp_end.byte_offset(-(size_of::<usize>() as isize));
             };
