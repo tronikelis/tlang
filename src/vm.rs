@@ -96,7 +96,7 @@ impl Gc {
     }
 
     fn sweep(&mut self) {
-        let mut to_remove = Vec::new();
+        let mut to_remove = Vec::with_capacity(1 << 8);
 
         for (addr, obj) in &self.objects {
             if !obj.borrow().marked {
