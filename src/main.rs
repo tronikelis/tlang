@@ -24,6 +24,10 @@ fn main() {
 
                 fn add(x int...) int {
                     let final int = 0
+                    let x int[] = int[](x)
+                    for let i int = 0; i < len(x); i++ {
+                        final = final + x[i]
+                    }
                     return final
                 }
 
@@ -75,7 +79,9 @@ fn main() {
                     }
 
                     let nums int[] = {1, 2, 3, 4, 5, 6}
-                    add(1,2,3,4,5,6  )
+                    let foo int = add(nums...)
+                    __debug__
+
 
 
                     for let i int = 0; i < 100; i++ {

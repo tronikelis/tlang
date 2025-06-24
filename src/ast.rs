@@ -299,30 +299,15 @@ impl AstVariables {
         self.stack.pop();
     }
 
-    fn push_variable(&mut self, variable: Variable) -> Result<()> {
-        if self
-            .stack
-            .last()
-            .unwrap()
-            .iter()
-            .find(|v| v.identifier == variable.identifier)
-            .is_some()
-        {
-            return Err(anyhow!(
-                "cant push {}, it's already defined",
-                variable.identifier,
-            ));
-        }
-
+    fn push_variable(&mut self, variable: Variable) {
         self.stack.last_mut().unwrap().push(variable);
-
-        Ok(())
     }
 
     fn get_variable(&self, identifier: &str) -> Option<&Variable> {
         self.stack
             .iter()
             .flatten()
+            .rev()
             .find(|v| v.identifier == identifier)
     }
 }
@@ -666,7 +651,7 @@ impl<'a> TokenParser<'a> {
         let return_type = self.parse_type()?;
 
         for v in &function_arguments {
-            self.variables.push_variable(v.clone())?;
+            self.variables.push_variable(v.clone());
         }
 
         Ok(Function {
@@ -947,7 +932,7 @@ impl<'a> TokenParser<'a> {
         self.variables.push_variable(Variable {
             _type: _type.clone(),
             identifier: identifier.clone(),
-        })?;
+        });
 
         Ok(VariableDeclaration {
             variable: Variable { identifier, _type },

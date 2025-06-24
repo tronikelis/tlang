@@ -27,7 +27,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         let slice_exp = self.compile_expression(slice_arg)?;
 
         let ast::TypeType::Slice(_) = &slice_exp._type else {
-            return Err(anyhow!("len: expected slice as the argument"));
+            return Err(anyhow!(
+                "len: expected slice as the argument, got {:#?}",
+                slice_exp._type
+            ));
         };
 
         self.instructions.instr_slice_len();
@@ -125,6 +128,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                     if exp != expected_type._type {
                         return Err(anyhow!("function call type mismatch"));
                     }
+                    if call.function.arguments.len() != call.arguments.len() {
+                        return Err(anyhow!("spread must be last argument"));
+                    }
+
                     continue;
                 }
 
@@ -457,6 +464,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let target = self.compile_expression(&type_cast.expression)?;
 
+        // todo: rewrite this
         match target {
             ast::INT => match &type_cast._type {
                 &ast::UINT8 => {
@@ -504,7 +512,19 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                         ))
                     }
                 } else {
-                    Err(anyhow!("compile_type_cast: cant cast {target:#?}"))
+                    match target._type {
+                        ast::TypeType::Variadic(item1) => match &type_cast._type._type {
+                            ast::TypeType::Slice(item2) => {
+                                if item1 == *item2 {
+                                    Ok(type_cast._type.clone())
+                                } else {
+                                    Err(anyhow!("compile_type_cast: cant cast variadic into slice of different type"))
+                                }
+                            }
+                            _ => Err(anyhow!("compile_type_cast: cant cast")),
+                        },
+                        _ => Err(anyhow!("compile_type_cast: unknown type")),
+                    }
                 }
             }
         }
