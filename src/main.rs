@@ -75,7 +75,7 @@ fn main() {
                     }
 
                     let nums int[] = {1, 2, 3, 4, 5, 6}
-                    add()
+                    add(1,2,3,4,5,6  )
 
 
                     for let i int = 0; i < 100; i++ {

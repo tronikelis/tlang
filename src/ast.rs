@@ -59,6 +59,13 @@ impl Type {
 
         (_type, i)
     }
+
+    pub fn extract_variadic(&self) -> Option<Self> {
+        match &self._type {
+            TypeType::Variadic(item) => Some(*item.clone()),
+            _ => None,
+        }
+    }
 }
 
 pub const COMPILER_TYPE: Type = Type {

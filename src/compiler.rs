@@ -102,14 +102,44 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         let argument_size = {
             self.instructions.push_stack_frame();
             for (i, expected_type) in call.function.arguments.iter().enumerate() {
-                let arg = call
-                    .arguments
-                    .get(i)
-                    .ok_or(anyhow!("compile_function_call: expected_argument"))?;
+                let arg = call.arguments.get(i);
 
-                let _type = self.compile_expression(arg)?;
-                if expected_type._type != _type {
-                    return Err(anyhow!("compile_function_call: mismatch type"));
+                let Some(arg) = arg else {
+                    if expected_type._type.extract_variadic().is_some() {
+                        self.instructions.instr_push_slice();
+                        continue;
+                    }
+                    return Err(anyhow!("compile_function_call: argument missing"));
+                };
+
+                let Some(inner) = expected_type._type.extract_variadic() else {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != expected_type._type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    continue;
+                };
+
+                if let ast::Expression::Spread(_) = arg {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != expected_type._type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    continue;
+                }
+
+                self.instructions.instr_push_slice();
+                for arg in call.arguments.iter().skip(i) {
+                    self.instructions.instr_increment(ast::SLICE_SIZE);
+                    self.instructions
+                        .instr_copy(0, ast::SLICE_SIZE, ast::SLICE_SIZE);
+
+                    let value_exp = self.compile_expression(arg)?;
+                    if value_exp != inner {
+                        return Err(anyhow!("variadic argument type mismatch"));
+                    }
+
+                    self.instructions.instr_slice_append(value_exp.size);
                 }
             }
             self.instructions.pop_stack_frame_size()
