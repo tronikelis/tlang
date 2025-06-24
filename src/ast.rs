@@ -9,6 +9,7 @@ pub enum TypeType {
     Slice(Box<Type>),
     Scalar(lexer::Type),
     CompilerType,
+    Variadic(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,6 +196,7 @@ pub enum Expression {
     FunctionCall(FunctionCall),
     List(Vec<Expression>),
     Index(Index),
+    Spread(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -636,10 +638,22 @@ impl<'a> TokenParser<'a> {
                 _ => {}
             }
 
-            function_arguments.push(Variable {
-                identifier: self.parse_identifier()?,
-                _type: self.parse_type()?,
-            });
+            let identifier = self.parse_identifier()?;
+            let mut _type = self.parse_type()?;
+
+            if let lexer::Token::Dot3 = self.peek_token_err(0)? {
+                _type = Type {
+                    size: SLICE_SIZE,
+                    _type: TypeType::Variadic(Box::new(_type)),
+                };
+                self.next();
+                // expect variadic to be last one
+                self.expect_next_token(lexer::Token::PClose).map_err(|_| {
+                    anyhow!("parse_function_declaration: variadic argument expected PCLOSE")
+                })?;
+            }
+
+            function_arguments.push(Variable { identifier, _type });
         }
 
         let return_type = self.parse_type()?;
@@ -836,6 +850,11 @@ impl<'a> TokenParser<'a> {
                     self.expect_next_token(lexer::Token::BClose)?;
                     self.next();
                     continue;
+                }
+                lexer::Token::Dot3 => {
+                    left = Expression::Spread(Box::new(left));
+                    self.next();
+                    break;
                 }
                 _ => {}
             }

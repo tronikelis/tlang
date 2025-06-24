@@ -63,10 +63,32 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::VOID)
     }
 
-    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
-        if call.arguments.len() != call.function.arguments.len() {
-            return Err(anyhow!("compile_function_call: argument count mismatch"));
+    fn check_function_call_argument_count(call: &ast::FunctionCall) -> Result<()> {
+        // todo: refactor this arguments check somehow
+        if let Some(last) = call.function.arguments.last() {
+            if let ast::TypeType::Variadic(_type) = &last._type._type {
+                // -1 because variadic can be empty
+                if call.arguments.len() < call.function.arguments.len() - 1 {
+                    return Err(anyhow!(
+                        "compile_function_call: variadic argument count mismatch"
+                    ));
+                }
+            } else {
+                if call.arguments.len() != call.function.arguments.len() {
+                    return Err(anyhow!("compile_function_call: argument count mismatch"));
+                }
+            }
+        } else {
+            if call.arguments.len() != call.function.arguments.len() {
+                return Err(anyhow!("compile_function_call: argument count mismatch"));
+            }
         }
+
+        Ok(())
+    }
+
+    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        Self::check_function_call_argument_count(call)?;
 
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
@@ -79,16 +101,14 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, arg) in call.arguments.iter().enumerate() {
-                let expected_type = &call
-                    .function
+            for (i, expected_type) in call.function.arguments.iter().enumerate() {
+                let arg = call
                     .arguments
                     .get(i)
-                    .ok_or(anyhow!("compile_function_call: expected_argument"))?
-                    ._type;
+                    .ok_or(anyhow!("compile_function_call: expected_argument"))?;
 
                 let _type = self.compile_expression(arg)?;
-                if *expected_type != _type {
+                if expected_type._type != _type {
                     return Err(anyhow!("compile_function_call: mismatch type"));
                 }
             }
@@ -471,6 +491,19 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::BOOL)
     }
 
+    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
+        let exp = self.compile_expression(expression)?;
+
+        let ast::TypeType::Slice(slice_item) = exp._type else {
+            return Err(anyhow!("compile_spread: can only spread slice types"));
+        };
+
+        Ok(ast::Type {
+            size: ast::SLICE_SIZE,
+            _type: ast::TypeType::Variadic(slice_item),
+        })
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -486,6 +519,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::Index(v) => self.compile_expression_index(v),
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
+            ast::Expression::Spread(v) => self.compile_spread(v),
         }?;
 
         if exp.size != 0 {
