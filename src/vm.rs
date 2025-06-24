@@ -1,12 +1,128 @@
-use core::str;
+use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
+    collections::HashMap,
     mem, ptr, slice,
 };
 use syscalls::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6, Sysno};
 
-fn layout_u8(size: usize) -> Layout {
-    Layout::from_size_align(size, 1).unwrap()
+#[derive(Debug)]
+enum GcObjectData {
+    Slice(*mut Slice),
+}
+
+#[derive(Debug)]
+struct GcObject {
+    marked: bool,
+    data: GcObjectData,
+}
+
+impl GcObject {
+    fn new(data: GcObjectData) -> Self {
+        Self {
+            marked: false,
+            data,
+        }
+    }
+}
+
+struct Gc {
+    objects: HashMap<*const u8, RefCell<GcObject>>,
+}
+
+impl Gc {
+    fn new() -> Self {
+        Self {
+            objects: HashMap::new(),
+        }
+    }
+
+    fn add_object(&mut self, object: GcObject) {
+        let addr: *const u8 = match object.data {
+            GcObjectData::Slice(slice) => slice.cast(),
+        };
+        self.objects.insert(addr, RefCell::new(object));
+    }
+
+    fn mark_object(&self, object: &RefCell<GcObject>) {
+        if object.borrow().marked {
+            return;
+        }
+        object.borrow_mut().marked = true;
+
+        match object.borrow().data {
+            GcObjectData::Slice(slice) => {
+                let slice = unsafe { &mut *slice };
+                let len = slice.data.len();
+
+                // check if addresses are even possible
+                if len % size_of::<usize>() != 0 {
+                    return;
+                }
+
+                let mut ptr = slice.data.as_ptr();
+                for _ in 0..len / size_of::<usize>() {
+                    let addr: *const u8 = unsafe {
+                        let val = *ptr.cast();
+                        ptr = ptr.byte_offset(size_of::<usize>() as isize);
+                        val
+                    };
+
+                    if let Some(obj) = self.objects.get(&addr) {
+                        self.mark_object(obj)
+                    }
+                }
+            }
+        }
+    }
+
+    // [align 8] sp_end end is pointing to the end address + 1
+    // [align ?] sp is pointing to current address unknown size
+    fn mark(&self, sp: *const u8, mut sp_end: *const u8) {
+        self.objects.iter().for_each(|(_, obj)| {
+            obj.borrow_mut().marked = false;
+        });
+
+        while unsafe { sp_end.byte_offset(-(size_of::<usize>() as isize)) } >= sp {
+            unsafe {
+                sp_end = sp_end.byte_offset(-(size_of::<usize>() as isize));
+            };
+
+            let addr: *const u8 = unsafe { *sp_end.cast() };
+            if let Some(obj) = self.objects.get(&addr) {
+                self.mark_object(obj);
+            }
+        }
+    }
+
+    fn sweep(&mut self) {
+        let mut to_remove = Vec::with_capacity(1 << 8);
+
+        for (addr, obj) in &self.objects {
+            if !obj.borrow().marked {
+                match obj.borrow().data {
+                    GcObjectData::Slice(slice) => {
+                        let _ = unsafe { Box::from_raw(slice) };
+                    }
+                }
+
+                to_remove.push(*addr);
+            }
+        }
+
+        for v in to_remove {
+            self.objects.remove(&v);
+        }
+    }
+
+    fn run(&mut self, sp: *const u8, sp_end: *const u8) {
+        self.mark(sp, sp_end);
+        self.sweep();
+    }
+}
+
+fn layout(size: usize) -> Layout {
+    Layout::from_size_align(size, size_of::<usize>()).unwrap()
 }
 
 #[derive(Debug)]
@@ -117,20 +233,24 @@ pub struct Stack {
 impl Drop for Stack {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.data, layout_u8(self.size));
+            dealloc(self.data, layout(self.size));
         };
     }
 }
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let data = unsafe { alloc(layout_u8(size)) };
+        let data = unsafe { alloc(layout(size)) };
 
         Self {
             sp: unsafe { data.byte_offset(size as isize) },
             data,
             size,
         }
+    }
+
+    fn sp_end(&self) -> *mut u8 {
+        unsafe { self.data.byte_offset(self.size as isize) }
     }
 
     fn pop_size(&mut self, size: usize) -> &[u8] {
@@ -238,6 +358,7 @@ pub struct Vm {
     stack: Stack,
     instructions: Vec<Instruction>,
     static_memory: StaticMemory,
+    gc: Gc,
 }
 
 impl Vm {
@@ -246,6 +367,7 @@ impl Vm {
             stack: Stack::new(4096),
             instructions,
             static_memory,
+            gc: Gc::new(),
         };
     }
 
@@ -356,7 +478,10 @@ impl Vm {
                     self.stack.push(a * b);
                 }
                 Instruction::PushSlice => {
-                    self.stack.push(Slice::new());
+                    let slice = Slice::new();
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                    self.stack.push(slice);
                 }
                 Instruction::SliceAppend(size) => {
                     let item = self.stack.pop_size(size).to_vec();
@@ -410,7 +535,10 @@ impl Vm {
                     let slice =
                         unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
                     slice.concat(a);
-                    self.stack.push(slice as *mut Slice);
+                    let slice = slice as *mut Slice;
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                    self.stack.push(slice);
                 }
                 Instruction::ModuloI => {
                     let a = self.stack.pop::<isize>();
@@ -477,6 +605,7 @@ impl Vm {
                 }
             }
 
+            self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
     }
