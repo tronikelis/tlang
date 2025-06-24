@@ -17,11 +17,19 @@ fn main() {
                 fn syscall0(sysno uint) uint {}
                 fn syscall1(sysno uint, arg1 uint) uint {}
                 fn syscall2(sysno uint, arg1 uint, arg2 uint) uint {}
-                fn syscall2(sysno uint, arg1 uint, arg2 uint) uint {}
                 fn syscall3(sysno uint, arg1 uint, arg2 uint, arg3 uint) uint {}
                 fn syscall4(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint) uint {}
                 fn syscall5(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint) uint {}
                 fn syscall6(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint, arg6 uint) uint {}
+
+                fn add(x int...) int {
+                    let final int = 0
+                    let x int[] = int[](x)
+                    for let i int = 0; i < len(x); i++ {
+                        final = final + x[i]
+                    }
+                    return final
+                }
 
                 fn syscall_write(fd int, slice uint8[]) uint {
                     // ssize_t write(int fd, const void buf[.count], size_t count);
@@ -70,6 +78,12 @@ fn main() {
                         syscall_write(1, uint8[](\"NICE GUYS\\n\"))
                     }
 
+                    let nums int[] = {1, 2, 3, 4, 5, 6}
+                    let foo int = add(nums...)
+                    __debug__
+
+
+
                     for let i int = 0; i < 100; i++ {
                         let str string = \"\"
 
@@ -86,8 +100,6 @@ fn main() {
 
                         syscall_write(1, uint8[](str + \"\\n\"))
                     }
-
-                    __debug__
                 }
             ",
     );

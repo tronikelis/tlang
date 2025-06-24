@@ -27,7 +27,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         let slice_exp = self.compile_expression(slice_arg)?;
 
         let ast::TypeType::Slice(_) = &slice_exp._type else {
-            return Err(anyhow!("len: expected slice as the argument"));
+            return Err(anyhow!(
+                "len: expected slice as the argument, got {:#?}",
+                slice_exp._type
+            ));
         };
 
         self.instructions.instr_slice_len();
@@ -63,10 +66,32 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::VOID)
     }
 
-    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
-        if call.arguments.len() != call.function.arguments.len() {
-            return Err(anyhow!("compile_function_call: argument count mismatch"));
+    fn check_function_call_argument_count(call: &ast::FunctionCall) -> Result<()> {
+        // todo: refactor this arguments check somehow
+        if let Some(last) = call.function.arguments.last() {
+            if let ast::TypeType::Variadic(_type) = &last._type._type {
+                // -1 because variadic can be empty
+                if call.arguments.len() < call.function.arguments.len() - 1 {
+                    return Err(anyhow!(
+                        "compile_function_call: variadic argument count mismatch"
+                    ));
+                }
+            } else {
+                if call.arguments.len() != call.function.arguments.len() {
+                    return Err(anyhow!("compile_function_call: argument count mismatch"));
+                }
+            }
+        } else {
+            if call.arguments.len() != call.function.arguments.len() {
+                return Err(anyhow!("compile_function_call: argument count mismatch"));
+            }
         }
+
+        Ok(())
+    }
+
+    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        Self::check_function_call_argument_count(call)?;
 
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
@@ -79,17 +104,49 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, arg) in call.arguments.iter().enumerate() {
-                let expected_type = &call
-                    .function
-                    .arguments
-                    .get(i)
-                    .ok_or(anyhow!("compile_function_call: expected_argument"))?
-                    ._type;
+            for (i, expected_type) in call.function.arguments.iter().enumerate() {
+                let arg = call.arguments.get(i);
 
-                let _type = self.compile_expression(arg)?;
-                if *expected_type != _type {
-                    return Err(anyhow!("compile_function_call: mismatch type"));
+                let Some(arg) = arg else {
+                    if expected_type._type.extract_variadic().is_some() {
+                        self.instructions.instr_push_slice();
+                        continue;
+                    }
+                    return Err(anyhow!("compile_function_call: argument missing"));
+                };
+
+                let Some(inner) = expected_type._type.extract_variadic() else {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != expected_type._type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    continue;
+                };
+
+                if let ast::Expression::Spread(_) = arg {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != expected_type._type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    if call.function.arguments.len() != call.arguments.len() {
+                        return Err(anyhow!("spread must be last argument"));
+                    }
+
+                    continue;
+                }
+
+                self.instructions.instr_push_slice();
+                for arg in call.arguments.iter().skip(i) {
+                    self.instructions.instr_increment(ast::SLICE_SIZE);
+                    self.instructions
+                        .instr_copy(0, ast::SLICE_SIZE, ast::SLICE_SIZE);
+
+                    let value_exp = self.compile_expression(arg)?;
+                    if value_exp != inner {
+                        return Err(anyhow!("variadic argument type mismatch"));
+                    }
+
+                    self.instructions.instr_slice_append(value_exp.size);
                 }
             }
             self.instructions.pop_stack_frame_size()
@@ -407,57 +464,78 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let target = self.compile_expression(&type_cast.expression)?;
 
-        match target {
-            ast::INT => match &type_cast._type {
-                &ast::UINT8 => {
-                    self.instructions.instr_cast_int_uint8();
-                    Ok(ast::UINT8)
-                }
-                &ast::UINT => {
-                    self.instructions.instr_cast_int_uint();
-                    Ok(ast::UINT)
-                }
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            ast::UINT8 => match &type_cast._type {
-                &ast::INT => {
-                    self.instructions.instr_cast_uint8_int();
-                    Ok(ast::INT)
-                }
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            ast::PTR => match &type_cast._type {
-                &ast::UINT => Ok(ast::UINT),
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            // we have to do this because other types are runtime created
-            target => {
-                if target == ast::STRING {
-                    if &type_cast._type == &*ast::SLICE_UINT8 {
-                        Ok(ast::SLICE_UINT8.clone())
-                    } else {
-                        Err(anyhow!(
-                            "compile_type_cast: cant cast into {:#?}",
-                            &type_cast._type
-                        ))
+        match target._type {
+            ast::TypeType::Scalar(scalar_target) => match scalar_target {
+                lexer::Type::Int => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Uint8 => {
+                            self.instructions.instr_cast_int_uint8();
+                        }
+                        lexer::Type::Uint => {
+                            self.instructions.instr_cast_int_uint();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::Uint8 => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Int => {
+                            self.instructions.instr_cast_uint8_int();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::Ptr => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Uint => {}
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::String => match &type_cast._type._type {
+                    ast::TypeType::Slice(item) => {
+                        if **item != ast::UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
                     }
-                } else if target == *ast::SLICE_UINT8 {
-                    if type_cast._type == ast::STRING {
-                        Ok(ast::STRING.clone())
-                    } else if type_cast._type == ast::PTR {
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ast::TypeType::Slice(item_target) => match &type_cast._type._type {
+                ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                    lexer::Type::String => {
+                        if *item_target != ast::UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
+                    }
+                    lexer::Type::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
-                        Ok(ast::PTR)
-                    } else {
-                        Err(anyhow!(
-                            "compile_type_cast: cant cast into {:#?}",
-                            &type_cast._type
-                        ))
                     }
-                } else {
-                    Err(anyhow!("compile_type_cast: cant cast {target:#?}"))
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ast::TypeType::Variadic(item_target) => match &type_cast._type._type {
+                ast::TypeType::Slice(item_dest) => {
+                    if item_target != *item_dest {
+                        return Err(anyhow!(
+                            "compile_type_cast: cant cast variadic into slice different types"
+                        ));
+                    }
                 }
-            }
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
+
+        Ok(type_cast._type.clone())
     }
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<ast::Type> {
@@ -469,6 +547,19 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         self.instructions.instr_negate_bool();
 
         Ok(ast::BOOL)
+    }
+
+    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
+        let exp = self.compile_expression(expression)?;
+
+        let ast::TypeType::Slice(slice_item) = exp._type else {
+            return Err(anyhow!("compile_spread: can only spread slice types"));
+        };
+
+        Ok(ast::Type {
+            size: ast::SLICE_SIZE,
+            _type: ast::TypeType::Variadic(slice_item),
+        })
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
@@ -486,6 +577,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::Index(v) => self.compile_expression_index(v),
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
+            ast::Expression::Spread(v) => self.compile_spread(v),
         }?;
 
         if exp.size != 0 {

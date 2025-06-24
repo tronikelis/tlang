@@ -57,11 +57,13 @@ pub enum Token {
     Break,
     Continue,
     Bang,
+    Dot3,
+    Dot,
 }
 
-const CONTROL_CHAR: [char; 20] = [
+const CONTROL_CHAR: [char; 21] = [
     ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"', '%',
-    '!',
+    '!', '.',
 ];
 
 pub struct Lexer {
@@ -183,6 +185,23 @@ impl Lexer {
 
             if let Some(ch) = self.peek_char(0) {
                 match ch {
+                    '.' => {
+                        match self.peek_char(1).ok_or(anyhow!("todo"))? {
+                            '.' => {
+                                match self.peek_char(2).ok_or(anyhow!("todo"))? {
+                                    '.' => {
+                                        tokens.push(Token::Dot3);
+                                        self.next();
+                                    }
+                                    _ => return Err(anyhow!("unknown char")),
+                                }
+                                self.next();
+                            }
+                            _ => tokens.push(Token::Dot),
+                        }
+                        self.next();
+                        continue;
+                    }
                     '!' => {
                         match self.peek_char(1).ok_or(anyhow!("todo"))? {
                             '=' => {

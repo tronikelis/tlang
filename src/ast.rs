@@ -9,6 +9,7 @@ pub enum TypeType {
     Slice(Box<Type>),
     Scalar(lexer::Type),
     CompilerType,
+    Variadic(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +58,13 @@ impl Type {
         }
 
         (_type, i)
+    }
+
+    pub fn extract_variadic(&self) -> Option<Self> {
+        match &self._type {
+            TypeType::Variadic(item) => Some(*item.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -195,6 +203,7 @@ pub enum Expression {
     FunctionCall(FunctionCall),
     List(Vec<Expression>),
     Index(Index),
+    Spread(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -290,30 +299,15 @@ impl AstVariables {
         self.stack.pop();
     }
 
-    fn push_variable(&mut self, variable: Variable) -> Result<()> {
-        if self
-            .stack
-            .last()
-            .unwrap()
-            .iter()
-            .find(|v| v.identifier == variable.identifier)
-            .is_some()
-        {
-            return Err(anyhow!(
-                "cant push {}, it's already defined",
-                variable.identifier,
-            ));
-        }
-
+    fn push_variable(&mut self, variable: Variable) {
         self.stack.last_mut().unwrap().push(variable);
-
-        Ok(())
     }
 
     fn get_variable(&self, identifier: &str) -> Option<&Variable> {
         self.stack
             .iter()
             .flatten()
+            .rev()
             .find(|v| v.identifier == identifier)
     }
 }
@@ -636,16 +630,28 @@ impl<'a> TokenParser<'a> {
                 _ => {}
             }
 
-            function_arguments.push(Variable {
-                identifier: self.parse_identifier()?,
-                _type: self.parse_type()?,
-            });
+            let identifier = self.parse_identifier()?;
+            let mut _type = self.parse_type()?;
+
+            if let lexer::Token::Dot3 = self.peek_token_err(0)? {
+                _type = Type {
+                    size: SLICE_SIZE,
+                    _type: TypeType::Variadic(Box::new(_type)),
+                };
+                self.next();
+                // expect variadic to be last one
+                self.expect_next_token(lexer::Token::PClose).map_err(|_| {
+                    anyhow!("parse_function_declaration: variadic argument expected PCLOSE")
+                })?;
+            }
+
+            function_arguments.push(Variable { identifier, _type });
         }
 
         let return_type = self.parse_type()?;
 
         for v in &function_arguments {
-            self.variables.push_variable(v.clone())?;
+            self.variables.push_variable(v.clone());
         }
 
         Ok(Function {
@@ -837,6 +843,11 @@ impl<'a> TokenParser<'a> {
                     self.next();
                     continue;
                 }
+                lexer::Token::Dot3 => {
+                    left = Expression::Spread(Box::new(left));
+                    self.next();
+                    break;
+                }
                 _ => {}
             }
 
@@ -921,7 +932,7 @@ impl<'a> TokenParser<'a> {
         self.variables.push_variable(Variable {
             _type: _type.clone(),
             identifier: identifier.clone(),
-        })?;
+        });
 
         Ok(VariableDeclaration {
             variable: Variable { identifier, _type },
