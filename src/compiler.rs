@@ -464,70 +464,78 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         let target = self.compile_expression(&type_cast.expression)?;
 
-        // todo: rewrite this
-        match target {
-            ast::INT => match &type_cast._type {
-                &ast::UINT8 => {
-                    self.instructions.instr_cast_int_uint8();
-                    Ok(ast::UINT8)
-                }
-                &ast::UINT => {
-                    self.instructions.instr_cast_int_uint();
-                    Ok(ast::UINT)
-                }
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            ast::UINT8 => match &type_cast._type {
-                &ast::INT => {
-                    self.instructions.instr_cast_uint8_int();
-                    Ok(ast::INT)
-                }
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            ast::PTR => match &type_cast._type {
-                &ast::UINT => Ok(ast::UINT),
-                _type => Err(anyhow!("compile_type_cast: cant cast into {_type:#?}")),
-            },
-            // we have to do this because other types are runtime created
-            target => {
-                if target == ast::STRING {
-                    if &type_cast._type == &*ast::SLICE_UINT8 {
-                        Ok(ast::SLICE_UINT8.clone())
-                    } else {
-                        Err(anyhow!(
-                            "compile_type_cast: cant cast into {:#?}",
-                            &type_cast._type
-                        ))
+        match target._type {
+            ast::TypeType::Scalar(scalar_target) => match scalar_target {
+                lexer::Type::Int => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Uint8 => {
+                            self.instructions.instr_cast_int_uint8();
+                        }
+                        lexer::Type::Uint => {
+                            self.instructions.instr_cast_int_uint();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::Uint8 => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Int => {
+                            self.instructions.instr_cast_uint8_int();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::Ptr => match &type_cast._type._type {
+                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                        lexer::Type::Uint => {}
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                lexer::Type::String => match &type_cast._type._type {
+                    ast::TypeType::Slice(item) => {
+                        if **item != ast::UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
                     }
-                } else if target == *ast::SLICE_UINT8 {
-                    if type_cast._type == ast::STRING {
-                        Ok(ast::STRING.clone())
-                    } else if type_cast._type == ast::PTR {
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ast::TypeType::Slice(item_target) => match &type_cast._type._type {
+                ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
+                    lexer::Type::String => {
+                        if *item_target != ast::UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
+                    }
+                    lexer::Type::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
-                        Ok(ast::PTR)
-                    } else {
-                        Err(anyhow!(
-                            "compile_type_cast: cant cast into {:#?}",
-                            &type_cast._type
-                        ))
                     }
-                } else {
-                    match target._type {
-                        ast::TypeType::Variadic(item1) => match &type_cast._type._type {
-                            ast::TypeType::Slice(item2) => {
-                                if item1 == *item2 {
-                                    Ok(type_cast._type.clone())
-                                } else {
-                                    Err(anyhow!("compile_type_cast: cant cast variadic into slice of different type"))
-                                }
-                            }
-                            _ => Err(anyhow!("compile_type_cast: cant cast")),
-                        },
-                        _ => Err(anyhow!("compile_type_cast: unknown type")),
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ast::TypeType::Variadic(item_target) => match &type_cast._type._type {
+                ast::TypeType::Slice(item_dest) => {
+                    if item_target != *item_dest {
+                        return Err(anyhow!(
+                            "compile_type_cast: cant cast variadic into slice different types"
+                        ));
                     }
                 }
-            }
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
+
+        Ok(type_cast._type.clone())
     }
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<ast::Type> {
