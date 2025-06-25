@@ -605,10 +605,6 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         })
     }
 
-    fn compile_type(&mut self, _type: &ast::Type) -> Result<ast::Type> {
-        Ok(ast::COMPILER_TYPE)
-    }
-
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -625,7 +621,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
-            ast::Expression::Type(v) => self.compile_type(v),
+            ast::Expression::Type(_) => panic!("tried to compile type"),
         }?;
 
         if exp.size != 0 {
