@@ -71,6 +71,8 @@ fn main() {
                     return string(str)
                 }
 
+                fn new(x Type, args Type...) Type {}
+
                 fn main() void {
                     let one_two_three string = itoa(69420)
 
@@ -78,11 +80,11 @@ fn main() {
                         syscall_write(1, uint8[](\"NICE GUYS\\n\"))
                     }
 
+                    let buf uint8[] = new(uint8[], uint8(0), 2048)
+
                     let nums int[] = {1, 2, 3, 4, 5, 6}
                     let foo int = add(nums...)
                     __debug__
-
-
 
                     for let i int = 0; i < 100; i++ {
                         let str string = \"\"

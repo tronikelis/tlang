@@ -204,6 +204,7 @@ pub enum Expression {
     List(Vec<Expression>),
     Index(Index),
     Spread(Box<Expression>),
+    Type(Type),
 }
 
 #[derive(Debug, Clone)]
@@ -782,7 +783,9 @@ impl<'a> TokenParser<'a> {
     fn parse_expression_type(&mut self) -> Result<Expression> {
         let _type = self.parse_type()?;
 
-        self.expect_next_token(lexer::Token::POpen)?;
+        if *self.peek_token_err(0)? != lexer::Token::POpen {
+            return Ok(Expression::Type(_type));
+        }
         self.next();
 
         let expression = self.parse_expression()?;

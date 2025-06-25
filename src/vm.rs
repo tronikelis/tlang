@@ -145,16 +145,27 @@ impl Slice {
         Box::into_raw(Box::new(Self { len: v.len(), data }))
     }
 
+    pub fn new_default_len(len: usize, val: &[u8]) -> *mut Self {
+        let mut data = Vec::with_capacity(val.len() * len);
+        for _ in 0..len {
+            for v in val {
+                data.push(*v);
+            }
+        }
+
+        Box::into_raw(Box::new(Self { len, data }))
+    }
+
     fn index(&self, index: isize, size: usize) -> &[u8] {
         let index = index as usize;
         let from = index * size;
         &self.data[from..(from + size)]
     }
 
-    fn index_set(&mut self, index: isize, val: Vec<u8>) {
+    fn index_set(&mut self, index: isize, val: &[u8]) {
         let from = index as usize * val.len();
         for (i, v) in val.into_iter().enumerate() {
-            self.data[from + i] = v;
+            self.data[from + i] = *v;
         }
     }
 
@@ -163,9 +174,9 @@ impl Slice {
         self.data.extend_from_slice(&other.data);
     }
 
-    fn append(&mut self, val: Vec<u8>) {
+    fn append(&mut self, val: &[u8]) {
         self.len += 1;
-        self.data.extend_from_slice(&val);
+        self.data.extend_from_slice(val);
     }
 }
 
@@ -185,6 +196,7 @@ pub enum Instruction {
     PushI(isize),
     PushU8(u8),
     PushSlice,
+    PushSliceNewLen(usize),
     // index, len
     PushStatic(usize, usize),
 
@@ -483,11 +495,20 @@ impl Vm {
                         .add_object(GcObject::new(GcObjectData::Slice(slice)));
                     self.stack.push(slice);
                 }
+                Instruction::PushSliceNewLen(size) => {
+                    let val = self.stack.pop_size(size).to_vec();
+                    let len: isize = self.stack.pop();
+
+                    let slice = Slice::new_default_len(len as usize, &val);
+                    self.stack.push(slice);
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                }
                 Instruction::SliceAppend(size) => {
                     let item = self.stack.pop_size(size).to_vec();
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    slice.append(item);
+                    slice.append(&item);
                 }
                 Instruction::SliceIndexGet(size) => {
                     let index = self.stack.pop::<isize>();
@@ -500,7 +521,7 @@ impl Vm {
                     let index = self.stack.pop::<isize>();
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    slice.index_set(index, item);
+                    slice.index_set(index, &item);
                 }
                 Instruction::SliceLen => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };

@@ -17,6 +17,48 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         }
     }
 
+    // new(_ Type, args Type...) Type
+    fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+        let type_arg = call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("new: expected first argument"))?;
+
+        let ast::Expression::Type(_type) = type_arg else {
+            return Err(anyhow!("new: expected first argument to be type"));
+        };
+
+        match &_type._type {
+            ast::TypeType::Slice(slice_item) => {
+                let def_val = call
+                    .arguments
+                    .get(1)
+                    .ok_or(anyhow!("new: second argument expected"))?;
+
+                let len_val = call
+                    .arguments
+                    .get(2)
+                    .ok_or(anyhow!("new: third argument expected"))?;
+
+                let len_exp = self.compile_expression(len_val)?;
+                if len_exp != ast::INT {
+                    return Err(anyhow!("new: length should be of type int"));
+                }
+
+                let def_exp = self.compile_expression(def_val)?;
+                if def_exp != **slice_item {
+                    return Err(anyhow!("new: expression does not match slice type"));
+                }
+
+                self.instructions.instr_push_slice_new_len(def_exp.size);
+
+                Ok(_type.clone())
+            }
+            _type => return Err(anyhow!("new: {_type:#?} not supported")),
+        }
+    }
+
+    // len(slice Type) int
     fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         let slice_arg = call
             .arguments
@@ -38,7 +80,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::INT)
     }
 
-    // append(slice Type, value Type) void {}
+    // append(slice Type, value Type) void
     fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
         let slice_arg = call
             .arguments
@@ -96,6 +138,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
+            "new" => return self.compile_function_builtin_new(call),
             _ => {}
         }
 
@@ -578,6 +621,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
+            ast::Expression::Type(_) => panic!("tried to compile type"),
         }?;
 
         if exp.size != 0 {

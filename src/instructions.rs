@@ -292,6 +292,13 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Reset(size));
     }
 
+    pub fn instr_push_slice_new_len(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::PushSliceNewLen(size)));
+        self.var_stack
+            .push(VarStackItem::Reset(size + ast::INT.size - ast::SLICE_SIZE));
+    }
+
     pub fn instr_push_slice(&mut self) {
         self.push_alignment(ast::SLICE_SIZE);
 
