@@ -2,23 +2,154 @@ use anyhow::{anyhow, Result};
 
 use crate::{ast, instructions, lexer, vm};
 
-pub struct FunctionCompiler<'a, 'b> {
+#[derive(Debug, Clone, PartialEq)]
+enum TypeStructField {
+    Type(String, Type),
+    Padding(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TypeStruct {
+    fields: Vec<TypeStructField>,
+}
+
+const UINT: Type = Type {
+    size: size_of::<usize>(),
+    _type: TypeType::Builtin(TypeBuiltin::Uint),
+};
+const UINT8: Type = Type {
+    size: 1,
+    _type: TypeType::Builtin(TypeBuiltin::Uint8),
+};
+const INT: Type = Type {
+    size: size_of::<isize>(),
+    _type: TypeType::Builtin(TypeBuiltin::Int),
+};
+const BOOL: Type = Type {
+    size: size_of::<usize>(), // for now
+    _type: TypeType::Builtin(TypeBuiltin::Bool),
+};
+const STRING: Type = Type {
+    size: size_of::<usize>(),
+    _type: TypeType::Builtin(TypeBuiltin::String),
+};
+const COMPILER_TYPE: Type = Type {
+    size: 0,
+    _type: TypeType::Builtin(TypeBuiltin::CompilerType),
+};
+const VOID: Type = Type {
+    size: 0,
+    _type: TypeType::Builtin(TypeBuiltin::Void),
+};
+
+#[derive(Debug, Clone, PartialEq)]
+enum TypeBuiltin {
+    Uint,
+    Uint8,
+    Int,
+    String,
+    Bool,
+    Void,
+    CompilerType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TypeType {
+    Struct(TypeStruct),
+    Variadic(Box<Type>),
+    Slice(Box<Type>),
+    Builtin(TypeBuiltin),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Type {
+    size: usize,
+    _type: TypeType,
+}
+
+fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) -> Result<Type> {
+    match _type {
+        ast::Type::Alias(alias) => {
+            match alias.as_str() {
+                "uint" => return Ok(UINT),
+                "uint8" => return Ok(UINT8),
+                "int" => return Ok(INT),
+                "bool" => return Ok(BOOL),
+                "string" => return Ok(STRING),
+                "Type" => return Ok(COMPILER_TYPE),
+                "void" => return Ok(VOID),
+                _ => {}
+            };
+
+            let inner = type_declarations
+                .0
+                .get(alias)
+                .ok_or(anyhow!("can't resolve {alias:#?}"))?;
+
+            resolve_type(type_declarations, &inner._type)
+        }
+        ast::Type::Slice(_type) => Ok(Type {
+            size: size_of::<usize>(),
+            _type: TypeType::Slice(Box::new(resolve_type(type_declarations, _type)?)),
+        }),
+        ast::Type::Variadic(_type) => Ok(Type {
+            size: size_of::<usize>(),
+            _type: TypeType::Variadic(Box::new(resolve_type(type_declarations, _type)?)),
+        }),
+        ast::Type::Struct(type_struct) => {
+            let mut fields: Vec<TypeStructField> = Vec::new();
+            let mut size: usize = 0;
+            let mut highest_size: usize = 0;
+
+            for (identifier, _type) in &type_struct.fields {
+                let resolved = resolve_type(type_declarations, _type)?;
+                if resolved.size > highest_size {
+                    highest_size = resolved.size;
+                }
+
+                let alignment = instructions::align(resolved.size, size);
+                size += resolved.size;
+                size += alignment;
+                fields.push(TypeStructField::Padding(alignment));
+                fields.push(TypeStructField::Type(identifier.clone(), resolved));
+            }
+
+            fields.push(TypeStructField::Padding(instructions::align(
+                highest_size,
+                size,
+            )));
+
+            Ok(Type {
+                size,
+                _type: TypeType::Struct(TypeStruct { fields }),
+            })
+        }
+    }
+}
+
+pub struct FunctionCompiler<'a, 'b, 'c> {
     instructions: instructions::Instructions,
     function: &'a ast::Function,
     static_memory: &'b mut vm::StaticMemory,
+    type_declarations: &'c ast::TypeDeclarations,
 }
 
-impl<'a, 'b> FunctionCompiler<'a, 'b> {
-    pub fn new(function: &'a ast::Function, static_memory: &'b mut vm::StaticMemory) -> Self {
+impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
+    pub fn new(
+        function: &'a ast::Function,
+        static_memory: &'b mut vm::StaticMemory,
+        type_declarations: &'c ast::TypeDeclarations,
+    ) -> Self {
         Self {
             static_memory,
             function,
             instructions: instructions::Instructions::new(),
+            type_declarations,
         }
     }
 
     // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+    fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<Type> {
         let type_arg = call
             .arguments
             .get(0)
@@ -27,9 +158,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         let ast::Expression::Type(_type) = type_arg else {
             return Err(anyhow!("new: expected first argument to be type"));
         };
+        let _type = resolve_type(self.type_declarations, _type)?;
 
         match &_type._type {
-            ast::TypeType::Slice(slice_item) => {
+            TypeType::Slice(slice_item) => {
                 let def_val = call
                     .arguments
                     .get(1)
@@ -41,7 +173,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                     .ok_or(anyhow!("new: third argument expected"))?;
 
                 let len_exp = self.compile_expression(len_val)?;
-                if len_exp != ast::INT {
+                if len_exp != INT {
                     return Err(anyhow!("new: length should be of type int"));
                 }
 
@@ -59,7 +191,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
     }
 
     // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -68,7 +200,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
 
-        let ast::TypeType::Slice(_) = &slice_exp._type else {
+        let TypeType::Slice(_) = &slice_exp._type else {
             return Err(anyhow!(
                 "len: expected slice as the argument, got {:#?}",
                 slice_exp._type
@@ -77,11 +209,11 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
         self.instructions.instr_slice_len();
 
-        Ok(ast::INT)
+        Ok(INT)
     }
 
     // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -132,7 +264,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(())
     }
 
-    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<ast::Type> {
+    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<Type> {
         Self::check_function_call_argument_count(call)?;
 
         match call.function.identifier.as_str() {
@@ -248,7 +380,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(call.function.return_type.clone())
     }
 
-    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ast::Type> {
+    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
         match &literal.literal {
             lexer::Literal::Int(int) => match &literal._type {
                 &ast::UINT8 => {
@@ -280,7 +412,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(literal._type.clone())
     }
 
-    fn compile_variable(&mut self, variable: &ast::Variable) -> Result<ast::Type> {
+    fn compile_variable(&mut self, variable: &ast::Variable) -> Result<Type> {
         self.instructions.push_alignment(variable._type.size);
 
         let offset = self
@@ -295,7 +427,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(variable._type.clone())
     }
 
-    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<ast::Type> {
+    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
         let a = self.compile_expression(&arithmetic.left)?;
         let b = self.compile_expression(&arithmetic.right)?;
 
@@ -350,7 +482,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(a)
     }
 
-    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<ast::Type> {
+    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<Type> {
         let a: ast::Type;
         let b: ast::Type;
 
@@ -404,7 +536,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::BOOL)
     }
 
-    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<ast::Type> {
+    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
         let exp = self.compile_expression(&infix.expression)?;
         match infix._type {
             ast::InfixType::Plus => {}
@@ -415,7 +547,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(exp)
     }
 
-    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<ast::Type> {
+    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<Type> {
         self.instructions.instr_push_slice();
 
         let mut curr_exp: Option<ast::Type> = None;
@@ -448,7 +580,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         })
     }
 
-    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<ast::Type> {
+    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
         let exp_var = self.compile_expression(&index.var)?;
 
         let ast::TypeType::Slice(expected_type) = exp_var._type else {
@@ -465,7 +597,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(*expected_type)
     }
 
-    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<ast::Type> {
+    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<Type> {
         self.instructions.stack_instructions.jump();
 
         let left = self.compile_expression(&andor.left)?;
@@ -502,7 +634,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::BOOL)
     }
 
-    fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<ast::Type> {
+    fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<Type> {
         self.instructions.push_alignment(type_cast._type.size);
 
         let target = self.compile_expression(&type_cast.expression)?;
@@ -581,7 +713,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(type_cast._type.clone())
     }
 
-    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<ast::Type> {
+    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
         let exp_bool = self.compile_expression(negate)?;
         if exp_bool != ast::BOOL {
             return Err(anyhow!("can only negate bools"));
@@ -592,7 +724,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         Ok(ast::BOOL)
     }
 
-    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
+    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
         let exp = self.compile_expression(expression)?;
 
         let ast::TypeType::Slice(slice_item) = exp._type else {
@@ -605,7 +737,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         })
     }
 
-    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ast::Type> {
+    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
         let exp = match expression {

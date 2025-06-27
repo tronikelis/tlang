@@ -229,12 +229,12 @@ impl<'a> LexerNavigator<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct TypeStruct {
-    fields: Vec<(String, Type)>,
+pub struct TypeStruct {
+    pub fields: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Type {
+pub enum Type {
     Alias(String),
     Struct(TypeStruct),
     Slice(Box<Type>),
@@ -292,16 +292,17 @@ impl Type {
 }
 
 #[derive(Debug, Clone)]
-struct TypeDeclaration {
-    identifier: String,
-    _type: Type,
+pub struct TypeDeclaration {
+    pub identifier: String,
+    pub _type: Type,
 }
 
 struct TypeDeclarationParser<'a, 'b> {
     lexer_navigator: &'b mut LexerNavigator<'a>,
 }
 
-struct TypeDeclarations(HashMap<String, TypeDeclaration>);
+#[derive(Debug, Clone)]
+pub struct TypeDeclarations(pub HashMap<String, TypeDeclaration>);
 
 impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
     fn new(lexer_navigator: &'b mut LexerNavigator<'a>) -> Self {
@@ -463,13 +464,16 @@ impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
 
 #[derive(Debug)]
 pub struct Ast {
+    pub type_declarations: TypeDeclarations,
     pub functions: HashMap<String, Function>,
 }
 
 impl Ast {
-    pub fn new(tokens: &Vec<lexer::Token>) -> Result<Self> {
+    pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
+        let parser = TokenParser::new(tokens)?;
         Ok(Self {
-            functions: TokenParser::new(tokens)?.parse_functions()?,
+            type_declarations: parser.type_declarations.clone(),
+            functions: parser.parse_functions()?,
         })
     }
 }

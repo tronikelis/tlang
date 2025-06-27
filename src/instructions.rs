@@ -184,7 +184,7 @@ impl StackInstructions {
     }
 }
 
-fn align(size: usize, stack_size: usize) -> usize {
+pub fn align(size: usize, stack_size: usize) -> usize {
     if size == 0 || stack_size == 0 {
         0
     } else {
