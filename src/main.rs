@@ -11,6 +11,20 @@ mod linker;
 fn main() {
     let code = String::from(
         "
+                type bool bool
+                type int int
+                type ptr ptr
+                type string string
+                type uint uint
+                type uint8 uint8
+                type void void
+                type Type Type
+
+                type User struct {
+                    nice string
+                }
+                    
+
                 fn len(slice Type) int {}
                 fn append(slice Type, value Type) void {}
 
