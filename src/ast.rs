@@ -14,15 +14,14 @@ pub const VOID_ALIAS: &'static str = "void";
 pub const TYPE_ALIAS: &'static str = "Type";
 
 lazy_static! {
-    pub static ref BOOL: TypeDeclarationType = TypeDeclarationType::Alias(BOOL_ALIAS.to_string());
-    pub static ref INT: TypeDeclarationType = TypeDeclarationType::Alias(INT_ALIAS.to_string());
-    pub static ref PTR: TypeDeclarationType = TypeDeclarationType::Alias(PTR_ALIAS.to_string());
-    pub static ref STRING: TypeDeclarationType =
-        TypeDeclarationType::Alias(STRING_ALIAS.to_string());
-    pub static ref UINT: TypeDeclarationType = TypeDeclarationType::Alias(UINT_ALIAS.to_string());
-    pub static ref UINT8: TypeDeclarationType = TypeDeclarationType::Alias(UINT8_ALIAS.to_string());
-    pub static ref VOID: TypeDeclarationType = TypeDeclarationType::Alias(VOID_ALIAS.to_string());
-    pub static ref TYPE: TypeDeclarationType = TypeDeclarationType::Alias(TYPE_ALIAS.to_string());
+    pub static ref BOOL: Type = Type::Alias(BOOL_ALIAS.to_string());
+    pub static ref INT: Type = Type::Alias(INT_ALIAS.to_string());
+    pub static ref PTR: Type = Type::Alias(PTR_ALIAS.to_string());
+    pub static ref STRING: Type = Type::Alias(STRING_ALIAS.to_string());
+    pub static ref UINT: Type = Type::Alias(UINT_ALIAS.to_string());
+    pub static ref UINT8: Type = Type::Alias(UINT8_ALIAS.to_string());
+    pub static ref VOID: Type = Type::Alias(VOID_ALIAS.to_string());
+    pub static ref TYPE: Type = Type::Alias(TYPE_ALIAS.to_string());
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +75,7 @@ pub struct Infix {
 #[derive(Debug, Clone)]
 pub struct Literal {
     pub literal: lexer::Literal,
-    pub _type: TypeDeclarationType,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +100,7 @@ pub enum AndOrType {
 #[derive(Debug, Clone)]
 pub struct TypeCast {
     pub expression: Expression,
-    pub _type: TypeDeclarationType,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +117,7 @@ pub enum Expression {
     List(Vec<Expression>),
     Index(Index),
     Spread(Box<Expression>),
-    Type(TypeDeclarationType),
+    Type(Type),
 }
 
 #[derive(Debug, Clone)]
@@ -230,19 +229,19 @@ impl<'a> LexerNavigator<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct TypeDeclarationTypeStruct {
-    fields: Vec<(String, TypeDeclarationType)>,
+struct TypeStruct {
+    fields: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum TypeDeclarationType {
+enum Type {
     Alias(String),
-    Struct(TypeDeclarationTypeStruct),
-    Slice(Box<TypeDeclarationType>),
-    Variadic(Box<TypeDeclarationType>),
+    Struct(TypeStruct),
+    Slice(Box<Type>),
+    Variadic(Box<Type>),
 }
 
-impl TypeDeclarationType {
+impl Type {
     pub fn can_assign(&self, other: &Self) -> bool {
         match &self {
             Self::Slice(_) => self.can_assign_slice(other),
@@ -269,7 +268,7 @@ impl TypeDeclarationType {
         return *other == *VOID || other == me;
     }
 
-    fn extract_slice_type(&self) -> (&TypeDeclarationType, usize) {
+    fn extract_slice_type(&self) -> (&Type, usize) {
         let mut _type = self;
         let mut i = 0;
         loop {
@@ -295,7 +294,7 @@ impl TypeDeclarationType {
 #[derive(Debug, Clone)]
 struct TypeDeclaration {
     identifier: String,
-    _type: TypeDeclarationType,
+    _type: Type,
 }
 
 struct TypeDeclarationParser<'a, 'b> {
@@ -309,7 +308,7 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
         Self { lexer_navigator }
     }
 
-    fn parse_type_struct(&mut self) -> Result<TypeDeclarationTypeStruct> {
+    fn parse_type_struct(&mut self) -> Result<TypeStruct> {
         self.lexer_navigator
             .expect_next_token(lexer::Token::Struct)?;
         self.lexer_navigator.next();
@@ -318,24 +317,24 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
             .expect_next_token(lexer::Token::COpen)?;
         self.lexer_navigator.next();
 
-        let mut fields: Vec<(String, TypeDeclarationType)> = Vec::new();
+        let mut fields: Vec<(String, Type)> = Vec::new();
 
         while *self.lexer_navigator.peek_token_err(0)? != lexer::Token::CClose {
             let field_identifier = self.lexer_navigator.expect_identifier()?;
-            let field_type = self.parse_type_declaration_type()?;
+            let field_type = self.parse_type()?;
             fields.push((field_identifier, field_type));
         }
 
         self.lexer_navigator.next();
 
-        Ok(TypeDeclarationTypeStruct { fields })
+        Ok(TypeStruct { fields })
     }
 
-    fn parse_type_declaration_type(&mut self) -> Result<TypeDeclarationType> {
+    fn parse_type(&mut self) -> Result<Type> {
         match self.lexer_navigator.peek_token_err(0)? {
-            lexer::Token::Struct => Ok(TypeDeclarationType::Struct(self.parse_type_struct()?)),
+            lexer::Token::Struct => Ok(Type::Struct(self.parse_type_struct()?)),
             lexer::Token::Identifier(alias) => {
-                let mut _type = TypeDeclarationType::Alias(alias.clone());
+                let mut _type = Type::Alias(alias.clone());
 
                 while let Some(token) = self.lexer_navigator.peek_token(0) {
                     if *token != lexer::Token::BOpen {
@@ -347,7 +346,7 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
                         .expect_next_token(lexer::Token::BClose)?;
                     self.lexer_navigator.next();
 
-                    _type = TypeDeclarationType::Slice(Box::new(_type));
+                    _type = Type::Slice(Box::new(_type));
                 }
 
                 Ok(_type)
@@ -367,7 +366,7 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
             self.lexer_navigator.next();
             let identifier = self.lexer_navigator.expect_identifier()?;
 
-            let _type = self.parse_type_declaration_type()?;
+            let _type = self.parse_type()?;
             map.insert(identifier.clone(), TypeDeclaration { _type, identifier });
         }
 
@@ -418,12 +417,11 @@ impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
             }
 
             let identifier = self.lexer_navigator.expect_identifier()?;
-            let mut _type =
-                TypeDeclarationParser::new(self.lexer_navigator).parse_type_declaration_type()?;
+            let mut _type = TypeDeclarationParser::new(self.lexer_navigator).parse_type()?;
 
             if let lexer::Token::Dot3 = self.lexer_navigator.peek_token_err(0)? {
                 self.lexer_navigator.next();
-                _type = TypeDeclarationType::Variadic(Box::new(_type));
+                _type = Type::Variadic(Box::new(_type));
                 self.lexer_navigator
                     .expect_next_token(lexer::Token::PClose)?;
             }
@@ -517,7 +515,7 @@ struct TokenParser<'a> {
 
 #[derive(Debug, Clone)]
 pub struct Variable {
-    pub _type: TypeDeclarationType,
+    pub _type: Type,
     pub identifier: String,
 }
 
@@ -621,7 +619,7 @@ impl<'a> TokenParser<'a> {
                     expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: exp,
                         right: Expression::Literal(Literal {
-                            _type: TypeDeclarationType::Alias(INT_ALIAS.to_string()),
+                            _type: Type::Alias(INT_ALIAS.to_string()),
                             literal: lexer::Literal::Int(1),
                         }),
                         _type: {
@@ -730,13 +728,9 @@ impl<'a> TokenParser<'a> {
                 Ok(Literal {
                     literal: v.clone(),
                     _type: match v {
-                        lexer::Literal::Int(_) => TypeDeclarationType::Alias(INT_ALIAS.to_string()),
-                        lexer::Literal::Bool(_) => {
-                            TypeDeclarationType::Alias(BOOL_ALIAS.to_string())
-                        }
-                        lexer::Literal::String(_) => {
-                            TypeDeclarationType::Alias(STRING_ALIAS.to_string())
-                        }
+                        lexer::Literal::Int(_) => Type::Alias(INT_ALIAS.to_string()),
+                        lexer::Literal::Bool(_) => Type::Alias(BOOL_ALIAS.to_string()),
+                        lexer::Literal::String(_) => Type::Alias(STRING_ALIAS.to_string()),
                     },
                 })
             }
@@ -754,8 +748,8 @@ impl<'a> TokenParser<'a> {
         }
     }
 
-    fn parse_type(&mut self) -> Result<TypeDeclarationType> {
-        TypeDeclarationParser::new(&mut self.lexer_navigator).parse_type_declaration_type()
+    fn parse_type(&mut self) -> Result<Type> {
+        TypeDeclarationParser::new(&mut self.lexer_navigator).parse_type()
     }
 
     fn parse_function_call(&mut self) -> Result<FunctionCall> {
@@ -797,7 +791,7 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_expression_type(&mut self, _type: TypeDeclarationType) -> Result<Expression> {
+    fn parse_expression_type(&mut self, _type: Type) -> Result<Expression> {
         if *self.lexer_navigator.peek_token_err(0)? == lexer::Token::POpen {
             let exp = self.parse_expression()?;
             self.lexer_navigator
@@ -814,7 +808,7 @@ impl<'a> TokenParser<'a> {
 
     fn parse_expression_identifier(&mut self) -> Result<Expression> {
         let maybe_type = self.parse_type()?;
-        let TypeDeclarationType::Alias(identifier) = &maybe_type else {
+        let Type::Alias(identifier) = &maybe_type else {
             return self.parse_expression_type(maybe_type);
         };
 
