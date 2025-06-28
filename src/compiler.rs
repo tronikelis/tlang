@@ -706,7 +706,7 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
                 .get(alias)
                 .ok_or(anyhow!("can't resolve {alias:#?}"))?;
 
-            resolve_type(type_declarations, &inner._type)
+            resolve_type(type_declarations, &inner)
         }
         ast::Type::Slice(_type) => Ok(Type {
             size: SLICE_SIZE,
@@ -1661,7 +1661,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         self.instructions
-            .init_function_prologue(self.function, self.type_declarations);
+            .init_function_prologue(self.function, self.type_declarations)?;
 
         self.compile_body(
             self.function

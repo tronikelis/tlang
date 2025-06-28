@@ -5,12 +5,7 @@ use crate::lexer;
 
 const BOOL_ALIAS: &'static str = "bool";
 const INT_ALIAS: &'static str = "int";
-const PTR_ALIAS: &'static str = "ptr";
 const STRING_ALIAS: &'static str = "string";
-const UINT_ALIAS: &'static str = "uint";
-const UINT8_ALIAS: &'static str = "uint8";
-const VOID_ALIAS: &'static str = "void";
-const TYPE_ALIAS: &'static str = "Type";
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
@@ -229,18 +224,12 @@ pub enum Type {
     Variadic(Box<Type>),
 }
 
-#[derive(Debug, Clone)]
-pub struct TypeDeclaration {
-    pub identifier: String,
-    pub _type: Type,
-}
-
 struct TypeDeclarationParser<'a, 'b> {
     lexer_navigator: &'b mut LexerNavigator<'a>,
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeDeclarations(pub HashMap<String, TypeDeclaration>);
+pub struct TypeDeclarations(pub HashMap<String, Type>);
 
 impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
     fn new(lexer_navigator: &'b mut LexerNavigator<'a>) -> Self {
@@ -307,7 +296,7 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
             let identifier = self.lexer_navigator.expect_identifier()?;
 
             let _type = self.parse_type()?;
-            map.insert(identifier.clone(), TypeDeclaration { _type, identifier });
+            map.insert(identifier.clone(), _type);
         }
 
         Ok(TypeDeclarations(map))

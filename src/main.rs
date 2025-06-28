@@ -127,12 +127,13 @@ fn main() {
     let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
-    for v in &ast.functions {
-        let compiled = compiler::FunctionCompiler::new(v, &mut static_memory)
-            .compile()
-            .unwrap();
+    for (identifier, function) in &ast.functions {
+        let compiled =
+            compiler::FunctionCompiler::new(function, &mut static_memory, &ast.type_declarations)
+                .compile()
+                .unwrap();
         println!("{:#?}", compiled);
-        functions.insert(v.identifier.clone(), compiled);
+        functions.insert(identifier.clone(), compiled);
     }
 
     let instructions = linker::link(&functions).unwrap();
