@@ -4,7 +4,6 @@ mod vm;
 
 mod ast;
 mod compiler;
-mod instructions;
 mod lexer;
 mod linker;
 
@@ -125,7 +124,7 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<Vec<instructions::Instruction>>>::new();
+    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
     for v in &ast.functions {
