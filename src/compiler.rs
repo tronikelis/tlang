@@ -507,13 +507,19 @@ impl Instructions {
         size
     }
 
-    fn init_function_prologue(&mut self, function: &ast::Function) {
+    fn init_function_prologue(
+        &mut self,
+        function: &ast::Function,
+        type_declarations: &ast::TypeDeclarations,
+    ) -> Result<()> {
         // push arguments to var_stack, they are already in the stack
         // push return address to var_stack
 
         for arg in function.arguments.iter() {
+            let _type = resolve_type(type_declarations, &arg._type)?;
+            let return_type = resolve_type(type_declarations, &function.return_type)?;
             let alignment = align(
-                arg._type.size,
+                _type.size,
                 self.var_stack.total_size() + function.return_type.size,
             );
             if alignment != 0 {
@@ -646,7 +652,7 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
             resolve_type(type_declarations, &inner._type)
         }
         ast::Type::Slice(_type) => Ok(Type {
-            size: size_of::<usize>(),
+            size: SLICE_SIZE,
             _type: TypeType::Slice(Box::new(resolve_type(type_declarations, _type)?)),
         }),
         ast::Type::Variadic(_type) => Ok(Type {

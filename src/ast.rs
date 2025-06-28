@@ -34,7 +34,7 @@ pub struct VariableDeclaration {
 pub struct Function {
     pub identifier: String,
     pub arguments: Vec<Variable>,
-    pub return_type: String,
+    pub return_type: Type,
     pub body: Option<Vec<Node>>,
 }
 
@@ -430,11 +430,11 @@ impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
             function_arguments.push(Variable { _type, identifier })
         }
 
-        let return_type_identifier = self.lexer_navigator.expect_identifier()?;
+        let return_type = TypeDeclarationParser::new(self.lexer_navigator).parse_type()?;
 
         Ok(Function {
             body: None,
-            return_type: return_type_identifier,
+            return_type,
             identifier,
             arguments: function_arguments,
         })
