@@ -1,28 +1,16 @@
 use anyhow::{anyhow, Result};
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 use crate::lexer;
 
-pub const BOOL_ALIAS: &'static str = "bool";
-pub const INT_ALIAS: &'static str = "int";
-pub const PTR_ALIAS: &'static str = "ptr";
-pub const STRING_ALIAS: &'static str = "string";
-pub const UINT_ALIAS: &'static str = "uint";
-pub const UINT8_ALIAS: &'static str = "uint8";
-pub const VOID_ALIAS: &'static str = "void";
-pub const TYPE_ALIAS: &'static str = "Type";
-
-lazy_static! {
-    pub static ref BOOL: Type = Type::Alias(BOOL_ALIAS.to_string());
-    pub static ref INT: Type = Type::Alias(INT_ALIAS.to_string());
-    pub static ref PTR: Type = Type::Alias(PTR_ALIAS.to_string());
-    pub static ref STRING: Type = Type::Alias(STRING_ALIAS.to_string());
-    pub static ref UINT: Type = Type::Alias(UINT_ALIAS.to_string());
-    pub static ref UINT8: Type = Type::Alias(UINT8_ALIAS.to_string());
-    pub static ref VOID: Type = Type::Alias(VOID_ALIAS.to_string());
-    pub static ref TYPE: Type = Type::Alias(TYPE_ALIAS.to_string());
-}
+const BOOL_ALIAS: &'static str = "bool";
+const INT_ALIAS: &'static str = "int";
+const PTR_ALIAS: &'static str = "ptr";
+const STRING_ALIAS: &'static str = "string";
+const UINT_ALIAS: &'static str = "uint";
+const UINT8_ALIAS: &'static str = "uint8";
+const VOID_ALIAS: &'static str = "void";
+const TYPE_ALIAS: &'static str = "Type";
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
@@ -241,56 +229,6 @@ pub enum Type {
     Variadic(Box<Type>),
 }
 
-impl Type {
-    pub fn can_assign(&self, other: &Self) -> bool {
-        match &self {
-            Self::Slice(_) => self.can_assign_slice(other),
-            _ => other == self,
-        }
-    }
-
-    fn can_assign_slice(&self, other: &Self) -> bool {
-        let (me, me_depth) = self.extract_slice_type();
-        let (other, other_depth) = other.extract_slice_type();
-        // some safety checks
-        if other_depth == 0 && *other == *VOID {
-            panic!("impossible other_depth=0 VOID type in slice");
-        }
-
-        if other_depth > me_depth {
-            return false;
-        }
-
-        if other_depth < me_depth {
-            return *other == *VOID;
-        }
-
-        return *other == *VOID || other == me;
-    }
-
-    fn extract_slice_type(&self) -> (&Type, usize) {
-        let mut _type = self;
-        let mut i = 0;
-        loop {
-            if let Self::Slice(v) = &_type {
-                _type = v;
-                i += 1;
-            } else {
-                break;
-            }
-        }
-
-        (_type, i)
-    }
-
-    pub fn extract_variadic(&self) -> Option<Self> {
-        match &self {
-            Self::Variadic(item) => Some(*item.clone()),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct TypeDeclaration {
     pub identifier: String,
@@ -361,6 +299,7 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
 
         while let Some(token) = self.lexer_navigator.peek_token(0) {
             if *token != lexer::Token::Type {
+                self.lexer_navigator.next();
                 continue;
             }
 
@@ -445,6 +384,7 @@ impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
 
         while let Some(token) = self.lexer_navigator.peek_token(0) {
             if *token != lexer::Token::Function {
+                self.lexer_navigator.next();
                 continue;
             }
 

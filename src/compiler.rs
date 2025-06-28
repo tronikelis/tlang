@@ -518,15 +518,14 @@ impl Instructions {
         for arg in function.arguments.iter() {
             let _type = resolve_type(type_declarations, &arg._type)?;
             let return_type = resolve_type(type_declarations, &function.return_type)?;
-            let alignment = align(
-                _type.size,
-                self.var_stack.total_size() + function.return_type.size,
-            );
+
+            let alignment = align(_type.size, self.var_stack.total_size() + return_type.size);
+
             if alignment != 0 {
                 self.var_stack.push(VarStackItem::Increment(alignment));
             }
 
-            self.var_stack.push(VarStackItem::Increment(arg._type.size));
+            self.var_stack.push(VarStackItem::Increment(_type.size));
             self.var_mark(arg.identifier.clone());
         }
 
@@ -541,6 +540,8 @@ impl Instructions {
         }
 
         self.var_stack.set_arg_size();
+
+        Ok(())
     }
 
     fn init_function_epilogue(&mut self, function: &ast::Function) {
@@ -602,6 +603,10 @@ const VOID: Type = Type {
     size: 0,
     _type: TypeType::Builtin(TypeBuiltin::Void),
 };
+const PTR: Type = Type {
+    size: PTR_SIZE,
+    _type: TypeType::Builtin(TypeBuiltin::Ptr),
+};
 const SLICE_SIZE: usize = size_of::<usize>();
 const PTR_SIZE: usize = size_of::<usize>();
 
@@ -614,6 +619,7 @@ enum TypeBuiltin {
     Bool,
     Void,
     CompilerType,
+    Ptr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -630,6 +636,56 @@ struct Type {
     _type: TypeType,
 }
 
+impl Type {
+    fn can_assign(&self, other: &Self) -> bool {
+        match &self._type {
+            TypeType::Slice(_) => self.can_assign_slice(other),
+            _ => other == self,
+        }
+    }
+
+    fn can_assign_slice(&self, other: &Self) -> bool {
+        let (me, me_depth) = self.extract_slice_type();
+        let (other, other_depth) = other.extract_slice_type();
+        // some safety checks
+        if other_depth == 0 && *other == VOID {
+            panic!("impossible other_depth=0 VOID type in slice");
+        }
+
+        if other_depth > me_depth {
+            return false;
+        }
+
+        if other_depth < me_depth {
+            return *other == VOID;
+        }
+
+        return *other == VOID || other == me;
+    }
+
+    fn extract_slice_type(&self) -> (&Type, usize) {
+        let mut _type = self;
+        let mut i = 0;
+        loop {
+            if let TypeType::Slice(v) = &_type._type {
+                _type = v;
+                i += 1;
+            } else {
+                break;
+            }
+        }
+
+        (_type, i)
+    }
+
+    fn extract_variadic(&self) -> Option<Self> {
+        match &self._type {
+            TypeType::Variadic(item) => Some(*item.clone()),
+            _ => None,
+        }
+    }
+}
+
 fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) -> Result<Type> {
     match _type {
         ast::Type::Alias(alias) => {
@@ -641,6 +697,7 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
                 "string" => return Ok(STRING),
                 "Type" => return Ok(COMPILER_TYPE),
                 "void" => return Ok(VOID),
+                "ptr" => return Ok(PTR),
                 _ => {}
             };
 
@@ -708,6 +765,10 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
     }
 
+    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
+        resolve_type(self.type_declarations, _type)
+    }
+
     // new(_ Type, args Type...) Type
     fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<Type> {
         let type_arg = call
@@ -718,7 +779,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         let ast::Expression::Type(_type) = type_arg else {
             return Err(anyhow!("new: expected first argument to be type"));
         };
-        let _type = resolve_type(self.type_declarations, _type)?;
+        let _type = self.resolve_type(_type)?;
 
         match &_type._type {
             TypeType::Slice(slice_item) => {
@@ -787,7 +848,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         let slice_exp = self.compile_expression(slice_arg)?;
         let value_exp = self.compile_expression(value_arg)?;
 
-        let ast::TypeType::Slice(slice_item) = &slice_exp._type else {
+        let TypeType::Slice(slice_item) = &slice_exp._type else {
             return Err(anyhow!("append: provide a slice as the first argument"));
         };
 
@@ -797,13 +858,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
         self.instructions.instr_slice_append(value_exp.size);
 
-        Ok(ast::VOID)
+        Ok(VOID)
     }
 
-    fn check_function_call_argument_count(call: &ast::FunctionCall) -> Result<()> {
+    fn check_function_call_argument_count(&self, call: &ast::FunctionCall) -> Result<()> {
         // todo: refactor this arguments check somehow
         if let Some(last) = call.function.arguments.last() {
-            if let ast::TypeType::Variadic(_type) = &last._type._type {
+            let last_type = self.resolve_type(&last._type)?;
+            if let TypeType::Variadic(_type) = &last_type._type {
                 // -1 because variadic can be empty
                 if call.arguments.len() < call.function.arguments.len() - 1 {
                     return Err(anyhow!(
@@ -825,7 +887,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<Type> {
-        Self::check_function_call_argument_count(call)?;
+        self.check_function_call_argument_count(call)?;
 
         match call.function.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
@@ -835,24 +897,25 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .push_alignment(call.function.return_type.size);
+            .push_alignment(self.resolve_type(&call.function.return_type)?.size);
 
         let argument_size = {
             self.instructions.push_stack_frame();
             for (i, expected_type) in call.function.arguments.iter().enumerate() {
+                let expected_type = self.resolve_type(&expected_type._type)?;
                 let arg = call.arguments.get(i);
 
                 let Some(arg) = arg else {
-                    if expected_type._type.extract_variadic().is_some() {
+                    if expected_type.extract_variadic().is_some() {
                         self.instructions.instr_push_slice();
                         continue;
                     }
                     return Err(anyhow!("compile_function_call: argument missing"));
                 };
 
-                let Some(inner) = expected_type._type.extract_variadic() else {
+                let Some(inner) = expected_type.extract_variadic() else {
                     let exp = self.compile_expression(arg)?;
-                    if exp != expected_type._type {
+                    if exp != expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
                     continue;
@@ -860,7 +923,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
                 if let ast::Expression::Spread(_) = arg {
                     let exp = self.compile_expression(arg)?;
-                    if exp != expected_type._type {
+                    if exp != expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
                     if call.function.arguments.len() != call.arguments.len() {
@@ -889,36 +952,37 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         match call.function.identifier.as_str() {
             "syscall0" => {
                 self.instructions.instr_syscall0();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall1" => {
                 self.instructions.instr_syscall1();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall2" => {
                 self.instructions.instr_syscall2();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall3" => {
                 self.instructions.instr_syscall3();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall4" => {
                 self.instructions.instr_syscall4();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall5" => {
                 self.instructions.instr_syscall5();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             "syscall6" => {
                 self.instructions.instr_syscall6();
-                return Ok(ast::UINT);
+                return Ok(UINT);
             }
             _ => {}
         }
 
-        let return_size = call.function.return_type.size;
+        let return_type = self.resolve_type(&call.function.return_type)?;
+        let return_size = return_type.size;
 
         let reset_size: usize;
         if argument_size < return_size {
@@ -936,22 +1000,24 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             .instr_jump_and_link(call.function.identifier.clone());
         self.instructions.instr_reset(reset_size);
 
-        Ok(call.function.return_type.clone())
+        Ok(return_type)
     }
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
+        let literal_type = self.resolve_type(&literal._type)?;
+
         match &literal.literal {
-            lexer::Literal::Int(int) => match &literal._type {
-                &ast::UINT8 => {
+            lexer::Literal::Int(int) => match &literal_type {
+                &UINT8 => {
                     self.instructions.instr_push_u8(*int)?;
                 }
-                &ast::INT => {
+                &INT => {
                     self.instructions.instr_push_i(*int)?;
                 }
                 _type => return Err(anyhow!("can't cast int to {_type:#?}")),
             },
-            lexer::Literal::Bool(bool) => match &literal._type {
-                &ast::BOOL => {
+            lexer::Literal::Bool(bool) => match &literal_type {
+                &BOOL => {
                     self.instructions.instr_push_i({
                         if *bool {
                             1
@@ -968,22 +1034,23 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             }
         }
 
-        Ok(literal._type.clone())
+        Ok(literal_type)
     }
 
     fn compile_variable(&mut self, variable: &ast::Variable) -> Result<Type> {
-        self.instructions.push_alignment(variable._type.size);
+        let _type = self.resolve_type(&variable._type)?;
+        self.instructions.push_alignment(_type.size);
 
         let offset = self
             .instructions
             .var_get_offset(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
-        self.instructions.instr_increment(variable._type.size);
+        self.instructions.instr_increment(_type.size);
         self.instructions
-            .instr_copy(0, offset + variable._type.size, variable._type.size);
+            .instr_copy(0, offset + _type.size, _type.size);
 
-        Ok(variable._type.clone())
+        Ok(_type)
     }
 
     fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
@@ -993,13 +1060,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         if a != b {
             return Err(anyhow!("can't add different types"));
         }
-        if a == ast::VOID {
+        if a == VOID {
             return Err(anyhow!("can't add void type"));
         }
 
         match arithmetic._type {
             ast::ArithmeticType::Minus => {
-                if let ast::INT = a {
+                if INT == a {
                     self.instructions.instr_minus_int();
                     self.instructions.instr_add_i();
                 } else {
@@ -1007,30 +1074,30 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 }
             }
             ast::ArithmeticType::Plus => {
-                if let ast::INT = a {
+                if INT == a {
                     self.instructions.instr_add_i();
-                } else if a == ast::STRING {
+                } else if a == STRING {
                     self.instructions.instr_add_string();
                 } else {
                     return Err(anyhow!("can only plus int and string"));
                 }
             }
             ast::ArithmeticType::Multiply => {
-                if let ast::INT = a {
+                if INT == a {
                     self.instructions.instr_multiply_i();
                 } else {
                     return Err(anyhow!("can only multiply int"));
                 }
             }
             ast::ArithmeticType::Divide => {
-                if let ast::INT = a {
+                if INT == a {
                     self.instructions.instr_divide_i();
                 } else {
                     return Err(anyhow!("can only divide int"));
                 }
             }
             ast::ArithmeticType::Modulo => {
-                if let ast::INT = a {
+                if INT == a {
                     self.instructions.instr_modulo_i();
                 } else {
                     return Err(anyhow!("can only modulo int"));
@@ -1042,8 +1109,8 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     fn compile_compare(&mut self, compare: &ast::Compare) -> Result<Type> {
-        let a: ast::Type;
-        let b: ast::Type;
+        let a: Type;
+        let b: Type;
 
         match compare.compare_type {
             // last item on the stack is smaller
@@ -1068,7 +1135,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         match a {
-            ast::BOOL | ast::INT => {}
+            BOOL | INT => {}
             _type => return Err(anyhow!("can only compare int/bool")),
         }
 
@@ -1092,7 +1159,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             }
         }
 
-        Ok(ast::BOOL)
+        Ok(BOOL)
     }
 
     fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
@@ -1109,7 +1176,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     fn compile_list(&mut self, list: &[ast::Expression]) -> Result<Type> {
         self.instructions.instr_push_slice();
 
-        let mut curr_exp: Option<ast::Type> = None;
+        let mut curr_exp: Option<Type> = None;
 
         for v in list {
             self.instructions.push_stack_frame();
@@ -1130,23 +1197,23 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             self.instructions.pop_stack_frame();
         }
 
-        Ok(ast::Type {
+        Ok(Type {
             size: SLICE_SIZE,
             _type: curr_exp
-                .map(|v| ast::TypeType::Slice(Box::new(v)))
-                .unwrap_or(ast::TypeType::Slice(Box::new(ast::VOID))),
+                .map(|v| TypeType::Slice(Box::new(v)))
+                .unwrap_or(TypeType::Slice(Box::new(VOID))),
         })
     }
 
     fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
         let exp_var = self.compile_expression(&index.var)?;
 
-        let ast::TypeType::Slice(expected_type) = exp_var._type else {
+        let TypeType::Slice(expected_type) = exp_var._type else {
             return Err(anyhow!("can't index this type"));
         };
 
         let exp_index = self.compile_expression(&index.expression)?;
-        if exp_index != ast::INT {
+        if exp_index != INT {
             return Err(anyhow!("cant index with {exp_index:#?}"));
         }
 
@@ -1159,7 +1226,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         self.instructions.stack_instructions.jump();
 
         let left = self.compile_expression(&andor.left)?;
-        if left != ast::BOOL {
+        if left != BOOL {
             return Err(anyhow!("compile_andor: expected bool expression"));
         }
 
@@ -1168,7 +1235,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 self.instructions.stack_instructions.back_if_true(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != ast::BOOL {
+                if right != BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
@@ -1178,7 +1245,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 self.instructions.stack_instructions.back_if_false(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != ast::BOOL {
+                if right != BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
@@ -1189,47 +1256,48 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
-        Ok(ast::BOOL)
+        Ok(BOOL)
     }
 
     fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<Type> {
-        self.instructions.push_alignment(type_cast._type.size);
+        let type_cast_type = self.resolve_type(&type_cast._type)?;
+        self.instructions.push_alignment(type_cast_type.size);
 
         let target = self.compile_expression(&type_cast.expression)?;
 
         match target._type {
-            ast::TypeType::Scalar(scalar_target) => match scalar_target {
-                lexer::Type::Int => match &type_cast._type._type {
-                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
-                        lexer::Type::Uint8 => {
+            TypeType::Builtin(builtin) => match builtin {
+                TypeBuiltin::Int => match &type_cast_type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Uint8 => {
                             self.instructions.instr_cast_int_uint8();
                         }
-                        lexer::Type::Uint => {
+                        TypeBuiltin::Uint => {
                             self.instructions.instr_cast_int_uint();
                         }
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                lexer::Type::Uint8 => match &type_cast._type._type {
-                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
-                        lexer::Type::Int => {
+                TypeBuiltin::Uint8 => match &type_cast_type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Int => {
                             self.instructions.instr_cast_uint8_int();
                         }
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                lexer::Type::Ptr => match &type_cast._type._type {
-                    ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
-                        lexer::Type::Uint => {}
+                TypeBuiltin::Ptr => match &type_cast_type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                lexer::Type::String => match &type_cast._type._type {
-                    ast::TypeType::Slice(item) => {
-                        if **item != ast::UINT8 {
+                TypeBuiltin::String => match &type_cast_type._type {
+                    TypeType::Slice(item) => {
+                        if **item != UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
@@ -1239,24 +1307,24 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            ast::TypeType::Slice(item_target) => match &type_cast._type._type {
-                ast::TypeType::Scalar(scalar_dest) => match scalar_dest {
-                    lexer::Type::String => {
-                        if *item_target != ast::UINT8 {
+            TypeType::Slice(item_target) => match &type_cast_type._type {
+                TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    TypeBuiltin::String => {
+                        if *item_target != UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
                         }
                     }
-                    lexer::Type::Ptr => {
+                    TypeBuiltin::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
                     }
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            ast::TypeType::Variadic(item_target) => match &type_cast._type._type {
-                ast::TypeType::Slice(item_dest) => {
+            TypeType::Variadic(item_target) => match &type_cast_type._type {
+                TypeType::Slice(item_dest) => {
                     if item_target != *item_dest {
                         return Err(anyhow!(
                             "compile_type_cast: cant cast variadic into slice different types"
@@ -1268,30 +1336,30 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
 
-        Ok(type_cast._type.clone())
+        Ok(type_cast_type)
     }
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
         let exp_bool = self.compile_expression(negate)?;
-        if exp_bool != ast::BOOL {
+        if exp_bool != BOOL {
             return Err(anyhow!("can only negate bools"));
         }
 
         self.instructions.instr_negate_bool();
 
-        Ok(ast::BOOL)
+        Ok(BOOL)
     }
 
     fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
         let exp = self.compile_expression(expression)?;
 
-        let ast::TypeType::Slice(slice_item) = exp._type else {
+        let TypeType::Slice(slice_item) = exp._type else {
             return Err(anyhow!("compile_spread: can only spread slice types"));
         };
 
-        Ok(ast::Type {
+        Ok(Type {
             size: SLICE_SIZE,
-            _type: ast::TypeType::Variadic(slice_item),
+            _type: TypeType::Variadic(slice_item),
         })
     }
 
@@ -1311,7 +1379,9 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
-            ast::Expression::Type(_) => panic!("tried to compile type"),
+            ast::Expression::Type(v) => {
+                Err(anyhow!("compile_expression: cant compile type {v:#?}"))
+            }
         }?;
 
         if exp.size != 0 {
@@ -1332,11 +1402,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         declaration: &ast::VariableDeclaration,
     ) -> Result<()> {
         let exp = self.compile_expression(&declaration.expression)?;
-        if exp == ast::VOID {
+        if exp == VOID {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        if !declaration.variable._type.can_assign(&exp) {
+        if !self
+            .resolve_type(&declaration.variable._type)?
+            .can_assign(&exp)
+        {
             return Err(anyhow!("type mismatch"));
         }
 
@@ -1358,7 +1431,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     .var_get_offset(&var.identifier)
                     .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
 
-                if var._type != exp {
+                if self.resolve_type(&var._type)? != exp {
                     return Err(anyhow!("variable assignment type mismatch"));
                 }
 
@@ -1366,12 +1439,12 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             }
             ast::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
-                let ast::TypeType::Slice(slice_item) = &slice._type else {
+                let TypeType::Slice(slice_item) = &slice._type else {
                     return Err(anyhow!("can only index slices"));
                 };
 
                 let item_index = self.compile_expression(&index.expression)?;
-                if item_index != ast::INT {
+                if item_index != INT {
                     return Err(anyhow!("can only index with int type"));
                 }
 
@@ -1392,7 +1465,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
     fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
         let exp = self.compile_expression(expression)?;
-        if exp != ast::BOOL {
+        if exp != BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
         }
 
@@ -1454,7 +1527,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             if let Some(v) = &_for.expression {
                 self.instructions.push_stack_frame();
                 let exp = self.compile_expression(v)?;
-                if exp != ast::BOOL {
+                if exp != BOOL {
                     return Err(anyhow!("compile_for: expected expression to return bool"));
                 }
                 let size = self.instructions.pop_stack_frame_size();
@@ -1568,7 +1641,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     fn compile_return(&mut self, exp: Option<&ast::Expression>) -> Result<()> {
         if let Some(exp) = exp {
             let exp = self.compile_expression(exp)?;
-            if exp != self.function.return_type {
+            if exp != self.resolve_type(&self.function.return_type)? {
                 return Err(anyhow!("incorrect type"));
             }
 
@@ -1586,8 +1659,9 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    pub fn compile(mut self) -> Result<Vec<Vec<instructions::Instruction>>> {
-        self.instructions.init_function_prologue(self.function);
+    pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
+        self.instructions
+            .init_function_prologue(self.function, self.type_declarations);
 
         self.compile_body(
             self.function
