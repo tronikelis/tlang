@@ -201,9 +201,10 @@ impl<'a> LexerNavigator<'a> {
             Ok(())
         } else {
             Err(anyhow!(
-                "expect_next_token: assertion failed, want: {:#?}, got: {:#?}",
+                "expect_next_token: assertion failed, want: {:#?}, got: {:#?}, i: {}",
                 token,
-                self.peek_token_err(0)
+                self.peek_token_err(0),
+                self.i,
             ))
         }
     }
@@ -773,40 +774,42 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_expression_identifier(&mut self) -> Result<Expression> {
-        let maybe_type = self.parse_type()?;
-        let mut identifier: Option<&str> = None;
-        let is_type = match &maybe_type {
-            Type::Alias(iden) => {
-                identifier = Some(iden);
-                if let Some(_) = self.type_declarations.0.get(iden) {
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => true,
+        let lexer::Token::Identifier(identifier) = self.lexer_navigator.peek_token_err(0)?.clone()
+        else {
+            panic!("incorrect usage of parse_expression_identifier");
         };
 
-        if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
-            match is_type {
-                true => return self.parse_expression_type_cast(maybe_type),
-                false => {
+        let is_type = self.type_declarations.0.get(&identifier).is_some();
+        match is_type {
+            true => {
+                let _type = self.parse_type()?;
+
+                if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
+                    return self.parse_expression_type_cast(_type);
+                }
+
+                Ok(Expression::Type(_type))
+            }
+            false => {
+                self.lexer_navigator.next();
+
+                if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
                     return Ok(Expression::FunctionCall(
-                        self.parse_function_call(identifier.unwrap().to_string())?,
+                        self.parse_function_call(identifier)?,
                     ));
                 }
+
+                Ok(Expression::Variable(
+                    self.variables
+                        .get_variable(&identifier)
+                        .ok_or(anyhow!(
+                            "parse_expression_identifier: identifier variable {} not found",
+                            identifier,
+                        ))?
+                        .clone(),
+                ))
             }
         }
-
-        Ok(Expression::Variable(
-            self.variables
-                .get_variable(identifier.unwrap())
-                .ok_or(anyhow!(
-                    "parse_expression_identifier: identifier variable {} not found",
-                    identifier.unwrap()
-                ))?
-                .clone(),
-        ))
     }
 
     fn parse_expression_literal(&mut self) -> Result<Expression> {
@@ -946,12 +949,9 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                     break;
                 }
                 lexer::Token::COpen => {
-                    let Expression::Type(_type) = &left else {
-                        return Err(anyhow!(
-                            "parse_expression: initializing non struct {left:#?}"
-                        ));
+                    if let Expression::Type(_type) = &left {
+                        left = Expression::StructInit(self.parse_struct_init(_type.clone())?);
                     };
-                    left = Expression::StructInit(self.parse_struct_init(_type.clone())?);
                 }
                 _ => {}
             }
