@@ -86,6 +86,10 @@ fn main() {
                 fn new(x Type, args Type...) Type {}
 
                 fn main() void {
+                    let user User = User{
+                        nice: \"foo\",
+                    }
+
                     let one_two_three string = itoa(69420)
 
                     if false && true {
