@@ -48,11 +48,12 @@ pub enum Token {
     Dot3,
     Dot,
     Struct,
+    Colon,
 }
 
-const CONTROL_CHAR: [char; 21] = [
+const CONTROL_CHAR: [char; 22] = [
     ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"', '%',
-    '!', '.',
+    '!', '.', ':',
 ];
 
 pub struct Lexer {
@@ -293,6 +294,11 @@ impl Lexer {
                         tokens.push(Token::Literal(Literal::String(
                             self.parse_string_literal()?,
                         )));
+                        continue;
+                    }
+                    ':' => {
+                        tokens.push(Token::Colon);
+                        self.next();
                         continue;
                     }
                     _ => {}

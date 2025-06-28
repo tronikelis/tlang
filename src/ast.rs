@@ -87,6 +87,12 @@ pub struct TypeCast {
 }
 
 #[derive(Debug, Clone)]
+pub struct StructInit {
+    pub fields: Vec<(String, Expression)>,
+    pub _type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
@@ -101,6 +107,7 @@ pub enum Expression {
     Index(Index),
     Spread(Box<Expression>),
     Type(Type),
+    StructInit(StructInit),
 }
 
 #[derive(Debug, Clone)]
@@ -171,8 +178,8 @@ struct LexerNavigator<'a> {
 }
 
 impl<'a> LexerNavigator<'a> {
-    fn new(tokens: &'a [lexer::Token]) -> Self {
-        Self { i: 0, tokens }
+    fn new(tokens: &'a [lexer::Token], i: usize) -> Self {
+        Self { i, tokens }
     }
 
     fn next(&mut self) {
@@ -259,9 +266,11 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
     }
 
     fn parse_type(&mut self) -> Result<Type> {
-        match self.lexer_navigator.peek_token_err(0)? {
+        match self.lexer_navigator.peek_token_err(0)?.clone() {
             lexer::Token::Struct => Ok(Type::Struct(self.parse_type_struct()?)),
             lexer::Token::Identifier(alias) => {
+                self.lexer_navigator.next();
+
                 let mut _type = Type::Alias(alias.clone());
 
                 while let Some(token) = self.lexer_navigator.peek_token(0) {
@@ -313,6 +322,7 @@ struct FunctionDeclaration {
     function: Function,
 }
 
+#[derive(Debug)]
 struct FunctionDeclarations(HashMap<String, FunctionDeclaration>);
 
 impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
@@ -394,19 +404,48 @@ impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
 #[derive(Debug)]
 pub struct Ast {
     pub type_declarations: TypeDeclarations,
-    pub functions: HashMap<String, Function>,
+    pub functions: Vec<Function>,
 }
 
 impl Ast {
     pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
-        let parser = TokenParser::new(tokens)?;
+        let type_declarations =
+            TypeDeclarationParser::new(&mut LexerNavigator::new(tokens, 0)).all()?;
+        let function_declarations =
+            FunctionDeclarationParser::new(&mut LexerNavigator::new(tokens, 0)).all()?;
+
+        let mut function_declarations_sorted = function_declarations.0.iter().collect::<Vec<_>>();
+        function_declarations_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut functions = Vec::new();
+
+        for (_, function) in function_declarations_sorted {
+            let mut variables = AstVariables::new();
+
+            for arg in &function.function.arguments {
+                variables.push_variable(arg.clone());
+            }
+
+            let mut token_parser = TokenParser::new(
+                LexerNavigator::new(tokens, function.i),
+                &function_declarations,
+                &type_declarations,
+                variables,
+            );
+            functions.push(Function {
+                body: Some(token_parser.parse_body()?),
+                ..function.function.clone()
+            });
+        }
+
         Ok(Self {
-            type_declarations: parser.type_declarations.clone(),
-            functions: parser.parse_functions()?,
+            type_declarations,
+            functions,
         })
     }
 }
 
+#[derive(Debug)]
 struct AstVariables {
     stack: Vec<Vec<Variable>>,
 }
@@ -439,11 +478,11 @@ impl AstVariables {
     }
 }
 
-struct TokenParser<'a> {
+struct TokenParser<'a, 'b, 'c> {
     lexer_navigator: LexerNavigator<'a>,
     variables: AstVariables,
-    function_declarations: FunctionDeclarations,
-    type_declarations: TypeDeclarations,
+    function_declarations: &'b FunctionDeclarations,
+    type_declarations: &'c TypeDeclarations,
 }
 
 #[derive(Debug, Clone)]
@@ -452,33 +491,19 @@ pub struct Variable {
     pub identifier: String,
 }
 
-impl<'a> TokenParser<'a> {
-    fn new(tokens: &'a [lexer::Token]) -> Result<Self> {
-        Ok(Self {
-            lexer_navigator: LexerNavigator::new(tokens),
-            variables: AstVariables::new(),
-            type_declarations: TypeDeclarationParser::new(&mut LexerNavigator::new(tokens))
-                .all()?,
-            function_declarations: FunctionDeclarationParser::new(&mut LexerNavigator::new(tokens))
-                .all()?,
-        })
-    }
-
-    fn parse_functions(mut self) -> Result<HashMap<String, Function>> {
-        let mut functions = HashMap::new();
-
-        for (k, v) in self.function_declarations.0.clone() {
-            self.lexer_navigator.i = v.i;
-            functions.insert(
-                k.clone(),
-                Function {
-                    body: Some(self.parse_body()?),
-                    ..v.function
-                },
-            );
+impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
+    fn new(
+        lexer_navigator: LexerNavigator<'a>,
+        function_declarations: &'b FunctionDeclarations,
+        type_declarations: &'c TypeDeclarations,
+        variables: AstVariables,
+    ) -> Self {
+        Self {
+            variables,
+            lexer_navigator,
+            type_declarations,
+            function_declarations,
         }
-
-        Ok(functions)
     }
 
     fn parse_for(&mut self) -> Result<For> {
@@ -685,9 +710,7 @@ impl<'a> TokenParser<'a> {
         TypeDeclarationParser::new(&mut self.lexer_navigator).parse_type()
     }
 
-    fn parse_function_call(&mut self) -> Result<FunctionCall> {
-        let identifier = self.parse_identifier()?;
-
+    fn parse_function_call(&mut self, identifier: String) -> Result<FunctionCall> {
         self.lexer_navigator
             .expect_next_token(lexer::Token::POpen)?;
         self.lexer_navigator.next();
@@ -724,40 +747,63 @@ impl<'a> TokenParser<'a> {
         })
     }
 
-    fn parse_expression_type(&mut self, _type: Type) -> Result<Expression> {
-        if *self.lexer_navigator.peek_token_err(0)? == lexer::Token::POpen {
-            let exp = self.parse_expression()?;
-            self.lexer_navigator
-                .expect_next_token(lexer::Token::PClose)?;
-            self.lexer_navigator.next();
-            return Ok(Expression::TypeCast(Box::new(TypeCast {
-                _type,
-                expression: exp,
-            })));
+    fn parse_expression_type_cast(&mut self, _type: Type) -> Result<Expression> {
+        self.lexer_navigator
+            .expect_next_token(lexer::Token::POpen)?;
+        self.lexer_navigator.next();
+
+        let exp = self.parse_expression()?;
+        self.lexer_navigator
+            .expect_next_token(lexer::Token::PClose)?;
+        self.lexer_navigator.next();
+
+        Ok(Expression::TypeCast(Box::new(TypeCast {
+            _type,
+            expression: exp,
+        })))
+    }
+
+    fn parse_expression_struct(&mut self) -> Result<Expression> {
+        let _type = self.parse_type()?;
+        if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
+            return self.parse_expression_type_cast(_type);
         }
 
-        return Ok(Expression::Type(_type));
+        Ok(Expression::Type(_type))
     }
 
     fn parse_expression_identifier(&mut self) -> Result<Expression> {
         let maybe_type = self.parse_type()?;
-        let Type::Alias(identifier) = &maybe_type else {
-            return self.parse_expression_type(maybe_type);
+        let mut identifier: Option<&str> = None;
+        let is_type = match &maybe_type {
+            Type::Alias(iden) => {
+                identifier = Some(iden);
+                if let Some(_) = self.type_declarations.0.get(iden) {
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => true,
         };
 
-        if let Some(_) = self.type_declarations.0.get(identifier) {
-            return self.parse_expression_type(maybe_type);
-        }
-
-        if *self.lexer_navigator.peek_token_err(0)? == lexer::Token::POpen {
-            return Ok(Expression::FunctionCall(self.parse_function_call()?));
+        if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
+            match is_type {
+                true => return self.parse_expression_type_cast(maybe_type),
+                false => {
+                    return Ok(Expression::FunctionCall(
+                        self.parse_function_call(identifier.unwrap().to_string())?,
+                    ));
+                }
+            }
         }
 
         Ok(Expression::Variable(
             self.variables
-                .get_variable(&identifier)
+                .get_variable(identifier.unwrap())
                 .ok_or(anyhow!(
-                    "parse_expression_identifier: identifier variable {identifier} not found"
+                    "parse_expression_identifier: identifier variable {} not found",
+                    identifier.unwrap()
                 ))?
                 .clone(),
         ))
@@ -790,6 +836,36 @@ impl<'a> TokenParser<'a> {
         }
 
         Ok(Expression::List(expressions))
+    }
+
+    fn parse_struct_init(&mut self, _type: Type) -> Result<StructInit> {
+        self.lexer_navigator
+            .expect_next_token(lexer::Token::COpen)?;
+        self.lexer_navigator.next();
+
+        let mut fields: Vec<(String, Expression)> = Vec::new();
+
+        while let Some(token) = self.lexer_navigator.peek_token(0) {
+            if let lexer::Token::CClose = token {
+                self.lexer_navigator.next();
+                break;
+            }
+
+            let identifier = self.parse_identifier()?;
+            self.lexer_navigator
+                .expect_next_token(lexer::Token::Colon)?;
+            self.lexer_navigator.next();
+
+            let exp = self.parse_expression()?;
+
+            self.lexer_navigator
+                .expect_next_token(lexer::Token::Comma)?;
+            self.lexer_navigator.next();
+
+            fields.push((identifier, exp));
+        }
+
+        Ok(StructInit { fields, _type })
     }
 
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
@@ -845,7 +921,7 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::COpen => self.parse_expression_list()?,
                 lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
-                lexer::Token::Struct => Expression::Type(self.parse_type()?),
+                lexer::Token::Struct => self.parse_expression_struct()?,
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };
@@ -868,6 +944,14 @@ impl<'a> TokenParser<'a> {
                     left = Expression::Spread(Box::new(left));
                     self.lexer_navigator.next();
                     break;
+                }
+                lexer::Token::COpen => {
+                    let Expression::Type(_type) = &left else {
+                        return Err(anyhow!(
+                            "parse_expression: initializing non struct {left:#?}"
+                        ));
+                    };
+                    left = Expression::StructInit(self.parse_struct_init(_type.clone())?);
                 }
                 _ => {}
             }
