@@ -734,7 +734,9 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
                 fields.push(TypeStructField::Type(identifier.clone(), resolved));
             }
 
-            fields.push(TypeStructField::Padding(align(highest_size, size)));
+            let end_padding = align(highest_size, size);
+            size += end_padding;
+            fields.push(TypeStructField::Padding(end_padding));
 
             Ok(Type {
                 size,
