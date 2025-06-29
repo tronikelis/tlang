@@ -88,7 +88,7 @@ pub struct TypeCast {
 
 #[derive(Debug, Clone)]
 pub struct StructInit {
-    pub fields: Vec<(String, Expression)>,
+    pub fields: HashMap<String, Expression>,
     pub _type: Type,
 }
 
@@ -846,7 +846,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
             .expect_next_token(lexer::Token::COpen)?;
         self.lexer_navigator.next();
 
-        let mut fields: Vec<(String, Expression)> = Vec::new();
+        let mut fields = HashMap::new();
 
         while let Some(token) = self.lexer_navigator.peek_token(0) {
             if let lexer::Token::CClose = token {
@@ -865,7 +865,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 .expect_next_token(lexer::Token::Comma)?;
             self.lexer_navigator.next();
 
-            fields.push((identifier, exp));
+            fields.insert(identifier, exp);
         }
 
         Ok(StructInit { fields, _type })

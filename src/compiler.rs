@@ -575,6 +575,31 @@ struct TypeStruct {
     fields: Vec<TypeStructField>,
 }
 
+impl TypeStruct {
+    fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+        let mut offset = 0;
+
+        for field in &self.fields {
+            match field {
+                TypeStructField::Padding(padding) => offset += padding,
+                TypeStructField::Type(iden, _type) => {
+                    if iden == identifier {
+                        return Some((offset, _type));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn identifier_field_count(&self) -> usize {
+        // - 1 there is padding at the end
+        // / 2 every field has padding before
+        (self.fields.len() - 1) / 2
+    }
+}
+
 const UINT: Type = Type {
     size: size_of::<usize>(),
     _type: TypeType::Builtin(TypeBuiltin::Uint),
@@ -1365,6 +1390,40 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         })
     }
 
+    fn compile_struct_init(&mut self, struct_init: &ast::StructInit) -> Result<Type> {
+        let resolved_type = self.resolve_type(&struct_init._type)?;
+
+        let TypeType::Struct(type_struct) = &resolved_type._type else {
+            return Err(anyhow!("compile_struct_init: incorrect type"));
+        };
+
+        if type_struct.identifier_field_count() != struct_init.fields.len() {
+            return Err(anyhow!(
+                "compile_struct_init: field initialization count mismatch"
+            ));
+        }
+
+        for field in &type_struct.fields {
+            match field {
+                TypeStructField::Padding(padding) => {
+                    self.instructions.instr_increment(*padding);
+                }
+                TypeStructField::Type(identifier, _type) => {
+                    let exp = struct_init.fields.get(identifier).ok_or(anyhow!(
+                        "compile_struct_init: initialization field not found"
+                    ))?;
+
+                    let exp_type = self.compile_expression(exp)?;
+                    if exp_type != *_type {
+                        return Err(anyhow!("compile_struct_init: incorrect field type"));
+                    }
+                }
+            }
+        }
+
+        Ok(resolved_type)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1381,10 +1440,10 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
+            ast::Expression::StructInit(v) => self.compile_struct_init(v),
             ast::Expression::Type(v) => {
                 Err(anyhow!("compile_expression: cant compile type {v:#?}"))
             }
-            ast::Expression::StructInit(v) => todo!(),
         }?;
 
         if exp.size != 0 {

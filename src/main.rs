@@ -19,8 +19,16 @@ fn main() {
                 type void void
                 type Type Type
 
+                type UI UserInner
+
+                type UserInner struct{
+                    foo int
+                    bar int
+                }
+
                 type User struct {
-                    nice string
+                    inner1 UserInner
+                    inner2 UserInner
                 }
                     
                 fn len(slice Type) int {}
@@ -87,6 +95,17 @@ fn main() {
 
                 fn main() void {
                     let one_two_three string = itoa(69420)
+
+                    let u User = User{
+                        inner1: UI{
+                            foo: 20,
+                            bar: 20,
+                        },
+                        inner2: UI{
+                            foo: 25,
+                            bar: 25,
+                        },
+                    }
 
                     if false && true {
                         syscall_write(1, uint8[](\"NICE GUYS\\n\"))
