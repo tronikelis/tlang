@@ -184,15 +184,15 @@ impl StackInstructions {
     }
 }
 
-fn align(size: usize, stack_size: usize) -> usize {
-    if size == 0 || stack_size == 0 {
+fn align(alignment: usize, stack_size: usize) -> usize {
+    if alignment == 0 || stack_size == 0 {
         0
     } else {
-        let modulo = stack_size % size;
+        let modulo = stack_size % alignment;
         if modulo == 0 {
             0
         } else {
-            size - modulo
+            alignment - modulo
         }
     }
 }
@@ -307,7 +307,7 @@ impl Instructions {
     }
 
     fn instr_push_u8(&mut self, int: usize) -> Result<()> {
-        self.push_alignment(UINT8.size);
+        self.push_alignment(UINT8.alignment);
         let uint8: u8 = int.try_into()?;
 
         self.stack_instructions
@@ -318,7 +318,7 @@ impl Instructions {
     }
 
     fn instr_push_i(&mut self, int: usize) -> Result<()> {
-        self.push_alignment(INT.size);
+        self.push_alignment(INT.alignment);
         let int: isize = int.try_into()?;
 
         self.stack_instructions
@@ -377,8 +377,8 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Reset(STRING.size));
     }
 
-    fn instr_push_static(&mut self, index: usize, size: usize) {
-        self.push_alignment(size);
+    fn instr_push_static(&mut self, index: usize, size: usize, alignment: usize) {
+        self.push_alignment(alignment);
 
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushStatic(index, size)));
@@ -477,8 +477,8 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Reset(UINT.size * 6));
     }
 
-    fn push_alignment(&mut self, size: usize) {
-        let alignment = align(size, self.var_stack.total_size());
+    fn push_alignment(&mut self, alignment: usize) {
+        let alignment = align(alignment, self.var_stack.total_size());
         if alignment != 0 {
             self.instr_increment(alignment);
         }
@@ -519,7 +519,10 @@ impl Instructions {
             let _type = resolve_type(type_declarations, &arg._type)?;
             let return_type = resolve_type(type_declarations, &function.return_type)?;
 
-            let alignment = align(_type.size, self.var_stack.total_size() + return_type.size);
+            let alignment = align(
+                _type.alignment,
+                self.var_stack.total_size() + return_type.size,
+            );
 
             if alignment != 0 {
                 self.var_stack.push(VarStackItem::Increment(alignment));
@@ -602,34 +605,42 @@ impl TypeStruct {
 
 const UINT: Type = Type {
     size: size_of::<usize>(),
+    alignment: size_of::<usize>(),
     _type: TypeType::Builtin(TypeBuiltin::Uint),
 };
 const UINT8: Type = Type {
     size: 1,
+    alignment: 1,
     _type: TypeType::Builtin(TypeBuiltin::Uint8),
 };
 const INT: Type = Type {
     size: size_of::<isize>(),
+    alignment: size_of::<isize>(),
     _type: TypeType::Builtin(TypeBuiltin::Int),
 };
 const BOOL: Type = Type {
-    size: size_of::<usize>(), // for now
+    size: size_of::<usize>(),      // for now
+    alignment: size_of::<usize>(), // for now
     _type: TypeType::Builtin(TypeBuiltin::Bool),
 };
 const STRING: Type = Type {
     size: size_of::<usize>(),
+    alignment: size_of::<usize>(),
     _type: TypeType::Builtin(TypeBuiltin::String),
 };
 const COMPILER_TYPE: Type = Type {
     size: 0,
+    alignment: 0,
     _type: TypeType::Builtin(TypeBuiltin::CompilerType),
 };
 const VOID: Type = Type {
     size: 0,
+    alignment: 0,
     _type: TypeType::Builtin(TypeBuiltin::Void),
 };
 const PTR: Type = Type {
     size: PTR_SIZE,
+    alignment: PTR_SIZE,
     _type: TypeType::Builtin(TypeBuiltin::Ptr),
 };
 const SLICE_SIZE: usize = size_of::<usize>();
@@ -658,6 +669,7 @@ enum TypeType {
 #[derive(Debug, Clone, PartialEq)]
 struct Type {
     size: usize,
+    alignment: usize,
     _type: TypeType,
 }
 
@@ -735,36 +747,39 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
         }
         ast::Type::Slice(_type) => Ok(Type {
             size: SLICE_SIZE,
+            alignment: SLICE_SIZE,
             _type: TypeType::Slice(Box::new(resolve_type(type_declarations, _type)?)),
         }),
         ast::Type::Variadic(_type) => Ok(Type {
             size: size_of::<usize>(),
+            alignment: size_of::<usize>(),
             _type: TypeType::Variadic(Box::new(resolve_type(type_declarations, _type)?)),
         }),
         ast::Type::Struct(type_struct) => {
             let mut fields: Vec<TypeStructField> = Vec::new();
             let mut size: usize = 0;
-            let mut highest_size: usize = 0;
+            let mut highest_alignment: usize = 0;
 
             for (identifier, _type) in &type_struct.fields {
                 let resolved = resolve_type(type_declarations, _type)?;
-                if resolved.size > highest_size {
-                    highest_size = resolved.size;
+                if resolved.alignment > highest_alignment {
+                    highest_alignment = resolved.alignment;
                 }
 
-                let alignment = align(resolved.size, size);
+                let alignment = align(resolved.alignment, size);
                 size += resolved.size;
                 size += alignment;
                 fields.push(TypeStructField::Padding(alignment));
                 fields.push(TypeStructField::Type(identifier.clone(), resolved));
             }
 
-            let end_padding = align(highest_size, size);
+            let end_padding = align(highest_alignment, size);
             size += end_padding;
             fields.push(TypeStructField::Padding(end_padding));
 
             Ok(Type {
                 size,
+                alignment: highest_alignment,
                 _type: TypeType::Struct(TypeStruct { fields }),
             })
         }
@@ -924,7 +939,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .push_alignment(self.resolve_type(&call.function.return_type)?.size);
+            .push_alignment(self.resolve_type(&call.function.return_type)?.alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
@@ -1057,7 +1072,8 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             },
             lexer::Literal::String(string) => {
                 let index = self.static_memory.push_string_slice(&string);
-                self.instructions.instr_push_static(index, SLICE_SIZE);
+                self.instructions
+                    .instr_push_static(index, SLICE_SIZE, SLICE_SIZE);
             }
         }
 
@@ -1066,7 +1082,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
     fn compile_variable(&mut self, variable: &ast::Variable) -> Result<Type> {
         let _type = self.resolve_type(&variable._type)?;
-        self.instructions.push_alignment(_type.size);
+        self.instructions.push_alignment(_type.alignment);
 
         let offset = self
             .instructions
@@ -1226,6 +1242,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
         Ok(Type {
             size: SLICE_SIZE,
+            alignment: SLICE_SIZE,
             _type: curr_exp
                 .map(|v| TypeType::Slice(Box::new(v)))
                 .unwrap_or(TypeType::Slice(Box::new(VOID))),
@@ -1288,7 +1305,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
     fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<Type> {
         let type_cast_type = self.resolve_type(&type_cast._type)?;
-        self.instructions.push_alignment(type_cast_type.size);
+        self.instructions.push_alignment(type_cast_type.alignment);
 
         let target = self.compile_expression(&type_cast.expression)?;
 
@@ -1386,6 +1403,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
         Ok(Type {
             size: SLICE_SIZE,
+            alignment: SLICE_SIZE,
             _type: TypeType::Variadic(slice_item),
         })
     }
@@ -1446,11 +1464,11 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             }
         }?;
 
-        if exp.size != 0 {
+        if exp.alignment != 0 {
             let new_stack_size = self.instructions.stack_total_size();
             let delta_stack_size = new_stack_size - old_stack_size;
 
-            if old_stack_size % exp.size == 0 && delta_stack_size > exp.size {
+            if old_stack_size % exp.alignment == 0 && delta_stack_size > exp.size {
                 self.instructions
                     .instr_shift(exp.size, delta_stack_size - exp.size - 1);
             }
