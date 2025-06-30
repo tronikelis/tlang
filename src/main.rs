@@ -120,6 +120,14 @@ fn main() {
                         },
                     }
 
+                    u.inner2 = UI{
+                        bar: 1337,
+                        foo: 2222,
+                    }
+
+                    __debug__
+
+
                     if false && true {
                         syscall_write(1, uint8[](\"NICE GUYS\\n\"))
                     }

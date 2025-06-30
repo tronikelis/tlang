@@ -218,7 +218,7 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Label);
     }
 
-    fn var_get_offset(&mut self, identifier: &str) -> Option<usize> {
+    fn var_get_offset(&self, identifier: &str) -> Option<usize> {
         self.var_stack.get_var_offset(identifier)
     }
 
@@ -580,13 +580,14 @@ impl TypeStruct {
     fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
         let mut offset = 0;
 
-        for field in &self.fields {
+        for field in self.fields.iter().rev() {
             match field {
                 TypeStructField::Padding(padding) => offset += padding,
                 TypeStructField::Type(iden, _type) => {
                     if iden == identifier {
                         return Some((offset, _type));
                     }
+                    offset += _type.size;
                 }
             }
         }
@@ -1498,6 +1499,44 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
+    fn compute_dot_access_field_offset(
+        &self,
+        dot_access: &ast::DotAccess,
+    ) -> Result<(usize, Type)> {
+        if let ast::Expression::DotAccess(inner) = &dot_access.expression {
+            let (offset, _type) = self.compute_dot_access_field_offset(inner)?;
+            let TypeType::Struct(type_struct) = &_type._type else {
+                unreachable!();
+            };
+
+            let (field_offset, field_type) = type_struct
+                .get_field_offset(&dot_access.identifier)
+                .ok_or(anyhow!("struct field not found"))?;
+
+            return Ok((offset + field_offset, field_type.clone()));
+        }
+
+        let ast::Expression::Variable(variable) = &dot_access.expression else {
+            return Err(anyhow!("cant dot access non variable"));
+        };
+
+        let offset = self
+            .instructions
+            .var_get_offset(&variable.identifier)
+            .ok_or(anyhow!("variable assignment variable not found"))?;
+
+        let _type = self.resolve_type(&variable._type)?;
+        let TypeType::Struct(type_struct) = &_type._type else {
+            return Err(anyhow!("cant dot access non struct type"));
+        };
+
+        let (field_offset, field_type) = type_struct
+            .get_field_offset(&dot_access.identifier)
+            .ok_or(anyhow!("struct field not found"))?;
+
+        Ok((offset + field_offset, field_type.clone()))
+    }
+
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
         self.instructions.push_stack_frame();
 
@@ -1533,6 +1572,15 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 }
 
                 self.instructions.instr_slice_index_set(item.size);
+            }
+            ast::Expression::DotAccess(dot_access) => {
+                let exp = self.compile_expression(&assignment.expression)?;
+                let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
+                if exp != _type {
+                    return Err(anyhow!("dot access assign type mismatch"));
+                }
+
+                self.instructions.instr_copy(offset, 0, exp.size);
             }
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
