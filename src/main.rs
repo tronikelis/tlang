@@ -26,6 +26,12 @@ fn main() {
                     bar int
                 }
 
+                type Smol struct {
+                    one uint8
+                    two uint8
+                    nice int
+                }
+
                 type User struct {
                     inner1 UserInner
                     inner2 UserInner
@@ -96,6 +102,13 @@ fn main() {
                 fn main() void {
                     let one_two_three string = itoa(69420)
 
+                    let s Smol = Smol {
+                        one: uint8(2),
+                        two: uint8(3),
+                        nice: 4,
+                    }
+                    __debug__
+
                     let u User = User{
                         inner1: UI{
                             foo: 20,
@@ -115,7 +128,6 @@ fn main() {
 
                     let nums int[] = {1, 2, 3, 4, 5, 6}
                     let foo int = add(nums...)
-                    __debug__
 
                     for let i int = 0; i < 100; i++ {
                         let str string = \"\"

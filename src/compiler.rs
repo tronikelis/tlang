@@ -429,10 +429,8 @@ impl Instructions {
     }
 
     fn instr_shift(&mut self, size: usize, amount: usize) {
-        for i in 0..amount {
-            self.stack_instructions
-                .push(Instruction::Real(vm::Instruction::Shift(size + amount - i)));
-        }
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Shift(size, amount)));
         self.var_stack.push(VarStackItem::Reset(amount));
     }
 
