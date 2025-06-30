@@ -1460,6 +1460,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::Type(v) => {
                 Err(anyhow!("compile_expression: cant compile type {v:#?}"))
             }
+            ast::Expression::DotAccess(v) => todo!(),
         }?;
 
         if exp.alignment != 0 {

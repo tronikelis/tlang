@@ -93,6 +93,12 @@ pub struct StructInit {
 }
 
 #[derive(Debug, Clone)]
+pub struct DotAccess {
+    pub expression: Expression,
+    pub identifier: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
@@ -108,6 +114,7 @@ pub enum Expression {
     Spread(Box<Expression>),
     Type(Type),
     StructInit(StructInit),
+    DotAccess(Box<DotAccess>),
 }
 
 #[derive(Debug, Clone)]
@@ -946,12 +953,27 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 lexer::Token::Dot3 => {
                     left = Expression::Spread(Box::new(left));
                     self.lexer_navigator.next();
-                    break;
+                    continue;
                 }
                 lexer::Token::COpen => {
                     if let Expression::Type(_type) = &left {
                         left = Expression::StructInit(self.parse_struct_init(_type.clone())?);
+                        continue;
                     };
+                }
+                lexer::Token::Dot => {
+                    self.lexer_navigator.next();
+                    let lexer::Token::Identifier(identifier) =
+                        self.lexer_navigator.peek_token_err(0)?.clone()
+                    else {
+                        return Err(anyhow!("dot access expected identifier"));
+                    };
+                    self.lexer_navigator.next();
+                    left = Expression::DotAccess(Box::new(DotAccess {
+                        expression: left,
+                        identifier: identifier.clone(),
+                    }));
+                    continue;
                 }
                 _ => {}
             }
