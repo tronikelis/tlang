@@ -84,7 +84,7 @@ fn main() {
                 }
 
                 fn itoa(x int) string {
-                    let str uint8[] = {}
+                    let str uint8[] = uint8[]{}
                     for {
                         append(str, uint8(48 + x % 10))
                         x = x / 10

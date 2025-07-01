@@ -99,6 +99,12 @@ pub struct DotAccess {
 }
 
 #[derive(Debug, Clone)]
+pub struct SliceInit {
+    pub expressions: Vec<Expression>,
+    pub _type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
@@ -109,12 +115,12 @@ pub enum Expression {
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
     FunctionCall(FunctionCall),
-    List(Vec<Expression>),
     Index(Index),
     Spread(Box<Expression>),
     Type(Type),
-    StructInit(StructInit),
     DotAccess(Box<DotAccess>),
+    SliceInit(SliceInit),
+    StructInit(StructInit),
 }
 
 #[derive(Debug, Clone)]
@@ -771,7 +777,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
         })))
     }
 
-    fn parse_expression_struct(&mut self) -> Result<Expression> {
+    fn parse_expression_type(&mut self) -> Result<Expression> {
         let _type = self.parse_type()?;
         if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
             return self.parse_expression_type_cast(_type);
@@ -788,15 +794,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
 
         let is_type = self.type_declarations.0.get(&identifier).is_some();
         match is_type {
-            true => {
-                let _type = self.parse_type()?;
-
-                if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
-                    return self.parse_expression_type_cast(_type);
-                }
-
-                Ok(Expression::Type(_type))
-            }
+            true => self.parse_expression_type(),
             false => {
                 self.lexer_navigator.next();
 
@@ -823,7 +821,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
         Ok(Expression::Literal(self.parse_literal()?))
     }
 
-    fn parse_expression_list(&mut self) -> Result<Expression> {
+    fn parse_slice_init(&mut self, _type: Type) -> Result<SliceInit> {
         self.lexer_navigator
             .expect_next_token(lexer::Token::COpen)?;
         self.lexer_navigator.next();
@@ -845,7 +843,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
             }
         }
 
-        Ok(Expression::List(expressions))
+        Ok(SliceInit { _type, expressions })
     }
 
     fn parse_struct_init(&mut self, _type: Type) -> Result<StructInit> {
@@ -928,10 +926,9 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                     self.lexer_navigator.next();
                     Expression::Negate(Box::new(self.parse_expression_pratt(100)?))
                 }
-                lexer::Token::COpen => self.parse_expression_list()?,
                 lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
-                lexer::Token::Struct => self.parse_expression_struct()?,
+                lexer::Token::Struct => self.parse_expression_type()?,
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };
@@ -957,7 +954,16 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 }
                 lexer::Token::COpen => {
                     if let Expression::Type(_type) = &left {
-                        left = Expression::StructInit(self.parse_struct_init(_type.clone())?);
+                        match _type {
+                            Type::Slice(_) => {
+                                left = Expression::SliceInit(self.parse_slice_init(_type.clone())?)
+                            }
+                            Type::Struct(_) => {
+                                left =
+                                    Expression::StructInit(self.parse_struct_init(_type.clone())?)
+                            }
+                            _type => return Err(anyhow!("cant initialize this type {_type:#?}")),
+                        }
                         continue;
                     };
                 }

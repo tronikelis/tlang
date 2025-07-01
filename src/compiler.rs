@@ -674,47 +674,6 @@ struct Type {
 }
 
 impl Type {
-    fn can_assign(&self, other: &Self) -> bool {
-        match &self._type {
-            TypeType::Slice(_) => self.can_assign_slice(other),
-            _ => other == self,
-        }
-    }
-
-    fn can_assign_slice(&self, other: &Self) -> bool {
-        let (me, me_depth) = self.extract_slice_type();
-        let (other, other_depth) = other.extract_slice_type();
-        // some safety checks
-        if other_depth == 0 && *other == VOID {
-            panic!("impossible other_depth=0 VOID type in slice");
-        }
-
-        if other_depth > me_depth {
-            return false;
-        }
-
-        if other_depth < me_depth {
-            return *other == VOID;
-        }
-
-        return *other == VOID || other == me;
-    }
-
-    fn extract_slice_type(&self) -> (&Type, usize) {
-        let mut _type = self;
-        let mut i = 0;
-        loop {
-            if let TypeType::Slice(v) = &_type._type {
-                _type = v;
-                i += 1;
-            } else {
-                break;
-            }
-        }
-
-        (_type, i)
-    }
-
     fn extract_variadic(&self) -> Option<Self> {
         match &self._type {
             TypeType::Variadic(item) => Some(*item.clone()),
@@ -894,7 +853,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             return Err(anyhow!("append: provide a slice as the first argument"));
         };
 
-        if !slice_item.can_assign(&value_exp) {
+        if **slice_item != value_exp {
             return Err(anyhow!("append: value type does not match slice type"));
         }
 
@@ -1216,37 +1175,32 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(exp)
     }
 
-    fn compile_list(&mut self, list: &[ast::Expression]) -> Result<Type> {
+    fn compile_slice_init(&mut self, slice_init: &ast::SliceInit) -> Result<Type> {
+        let resolved_type = self.resolve_type(&slice_init._type)?;
+
+        let TypeType::Slice(slice_item) = &resolved_type._type else {
+            panic!("compile_slice_init: incorrect type, wrong ast parser");
+        };
+
         self.instructions.instr_push_slice();
 
-        let mut curr_exp: Option<Type> = None;
-
-        for v in list {
+        for v in &slice_init.expressions {
             self.instructions.push_stack_frame();
 
             self.instructions.instr_increment(SLICE_SIZE);
             self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
 
             let exp = self.compile_expression(v)?;
-            if let Some(curr_exp) = curr_exp {
-                if curr_exp != exp {
-                    return Err(anyhow!("type mismatch"));
-                }
+            if exp != **slice_item {
+                return Err(anyhow!("compile_slice_init: slice item type mismatch"));
             }
-            curr_exp = Some(exp.clone());
 
             self.instructions.instr_slice_append(exp.size);
 
             self.instructions.pop_stack_frame();
         }
 
-        Ok(Type {
-            size: SLICE_SIZE,
-            alignment: SLICE_SIZE,
-            _type: curr_exp
-                .map(|v| TypeType::Slice(Box::new(v)))
-                .unwrap_or(TypeType::Slice(Box::new(VOID))),
-        })
+        Ok(resolved_type)
     }
 
     fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
@@ -1412,7 +1366,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         let resolved_type = self.resolve_type(&struct_init._type)?;
 
         let TypeType::Struct(type_struct) = &resolved_type._type else {
-            return Err(anyhow!("compile_struct_init: incorrect type"));
+            panic!("compile_struct_init: incorrect type wrong ast parser");
         };
 
         if type_struct.identifier_field_count() != struct_init.fields.len() {
@@ -1465,7 +1419,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::FunctionCall(v) => self.compile_function_call(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
-            ast::Expression::List(v) => self.compile_list(v),
+            ast::Expression::SliceInit(v) => self.compile_slice_init(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
             ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
@@ -1499,10 +1453,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        if !self
-            .resolve_type(&declaration.variable._type)?
-            .can_assign(&exp)
-        {
+        if self.resolve_type(&declaration.variable._type)? != exp {
             return Err(anyhow!("type mismatch"));
         }
 
@@ -1580,7 +1531,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 }
 
                 let item = self.compile_expression(&assignment.expression)?;
-                if !slice_item.can_assign(&item) {
+                if **slice_item != item {
                     return Err(anyhow!("slice index set type mismatch"));
                 }
 
