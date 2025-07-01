@@ -120,10 +120,7 @@ fn main() {
                         },
                     }
 
-                    u.inner2 = UI{
-                        bar: 1337,
-                        foo: 2222,
-                    }
+                    u.inner2 = u.inner1
 
                     __debug__
 

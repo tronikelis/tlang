@@ -475,11 +475,12 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Reset(UINT.size * 6));
     }
 
-    fn push_alignment(&mut self, alignment: usize) {
+    fn push_alignment(&mut self, alignment: usize) -> usize {
         let alignment = align(alignment, self.var_stack.total_size());
         if alignment != 0 {
             self.instr_increment(alignment);
         }
+        alignment
     }
 
     fn stack_total_size(&self) -> usize {
@@ -1441,6 +1442,18 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(resolved_type)
     }
 
+    fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
+        let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
+
+        let alignment = self.instructions.push_alignment(_type.alignment);
+
+        self.instructions.instr_increment(_type.size);
+        self.instructions
+            .instr_copy(0, offset + _type.size + alignment, _type.size);
+
+        Ok(_type)
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1461,7 +1474,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::Type(v) => {
                 Err(anyhow!("compile_expression: cant compile type {v:#?}"))
             }
-            ast::Expression::DotAccess(v) => todo!(),
+            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
         }?;
 
         if exp.alignment != 0 {
