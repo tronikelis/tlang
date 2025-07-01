@@ -1437,7 +1437,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
             if old_stack_size % exp.alignment == 0 && delta_stack_size > exp.size {
                 self.instructions
-                    .instr_shift(exp.size, delta_stack_size - exp.size - 1);
+                    .instr_shift(exp.size, delta_stack_size - exp.size);
             }
         }
 

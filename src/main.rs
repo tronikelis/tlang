@@ -30,6 +30,7 @@ fn main() {
                     one uint8
                     two uint8
                     nice int
+                    three uint8[]
                 }
 
                 type User struct {
@@ -104,9 +105,11 @@ fn main() {
 
                     let s Smol = Smol {
                         one: uint8(2),
+                        three: uint8[]{},
                         two: uint8(3),
                         nice: 4,
                     }
+                    append(s.three, uint8(2))
                     __debug__
 
                     let u User = User{
