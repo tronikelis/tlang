@@ -1,18 +1,6 @@
 use anyhow::{anyhow, Result};
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Type {
-    Int,
-    Void,
-    Bool,
-    CompilerType,
-    Uint8,
-    String,
-    Ptr,
-    Uint,
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Int(usize), // - will be with infix expression
     String(String),
@@ -37,7 +25,7 @@ pub enum Token {
     Minus,
     Slash,
     Star,
-    Type(Type),
+    Type,
     Literal(Literal),
     Lt,
     Gt,
@@ -59,11 +47,13 @@ pub enum Token {
     Bang,
     Dot3,
     Dot,
+    Struct,
+    Colon,
 }
 
-const CONTROL_CHAR: [char; 21] = [
+const CONTROL_CHAR: [char; 22] = [
     ')', '(', '}', '{', ',', '>', '<', '&', '|', '=', '+', '-', ';', '*', '/', '[', ']', '"', '%',
-    '!', '.',
+    '!', '.', ':',
 ];
 
 pub struct Lexer {
@@ -84,13 +74,13 @@ impl Lexer {
 
         while let Some(_) = self.peek_char(0) {
             match self.peek_next_word().as_str() {
-                "uint" => {
-                    tokens.push(Token::Type(Type::Uint));
+                "struct" => {
+                    tokens.push(Token::Struct);
                     self.read_next_word();
                     continue;
                 }
-                "ptr" => {
-                    tokens.push(Token::Type(Type::Ptr));
+                "type" => {
+                    tokens.push(Token::Type);
                     self.read_next_word();
                     continue;
                 }
@@ -101,21 +91,6 @@ impl Lexer {
                 }
                 "continue" => {
                     tokens.push(Token::Continue);
-                    self.read_next_word();
-                    continue;
-                }
-                "string" => {
-                    tokens.push(Token::Type(Type::String));
-                    self.read_next_word();
-                    continue;
-                }
-                "uint8" => {
-                    tokens.push(Token::Type(Type::Uint8));
-                    self.read_next_word();
-                    continue;
-                }
-                "Type" => {
-                    tokens.push(Token::Type(Type::CompilerType));
                     self.read_next_word();
                     continue;
                 }
@@ -157,21 +132,6 @@ impl Lexer {
                 }
                 "let" => {
                     tokens.push(Token::Let);
-                    self.read_next_word();
-                    continue;
-                }
-                "int" => {
-                    tokens.push(Token::Type(Type::Int));
-                    self.read_next_word();
-                    continue;
-                }
-                "void" => {
-                    tokens.push(Token::Type(Type::Void));
-                    self.read_next_word();
-                    continue;
-                }
-                "bool" => {
-                    tokens.push(Token::Type(Type::Bool));
                     self.read_next_word();
                     continue;
                 }
@@ -336,6 +296,11 @@ impl Lexer {
                         )));
                         continue;
                     }
+                    ':' => {
+                        tokens.push(Token::Colon);
+                        self.next();
+                        continue;
+                    }
                     _ => {}
                 }
             }
@@ -473,71 +438,5 @@ impl Lexer {
         }
 
         word
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn simple() {
-        let code = String::from(
-            "
-                fn add(a int, b int) int {
-                    return a + b
-                }
-                fn main() void {
-                    let a int = 0
-                    let b int = 1
-                    let c int = a + b
-                }
-            ",
-        );
-
-        let tokens = Vec::from([
-            Token::Function,
-            Token::Identifier(String::from("add")),
-            Token::POpen,
-            Token::Identifier(String::from("a")),
-            Token::Type(Type::Int),
-            Token::Comma,
-            Token::Identifier(String::from("b")),
-            Token::Type(Type::Int),
-            Token::PClose,
-            Token::Type(Type::Int),
-            Token::COpen,
-            Token::Return,
-            Token::Identifier(String::from("a")),
-            Token::Plus,
-            Token::Identifier(String::from("b")),
-            Token::CClose,
-            Token::Function,
-            Token::Identifier(String::from("main")),
-            Token::POpen,
-            Token::PClose,
-            Token::Type(Type::Void),
-            Token::COpen,
-            Token::Let,
-            Token::Identifier(String::from("a")),
-            Token::Type(Type::Int),
-            Token::Equals,
-            Token::Literal(Literal::Int(0)),
-            Token::Let,
-            Token::Identifier(String::from("b")),
-            Token::Type(Type::Int),
-            Token::Equals,
-            Token::Literal(Literal::Int(1)),
-            Token::Let,
-            Token::Identifier(String::from("c")),
-            Token::Type(Type::Int),
-            Token::Equals,
-            Token::Identifier(String::from("a")),
-            Token::Plus,
-            Token::Identifier(String::from("b")),
-            Token::CClose,
-        ]);
-
-        assert_eq!(Lexer::new(&code).run().unwrap(), tokens);
     }
 }

@@ -4,13 +4,40 @@ mod vm;
 
 mod ast;
 mod compiler;
-mod instructions;
 mod lexer;
 mod linker;
 
 fn main() {
     let code = String::from(
         "
+                type bool bool
+                type int int
+                type ptr ptr
+                type string string
+                type uint uint
+                type uint8 uint8
+                type void void
+                type Type Type
+
+                type UI UserInner
+
+                type UserInner struct{
+                    foo int
+                    bar int
+                }
+
+                type Smol struct {
+                    one uint8
+                    two uint8
+                    three uint8[]
+                    nice int
+                }
+
+                type User struct {
+                    inner1 UserInner
+                    inner2 UserInner
+                }
+                    
                 fn len(slice Type) int {}
                 fn append(slice Type, value Type) void {}
 
@@ -58,7 +85,7 @@ fn main() {
                 }
 
                 fn itoa(x int) string {
-                    let str uint8[] = {}
+                    let str uint8[] = uint8[]{}
                     for {
                         append(str, uint8(48 + x % 10))
                         x = x / 10
@@ -76,15 +103,42 @@ fn main() {
                 fn main() void {
                     let one_two_three string = itoa(69420)
 
+                    let s Smol = Smol {
+                        one: uint8(65),
+                        two: uint8(66),
+                        nice: 4,
+                        three: uint8[]{},
+                    }
+                    syscall_write(1, uint8[](itoa(int(s.one))))
+                    syscall_write(1, uint8[](itoa(int(s.two))))
+                    s.three = uint8[]{}
+                    append(s.three, uint8(20))
+                    __debug__
+
+                    let u User = User{
+                        inner1: UI{
+                            foo: 20,
+                            bar: 20,
+                        },
+                        inner2: UI{
+                            foo: 25,
+                            bar: 25,
+                        },
+                    }
+
+                    u.inner2 = u.inner1
+
+                    __debug__
+
+
                     if false && true {
                         syscall_write(1, uint8[](\"NICE GUYS\\n\"))
                     }
 
                     let buf uint8[] = new(uint8[], uint8(0), 2048)
 
-                    let nums int[] = {1, 2, 3, 4, 5, 6}
+                    let nums int[] = int[]{1, 2, 3, 4, 5, 6}
                     let foo int = add(nums...)
-                    __debug__
 
                     for let i int = 0; i < 100; i++ {
                         let str string = \"\"
@@ -111,15 +165,16 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<Vec<instructions::Instruction>>>::new();
+    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
-    for v in &ast.functions {
-        let compiled = compiler::FunctionCompiler::new(v, &mut static_memory)
-            .compile()
-            .unwrap();
+    for function in &ast.functions {
+        let compiled =
+            compiler::FunctionCompiler::new(function, &mut static_memory, &ast.type_declarations)
+                .compile()
+                .unwrap();
         println!("{:#?}", compiled);
-        functions.insert(v.identifier.clone(), compiled);
+        functions.insert(function.identifier.clone(), compiled);
     }
 
     let instructions = linker::link(&functions).unwrap();
