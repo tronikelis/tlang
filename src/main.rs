@@ -29,8 +29,8 @@ fn main() {
                 type Smol struct {
                     one uint8
                     two uint8
-                    nice int
                     three uint8[]
+                    nice int
                 }
 
                 type User struct {
@@ -112,6 +112,7 @@ fn main() {
                     syscall_write(1, uint8[](itoa(int(s.one))))
                     syscall_write(1, uint8[](itoa(int(s.two))))
                     s.three = uint8[]{}
+                    append(s.three, uint8(20))
                     __debug__
 
                     let u User = User{
