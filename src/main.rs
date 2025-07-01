@@ -104,12 +104,14 @@ fn main() {
                     let one_two_three string = itoa(69420)
 
                     let s Smol = Smol {
-                        one: uint8(2),
-                        three: uint8[]{},
-                        two: uint8(3),
+                        one: uint8(65),
+                        two: uint8(66),
                         nice: 4,
+                        three: uint8[]{},
                     }
-                    append(s.three, uint8(2))
+                    syscall_write(1, uint8[](itoa(int(s.one))))
+                    syscall_write(1, uint8[](itoa(int(s.two))))
+                    s.three = uint8[]{}
                     __debug__
 
                     let u User = User{
