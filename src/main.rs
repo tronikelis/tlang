@@ -131,7 +131,7 @@ fn main() {
 
                     let buf uint8[] = new(uint8[], uint8(0), 2048)
 
-                    let nums int[] = {1, 2, 3, 4, 5, 6}
+                    let nums int[] = int[]{1, 2, 3, 4, 5, 6}
                     let foo int = add(nums...)
 
                     for let i int = 0; i < 100; i++ {

@@ -232,12 +232,12 @@ impl<'a> LexerNavigator<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TypeStruct {
     pub fields: Vec<(String, Type)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Type {
     Alias(String),
     Struct(TypeStruct),
@@ -251,6 +251,29 @@ struct TypeDeclarationParser<'a, 'b> {
 
 #[derive(Debug, Clone)]
 pub struct TypeDeclarations(pub HashMap<String, Type>);
+
+impl TypeDeclarations {
+    fn resolve_alias<'a>(&'a self, mut _type: &'a Type) -> Result<&'a Type> {
+        loop {
+            match _type {
+                Type::Alias(alias) => {
+                    _type = self
+                        .0
+                        .get(alias)
+                        .ok_or(anyhow!("defer_alias: type not found"))?;
+
+                    // this is for builtin types (int / uint)
+                    if let Type::Alias(alias2) = _type {
+                        if alias2 == alias {
+                            return Err(anyhow!("defer_alias: reached end"));
+                        }
+                    }
+                }
+                _type => return Ok(_type),
+            }
+        }
+    }
+}
 
 impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
     fn new(lexer_navigator: &'b mut LexerNavigator<'a>) -> Self {
@@ -954,7 +977,11 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 }
                 lexer::Token::COpen => {
                     if let Expression::Type(_type) = &left {
-                        match _type {
+                        match self
+                            .type_declarations
+                            .resolve_alias(&_type)
+                            .map_err(|_| anyhow!("cant initialize this type {_type:#?}"))?
+                        {
                             Type::Slice(_) => {
                                 left = Expression::SliceInit(self.parse_slice_init(_type.clone())?)
                             }
@@ -962,7 +989,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                                 left =
                                     Expression::StructInit(self.parse_struct_init(_type.clone())?)
                             }
-                            _type => return Err(anyhow!("cant initialize this type {_type:#?}")),
+                            _ => unreachable!(),
                         }
                         continue;
                     };
