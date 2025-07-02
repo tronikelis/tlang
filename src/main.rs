@@ -102,7 +102,6 @@ fn main() {
 
                 fn main() void {
                     let one_two_three string = itoa(69420)
-
                     let s Smol = Smol {
                         one: uint8(65),
                         two: uint8(66),
@@ -114,6 +113,8 @@ fn main() {
                     s.three = uint8[]{}
                     append(s.three, uint8(20))
                     __debug__
+
+                    let nice *Smol = &s
 
                     let u User = User{
                         inner1: UI{

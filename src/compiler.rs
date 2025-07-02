@@ -664,6 +664,7 @@ enum TypeType {
     Variadic(Box<Type>),
     Slice(Box<Type>),
     Builtin(TypeBuiltin),
+    Address(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -742,6 +743,11 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
                 _type: TypeType::Struct(TypeStruct { fields }),
             })
         }
+        ast::Type::Address(_type) => Ok(Type {
+            size: PTR_SIZE,
+            alignment: PTR_SIZE,
+            _type: TypeType::Address(Box::new(resolve_type(type_declarations, _type)?)),
+        }),
     }
 }
 
@@ -1425,10 +1431,12 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
             ast::Expression::StructInit(v) => self.compile_struct_init(v),
+            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
+            ast::Expression::Deref(v) => todo!(),
+            ast::Expression::Address(v) => todo!(),
             ast::Expression::Type(v) => {
                 Err(anyhow!("compile_expression: cant compile type {v:#?}"))
             }
-            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
         }?;
 
         if exp.alignment != 0 {

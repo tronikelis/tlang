@@ -121,6 +121,8 @@ pub enum Expression {
     DotAccess(Box<DotAccess>),
     SliceInit(SliceInit),
     StructInit(StructInit),
+    Address(Box<Expression>),
+    Deref(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +245,7 @@ pub enum Type {
     Struct(TypeStruct),
     Slice(Box<Type>),
     Variadic(Box<Type>),
+    Address(Box<Type>),
 }
 
 struct TypeDeclarationParser<'a, 'b> {
@@ -304,6 +307,10 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
 
     fn parse_type(&mut self) -> Result<Type> {
         match self.lexer_navigator.peek_token_err(0)?.clone() {
+            lexer::Token::Star => {
+                self.lexer_navigator.next();
+                Ok(Type::Address(Box::new(self.parse_type()?)))
+            }
             lexer::Token::Struct => Ok(Type::Struct(self.parse_type_struct()?)),
             lexer::Token::Identifier(alias) => {
                 self.lexer_navigator.next();
@@ -937,7 +944,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 lexer::Token::Plus | lexer::Token::Minus => {
                     self.lexer_navigator.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression_pratt(100)?),
+                        expression: Box::new(self.parse_expression()?),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
@@ -947,7 +954,15 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 }
                 lexer::Token::Bang => {
                     self.lexer_navigator.next();
-                    Expression::Negate(Box::new(self.parse_expression_pratt(100)?))
+                    Expression::Negate(Box::new(self.parse_expression()?))
+                }
+                lexer::Token::Star => {
+                    self.lexer_navigator.next();
+                    Expression::Deref(Box::new(self.parse_expression()?))
+                }
+                lexer::Token::Amper => {
+                    self.lexer_navigator.next();
+                    Expression::Address(Box::new(self.parse_expression()?))
                 }
                 lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,

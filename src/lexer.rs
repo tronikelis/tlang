@@ -33,6 +33,7 @@ pub enum Token {
     ElseIf,
     Else,
     AmperAmper,
+    Amper,
     PipePipe,
     EqualsEquals,
     BangEquals,
@@ -218,7 +219,7 @@ impl Lexer {
                                 tokens.push(Token::AmperAmper);
                                 self.next();
                             }
-                            _ => return Err(anyhow!("todo: unexpected token")),
+                            _ => tokens.push(Token::Amper),
                         };
                         self.next();
                         continue;
