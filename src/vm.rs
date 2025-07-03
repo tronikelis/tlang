@@ -6,6 +6,12 @@ use std::{
 };
 use syscalls::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6, Sysno};
 
+#[allow(dead_code)]
+#[repr(usize)]
+enum PortableSysno {
+    Write = 0,
+}
+
 #[derive(Debug)]
 enum GcObjectData {
     Slice(*mut Slice),
@@ -388,8 +394,10 @@ impl Vm {
 
     pub unsafe fn pop_sysno(&mut self) -> Sysno {
         let sysno: usize = self.stack.pop();
-        let sysno = sysno as i32;
-        mem::transmute(sysno)
+        let portable_sysno: PortableSysno = mem::transmute(sysno);
+        match portable_sysno {
+            PortableSysno::Write => Sysno::write,
+        }
     }
 
     pub fn run(mut self) {
