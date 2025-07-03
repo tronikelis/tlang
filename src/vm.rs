@@ -32,7 +32,7 @@ impl GcObject {
         }
     }
 
-    fn from_slice(slice: &[u8], alignment: usize) -> (Self, *mut u8) {
+    fn from_slice_val(slice: &[u8], alignment: usize) -> (Self, *mut u8) {
         let layout = Layout::from_size_align(slice.len(), alignment).unwrap();
         let ptr = unsafe { alloc(layout) };
         let data = GcObjectData::Alloced(ptr, layout);
@@ -657,7 +657,7 @@ impl Vm {
                 }
                 Instruction::Alloc(size, alignment) => {
                     let val = self.stack.pop_size(size);
-                    let (obj, ptr) = GcObject::from_slice(val, alignment);
+                    let (obj, ptr) = GcObject::from_slice_val(val, alignment);
                     self.stack.push(ptr);
                     self.gc.add_object(obj);
                 }
