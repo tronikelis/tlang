@@ -260,6 +260,7 @@ pub enum Instruction {
     Syscall6,
 
     Alloc(usize, usize),
+    Deref(usize),
 }
 
 pub struct Stack {
@@ -366,6 +367,13 @@ impl Stack {
                 len,
             );
         }
+    }
+
+    fn deref(&mut self, ptr: *mut u8, size: usize) {
+        self.increment(size);
+        unsafe {
+            ptr::copy_nonoverlapping(ptr, self.sp, size);
+        };
     }
 }
 
@@ -660,6 +668,10 @@ impl Vm {
                     let (obj, ptr) = GcObject::from_slice_val(val, alignment);
                     self.stack.push(ptr);
                     self.gc.add_object(obj);
+                }
+                Instruction::Deref(size) => {
+                    let ptr = self.stack.pop::<*mut u8>();
+                    self.stack.deref(ptr, size);
                 }
             }
 

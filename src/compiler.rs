@@ -2,6 +2,25 @@ use anyhow::{anyhow, Result};
 
 use crate::{ast, lexer, vm};
 
+struct CompilerBody<'a> {
+    i: usize,
+    body: &'a [ast::Node],
+}
+
+impl<'a> CompilerBody<'a> {
+    fn new(body: &'a [ast::Node]) -> Self {
+        Self { body, i: 0 }
+    }
+
+    fn next(&mut self) {
+        self.i += 1;
+    }
+
+    fn does_variable_escape(&self, variable: &ast::Variable) -> bool {
+        todo!();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Real(vm::Instruction),
@@ -11,11 +30,17 @@ pub enum Instruction {
     JumpIfFalse((usize, usize)),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+struct VarStackItemVar {
+    identifier: String,
+    escaped: bool,
+}
+
+#[derive(Debug, Clone)]
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
-    Var(String),
+    Var(VarStackItemVar),
     Label,
 }
 
@@ -55,22 +80,16 @@ impl VarStack {
         Self::size_for(self.stack.iter().flatten())
     }
 
-    fn offset_for(&self, target: &VarStackItem) -> Option<usize> {
-        let mut offset: isize = 0;
+    fn inc_offset_item(offset: &mut isize, item: &VarStackItem) {
+        match item {
+            VarStackItem::Label | VarStackItem::Var(_) => {}
+            VarStackItem::Increment(size) => *offset += *size as isize,
+            VarStackItem::Reset(size) => *offset -= *size as isize,
+        };
+    }
 
-        for item in self.stack.iter().flatten().rev() {
-            if item == target {
-                return Some(offset.try_into().unwrap());
-            }
-
-            match item {
-                VarStackItem::Label | VarStackItem::Var(_) => {}
-                VarStackItem::Increment(size) => offset += *size as isize,
-                VarStackItem::Reset(size) => offset -= *size as isize,
-            }
-        }
-
-        None
+    fn iter(&self) -> impl Iterator<Item = &VarStackItem> {
+        self.stack.iter().flatten().rev()
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -82,12 +101,32 @@ impl VarStack {
         })
     }
 
-    fn get_var_offset(&self, identifier: &str) -> Option<usize> {
-        self.offset_for(&VarStackItem::Var(identifier.to_string()))
+    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &VarStackItemVar)> {
+        let mut offset: isize = 0;
+        for item in self.iter() {
+            match item {
+                VarStackItem::Var(v) => {
+                    if v.identifier == identifier {
+                        return Some((offset as usize, v));
+                    }
+                }
+                item => Self::inc_offset_item(&mut offset, item),
+            }
+        }
+
+        None
     }
 
     fn get_label_offset(&self) -> Option<usize> {
-        self.offset_for(&VarStackItem::Label)
+        let mut offset: isize = 0;
+        for item in self.iter() {
+            match item {
+                VarStackItem::Label => return Some(offset as usize),
+                item => Self::inc_offset_item(&mut offset, item),
+            }
+        }
+
+        None
     }
 }
 
@@ -210,15 +249,15 @@ impl Instructions {
         }
     }
 
-    fn var_mark(&mut self, identifier: String) {
-        self.var_stack.push(VarStackItem::Var(identifier));
+    fn var_mark(&mut self, var: VarStackItemVar) {
+        self.var_stack.push(VarStackItem::Var(var));
     }
 
     fn var_mark_label(&mut self) {
         self.var_stack.push(VarStackItem::Label);
     }
 
-    fn var_get_offset(&self, identifier: &str) -> Option<usize> {
+    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &VarStackItemVar)> {
         self.var_stack.get_var_offset(identifier)
     }
 
@@ -227,6 +266,20 @@ impl Instructions {
             .push(Instruction::Real(vm::Instruction::Reset(
                 self.var_stack.get_label_offset().unwrap(),
             )));
+    }
+
+    fn instr_alloc(&mut self, size: usize, alignment: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Alloc(size, alignment)));
+        self.var_stack.push(VarStackItem::Reset(size));
+        self.var_stack.push(VarStackItem::Increment(PTR_SIZE));
+    }
+
+    fn instr_deref(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Deref(size)));
+        self.var_stack.push(VarStackItem::Reset(PTR_SIZE));
+        self.var_stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_slice_index_set(&mut self, size: usize) {
@@ -528,7 +581,10 @@ impl Instructions {
             }
 
             self.var_stack.push(VarStackItem::Increment(_type.size));
-            self.var_mark(arg.identifier.clone());
+            self.var_mark(VarStackItemVar {
+                identifier: arg.identifier.clone(),
+                escaped: false,
+            });
         }
 
         // return address
@@ -756,6 +812,7 @@ pub struct FunctionCompiler<'a, 'b, 'c> {
     function: &'a ast::Function,
     static_memory: &'b mut vm::StaticMemory,
     type_declarations: &'c ast::TypeDeclarations,
+    compiler_body: Option<CompilerBody<'a>>,
 }
 
 impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
@@ -769,6 +826,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             function,
             instructions: Instructions::new(),
             type_declarations,
+            compiler_body: None,
         }
     }
 
@@ -1049,14 +1107,21 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         let _type = self.resolve_type(&variable._type)?;
         self.instructions.push_alignment(_type.alignment);
 
-        let offset = self
+        let (offset, var_item) = self
             .instructions
             .var_get_offset(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
-        self.instructions.instr_increment(_type.size);
-        self.instructions
-            .instr_copy(0, offset + _type.size, _type.size);
+        if var_item.escaped {
+            self.instructions.push_alignment(PTR_SIZE);
+            self.instructions.instr_increment(PTR_SIZE);
+            self.instructions.instr_copy(0, offset, PTR_SIZE);
+            self.instructions.instr_deref(_type.size);
+        } else {
+            self.instructions.instr_increment(_type.size);
+            self.instructions
+                .instr_copy(0, offset + _type.size, _type.size);
+        }
 
         Ok(_type)
     }
@@ -1414,6 +1479,8 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(_type)
     }
 
+    fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {}
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1433,7 +1500,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::StructInit(v) => self.compile_struct_init(v),
             ast::Expression::DotAccess(v) => self.compile_dot_access(v),
             ast::Expression::Deref(v) => todo!(),
-            ast::Expression::Address(v) => todo!(),
+            ast::Expression::Address(v) => self.compile_address(v),
             ast::Expression::Type(v) => {
                 Err(anyhow!("compile_expression: cant compile type {v:#?}"))
             }
@@ -1456,6 +1523,15 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         &mut self,
         declaration: &ast::VariableDeclaration,
     ) -> Result<()> {
+        let escaped = self
+            .compiler_body
+            .as_ref()
+            .unwrap()
+            .does_variable_escape(&declaration.variable);
+        if escaped {
+            self.instructions.push_alignment(PTR_SIZE);
+        }
+
         let exp = self.compile_expression(&declaration.expression)?;
         if exp == VOID {
             return Err(anyhow!("can't declare void variable"));
@@ -1465,8 +1541,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             return Err(anyhow!("type mismatch"));
         }
 
-        self.instructions
-            .var_mark(declaration.variable.identifier.clone());
+        if escaped {
+            self.instructions.instr_alloc(exp.size, exp.alignment);
+        }
+
+        self.instructions.var_mark(VarStackItemVar {
+            escaped,
+            identifier: declaration.variable.identifier.clone(),
+        });
 
         Ok(())
     }
@@ -1562,7 +1644,11 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
+    fn compile_if_block(
+        &mut self,
+        expression: &ast::Expression,
+        body: &'a [ast::Node],
+    ) -> Result<()> {
         let exp = self.compile_expression(expression)?;
         if exp != BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
@@ -1577,7 +1663,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+    fn compile_if(&mut self, _if: &'a ast::If) -> Result<()> {
         self.instructions.push_stack_frame();
 
         self.instructions.stack_instructions.jump();
@@ -1600,7 +1686,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
+    fn compile_for(&mut self, _for: &'a ast::For) -> Result<()> {
         self.instructions.push_stack_frame();
         if let Some(v) = &_for.initializer {
             self.compile_node(v)?;
@@ -1695,7 +1781,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
+    fn compile_node(&mut self, node: &'a ast::Node) -> Result<()> {
         match node {
             ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
             ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
@@ -1725,11 +1811,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
+    fn compile_body(&mut self, body: &'a [ast::Node]) -> Result<()> {
+        self.compiler_body = Some(CompilerBody::new(body));
+
         self.instructions.push_stack_frame();
 
         for node in body {
             self.compile_node(node)?;
+            self.compiler_body.as_mut().unwrap().next();
         }
 
         self.instructions.pop_stack_frame();
