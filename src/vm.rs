@@ -261,6 +261,7 @@ pub enum Instruction {
 
     Alloc(usize, usize),
     Deref(usize),
+    DerefAssign(usize),
 }
 
 pub struct Stack {
@@ -672,6 +673,13 @@ impl Vm {
                 Instruction::Deref(size) => {
                     let ptr = self.stack.pop::<*mut u8>();
                     self.stack.deref(ptr, size);
+                }
+                Instruction::DerefAssign(size) => {
+                    let dst = self.stack.pop_size(size).to_vec();
+                    let src = self.stack.pop::<*mut u8>();
+                    unsafe {
+                        ptr::copy_nonoverlapping(src, dst.as_ptr() as *mut u8, size);
+                    };
                 }
             }
 
