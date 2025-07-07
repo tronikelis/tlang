@@ -1,6 +1,42 @@
 use anyhow::{anyhow, Result};
 
-use crate::{ast, lexer, vm};
+use crate::{ast, ast::Bfs, lexer, vm};
+
+struct DoesVariableEscape<'a> {
+    identifier: &'a str,
+}
+
+impl<'a> DoesVariableEscape<'a> {
+    fn new(identifier: &'a str) -> Self {
+        Self { identifier }
+    }
+}
+
+impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
+    fn search_expression_address(&self, exp: &ast::Expression) -> ast::BfsRet {
+        if let ast::Expression::Variable(var) = exp {
+            return match var.identifier == self.identifier {
+                true => ast::BfsRet::Found,
+                false => ast::BfsRet::Continue,
+            };
+        }
+
+        self.search_expression_address(exp)
+    }
+
+    fn search_node_variable_declaration(
+        &self,
+        declaration: &ast::VariableDeclaration,
+    ) -> ast::BfsRet {
+        ast::return_if_some_true!(self.search_expression(&declaration.expression));
+
+        if declaration.variable.identifier == self.identifier {
+            return ast::BfsRet::Return;
+        }
+
+        ast::BfsRet::Continue
+    }
+}
 
 struct CompilerBody<'a> {
     i: usize,
@@ -17,7 +53,10 @@ impl<'a> CompilerBody<'a> {
     }
 
     fn does_variable_escape(&self, identifier: &str) -> bool {
-        todo!();
+        match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i)) {
+            ast::BfsRet::Found => return true,
+            _ => return false,
+        }
     }
 }
 

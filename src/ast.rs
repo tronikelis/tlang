@@ -3,6 +3,210 @@ use std::collections::HashMap;
 
 use crate::lexer;
 
+pub enum BfsRet {
+    Return,
+    Found,
+    Continue,
+}
+
+macro_rules! return_if_some_true {
+    ($v:expr) => {
+        let result = $v;
+        match result {
+            $crate::ast::BfsRet::Found | $crate::ast::BfsRet::Return => {
+                return result;
+            }
+            $crate::ast::BfsRet::Continue => {}
+        }
+    };
+}
+pub(crate) use return_if_some_true;
+
+pub trait Bfs<'a> {
+    fn search_body(&self, body: impl Iterator<Item = &'a Node>) -> BfsRet {
+        for node in body {
+            return_if_some_true!(self.search_node(node));
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node(&self, node: &'a Node) -> BfsRet {
+        match node {
+            Node::Continue | Node::Break | Node::Debug => {}
+            Node::Return(exp) => {
+                if let Some(exp) = exp {
+                    return self.search_expression(exp);
+                }
+            }
+            Node::Expression(v) => return self.search_expression(v),
+            Node::If(v) => return self.search_node_if(v),
+            Node::For(v) => return self.search_node_for(v),
+            Node::VariableDeclaration(v) => return self.search_node_variable_declaration(v),
+            Node::VariableAssignment(v) => return self.search_node_variable_assignment(v),
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node_if(&self, _if: &'a If) -> BfsRet {
+        return_if_some_true!(self.search_expression(&_if.expression));
+        return_if_some_true!(self.search_body(_if.body.iter()));
+
+        for else_if in &_if.elseif {
+            return_if_some_true!(self.search_expression(&else_if.expression));
+            return_if_some_true!(self.search_body(else_if.body.iter()));
+        }
+
+        if let Some(_else) = &_if._else {
+            return_if_some_true!(self.search_body(_else.body.iter()));
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node_for(&self, _for: &'a For) -> BfsRet {
+        if let Some(node) = &_for.initializer {
+            return_if_some_true!(self.search_node(node));
+        }
+        if let Some(exp) = &_for.expression {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        if let Some(node) = &_for.after_each {
+            return_if_some_true!(self.search_node(node));
+        }
+
+        return_if_some_true!(self.search_body(_for.body.iter()));
+
+        BfsRet::Continue
+    }
+
+    fn search_node_variable_declaration(&self, declaration: &VariableDeclaration) -> BfsRet {
+        return_if_some_true!(self.search_expression(&declaration.expression));
+        BfsRet::Continue
+    }
+
+    fn search_node_variable_assignment(&self, assignment: &VariableAssignment) -> BfsRet {
+        return_if_some_true!(self.search_expression(&assignment.var));
+        return_if_some_true!(self.search_expression(&assignment.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression(&self, exp: &Expression) -> BfsRet {
+        match exp {
+            Expression::Address(v) => self.search_expression_address(v),
+            Expression::AndOr(v) => self.search_expression_andor(v),
+            Expression::Arithmetic(v) => self.search_expression_arithmetic(v),
+            Expression::Compare(v) => self.search_expression_compare(v),
+            Expression::Deref(v) => self.search_expression_deref(v),
+            Expression::DotAccess(v) => self.search_expression_dot_access(v),
+            Expression::FunctionCall(v) => self.search_expression_function_call(v),
+            Expression::Index(v) => self.search_expression_index(v),
+            Expression::Infix(v) => self.search_expression_infix(v),
+            Expression::Literal(v) => self.search_expression_literal(v),
+            Expression::Negate(v) => self.search_expression_negate(v),
+            Expression::SliceInit(v) => self.search_expression_slice_init(v),
+            Expression::Spread(v) => self.search_expression_spread(v),
+            Expression::StructInit(v) => self.search_expression_struct_init(v),
+            Expression::Type(v) => self.search_expression_type(v),
+            Expression::TypeCast(v) => self.search_expression_type_cast(v),
+            Expression::Variable(v) => self.search_expression_variable(v),
+        }
+    }
+
+    fn search_expression_address(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_andor(&self, andor: &AndOr) -> BfsRet {
+        return_if_some_true!(self.search_expression(&andor.left));
+        return_if_some_true!(self.search_expression(&andor.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_deref(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_function_call(&self, function_call: &FunctionCall) -> BfsRet {
+        for arg in &function_call.arguments {
+            return_if_some_true!(self.search_expression(arg));
+        }
+        BfsRet::Continue
+    }
+
+    fn search_expression_variable(&self, _variable: &Variable) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_type(&self, _type: &Type) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_infix(&self, infix: &Infix) -> BfsRet {
+        return_if_some_true!(self.search_expression(&infix.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression_index(&self, index: &Index) -> BfsRet {
+        return_if_some_true!(self.search_expression(&index.expression));
+        return_if_some_true!(self.search_expression(&index.var));
+        BfsRet::Continue
+    }
+
+    fn search_expression_negate(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_spread(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_literal(&self, _literal: &Literal) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_compare(&self, compare: &Compare) -> BfsRet {
+        return_if_some_true!(self.search_expression(&compare.left));
+        return_if_some_true!(self.search_expression(&compare.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_type_cast(&self, type_cast: &TypeCast) -> BfsRet {
+        return_if_some_true!(self.search_expression(&type_cast.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression_arithmetic(&self, arithmetic: &Arithmetic) -> BfsRet {
+        return_if_some_true!(self.search_expression(&arithmetic.left));
+        return_if_some_true!(self.search_expression(&arithmetic.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_dot_access(&self, dot_access: &DotAccess) -> BfsRet {
+        return_if_some_true!(self.search_expression(&dot_access.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression_slice_init(&self, slice_init: &SliceInit) -> BfsRet {
+        for exp in &slice_init.expressions {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        BfsRet::Continue
+    }
+
+    fn search_expression_struct_init(&self, struct_init: &StructInit) -> BfsRet {
+        for exp in struct_init.fields.values() {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        BfsRet::Continue
+    }
+}
+
 const BOOL_ALIAS: &'static str = "bool";
 const INT_ALIAS: &'static str = "int";
 const STRING_ALIAS: &'static str = "string";
