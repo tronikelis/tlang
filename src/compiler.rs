@@ -21,7 +21,7 @@ impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
             };
         }
 
-        self.search_expression_address(exp)
+        self.search_expression(exp)
     }
 
     fn search_node_variable_declaration(
