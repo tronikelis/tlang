@@ -52,8 +52,9 @@ impl<'a> CompilerBody<'a> {
         self.i += 1;
     }
 
-    fn does_variable_escape(&self, identifier: &str) -> bool {
-        match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i)) {
+    fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
+        match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i + skip))
+        {
             ast::BfsRet::Found => return true,
             _ => return false,
         }
@@ -628,7 +629,7 @@ impl Instructions {
                 self.var_stack.push(VarStackItem::Increment(alignment));
             }
 
-            let escaped = compiler_body.does_variable_escape(&arg.identifier);
+            let escaped = compiler_body.does_variable_escape(&arg.identifier, 0);
             self.var_stack.push(VarStackItem::Increment(_type.size));
             self.var_mark(VarStackItemVar {
                 identifier: arg.identifier.clone(),
@@ -1638,7 +1639,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     ) -> Result<()> {
         let escaped = self
             .compiler_body
-            .does_variable_escape(&declaration.variable.identifier);
+            .does_variable_escape(&declaration.variable.identifier, 1);
         if escaped {
             self.instructions.push_alignment(PTR_SIZE);
         }
