@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 
 use crate::{ast, ast::Bfs, lexer, vm};
 
@@ -607,8 +608,8 @@ impl Instructions {
 
     fn init_function_prologue(
         &mut self,
-        function: &ast::Function,
-        type_declarations: &ast::TypeDeclarations,
+        function: &ast::FunctionDeclaration,
+        type_declarations: &HashMap<String, ast::Type>,
         compiler_body: &CompilerBody,
     ) -> Result<()> {
         // push arguments to var_stack, they are already in the stack
@@ -668,7 +669,7 @@ impl Instructions {
         Ok(())
     }
 
-    fn init_function_epilogue(&mut self, function: &ast::Function) {
+    fn init_function_epilogue(&mut self, function: &ast::FunctionDeclaration) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
                 self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
@@ -805,7 +806,7 @@ impl Type {
     }
 }
 
-fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) -> Result<Type> {
+fn resolve_type(type_declarations: &HashMap<String, ast::Type>, _type: &ast::Type) -> Result<Type> {
     match _type {
         ast::Type::Alias(alias) => {
             match alias.as_str() {
@@ -821,7 +822,6 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
             };
 
             let inner = type_declarations
-                .0
                 .get(alias)
                 .ok_or(anyhow!("can't resolve {alias:#?}"))?;
 
@@ -875,33 +875,33 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
 
 pub struct FunctionCompiler<'a, 'b, 'c> {
     instructions: Instructions,
-    function: &'a ast::Function,
+    function: &'a ast::FunctionDeclaration,
     static_memory: &'b mut vm::StaticMemory,
-    type_declarations: &'c ast::TypeDeclarations,
+    types: &'c HashMap<String, ast::Type>,
     compiler_body: CompilerBody<'a>,
 }
 
 impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     pub fn new(
-        function: &'a ast::Function,
+        function: &'a ast::FunctionDeclaration,
         static_memory: &'b mut vm::StaticMemory,
-        type_declarations: &'c ast::TypeDeclarations,
+        type_declarations: &'c HashMap<String, ast::Type>,
     ) -> Self {
         Self {
             static_memory,
             function,
             instructions: Instructions::new(),
-            type_declarations,
-            compiler_body: CompilerBody::new(function.body.as_ref().unwrap()),
+            types: type_declarations,
+            compiler_body: CompilerBody::new(&function.body),
         }
     }
 
     fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        resolve_type(self.type_declarations, _type)
+        resolve_type(self.types, _type)
     }
 
     // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_new(&mut self, call: &ast::Call) -> Result<Type> {
         let type_arg = call
             .arguments
             .get(0)
@@ -943,7 +943,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_len(&mut self, call: &ast::Call) -> Result<Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -951,7 +951,6 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
 
         // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
-
         let TypeType::Slice(_) = &slice_exp._type else {
             return Err(anyhow!(
                 "len: expected slice as the argument, got {:#?}",
@@ -965,7 +964,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_append(&mut self, call: &ast::Call) -> Result<Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -992,24 +991,28 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(VOID)
     }
 
-    fn check_function_call_argument_count(&self, call: &ast::FunctionCall) -> Result<()> {
+    fn check_function_call_argument_count(
+        &self,
+        call: &ast::Call,
+        callee: &ast::FunctionDeclaration,
+    ) -> Result<()> {
         // todo: refactor this arguments check somehow
-        if let Some(last) = call.function.arguments.last() {
+        if let Some(last) = callee.arguments.last() {
             let last_type = self.resolve_type(&last._type)?;
             if let TypeType::Variadic(_type) = &last_type._type {
                 // -1 because variadic can be empty
-                if call.arguments.len() < call.function.arguments.len() - 1 {
+                if call.arguments.len() < callee.arguments.len() - 1 {
                     return Err(anyhow!(
                         "compile_function_call: variadic argument count mismatch"
                     ));
                 }
             } else {
-                if call.arguments.len() != call.function.arguments.len() {
+                if call.arguments.len() != callee.arguments.len() {
                     return Err(anyhow!("compile_function_call: argument count mismatch"));
                 }
             }
         } else {
-            if call.arguments.len() != call.function.arguments.len() {
+            if call.arguments.len() != callee.arguments.len() {
                 return Err(anyhow!("compile_function_call: argument count mismatch"));
             }
         }
@@ -1017,10 +1020,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<Type> {
-        self.check_function_call_argument_count(call)?;
+    fn compile_function_call(
+        &mut self,
+        call: &ast::Call,
+        callee: &ast::FunctionDeclaration,
+    ) -> Result<Type> {
+        self.check_function_call_argument_count(call, callee)?;
 
-        match call.function.identifier.as_str() {
+        match callee.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
             "new" => return self.compile_function_builtin_new(call),
@@ -1028,11 +1035,11 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .push_alignment(self.resolve_type(&call.function.return_type)?.alignment);
+            .push_alignment(self.resolve_type(&callee.return_type)?.alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, expected_type) in call.function.arguments.iter().enumerate() {
+            for (i, expected_type) in callee.arguments.iter().enumerate() {
                 let expected_type = self.resolve_type(&expected_type._type)?;
                 let arg = call.arguments.get(i);
 
@@ -1057,7 +1064,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     if exp != expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
-                    if call.function.arguments.len() != call.arguments.len() {
+                    if callee.arguments.len() != call.arguments.len() {
                         return Err(anyhow!("spread must be last argument"));
                     }
 
@@ -1080,7 +1087,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             self.instructions.pop_stack_frame_size()
         };
 
-        match call.function.identifier.as_str() {
+        match callee.identifier.as_str() {
             "syscall0" => {
                 self.instructions.instr_syscall0();
                 return Ok(UINT);
@@ -1112,7 +1119,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => {}
         }
 
-        let return_type = self.resolve_type(&call.function.return_type)?;
+        let return_type = self.resolve_type(&callee.return_type)?;
         let return_size = return_type.size;
 
         let reset_size: usize;
@@ -1128,14 +1135,18 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .instr_jump_and_link(call.function.identifier.clone());
+            .instr_jump_and_link(callee.identifier.clone());
         self.instructions.instr_reset(reset_size);
 
         Ok(return_type)
     }
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
-        let literal_type = self.resolve_type(&literal._type)?;
+        let literal_type = match literal.literal {
+            lexer::Literal::Int(_) => INT,
+            lexer::Literal::Bool(_) => BOOL,
+            lexer::Literal::String(_) => STRING,
+        };
 
         match &literal.literal {
             lexer::Literal::Int(int) => match &literal_type {
@@ -1989,18 +2000,10 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
-        self.instructions.init_function_prologue(
-            self.function,
-            self.type_declarations,
-            &self.compiler_body,
-        )?;
+        self.instructions
+            .init_function_prologue(self.function, self.types, &self.compiler_body)?;
 
-        self.compile_body(
-            self.function
-                .body
-                .as_ref()
-                .ok_or(anyhow!("compile: function body empty"))?,
-        )?;
+        self.compile_body(&self.function.body)?;
 
         self.compile_return(None)?;
 
