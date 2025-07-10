@@ -72,16 +72,10 @@ pub enum Instruction {
 }
 
 #[derive(Debug, Clone)]
-struct VarStackItemVar {
-    identifier: String,
-    escaped: bool,
-}
-
-#[derive(Debug, Clone)]
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
-    Var(VarStackItemVar),
+    Var(Variable),
     Label,
 }
 
@@ -873,21 +867,41 @@ fn resolve_type(type_declarations: &HashMap<String, ast::Type>, _type: &ast::Typ
     }
 }
 
-pub struct FunctionCompiler<'a, 'b, 'c> {
+struct FunctionCall {
+    call: ast::Call,
+    callee: ast::FunctionDeclaration,
+}
+
+struct TypeCast {
+    expression: ast::Expression,
+    _type: Type,
+}
+
+#[derive(Debug, Clone)]
+struct Variable {
+    _type: Type,
+    identifier: String,
+    escaped: bool,
+}
+
+pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
     instructions: Instructions,
     function: &'a ast::FunctionDeclaration,
     static_memory: &'b mut vm::StaticMemory,
     types: &'c HashMap<String, ast::Type>,
+    functions: &'d HashMap<String, ast::FunctionDeclaration>,
     compiler_body: CompilerBody<'a>,
 }
 
-impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
+impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     pub fn new(
         function: &'a ast::FunctionDeclaration,
         static_memory: &'b mut vm::StaticMemory,
         type_declarations: &'c HashMap<String, ast::Type>,
+        functions: &'d HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
         Self {
+            functions,
             static_memory,
             function,
             instructions: Instructions::new(),
@@ -900,9 +914,44 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         resolve_type(self.types, _type)
     }
 
+    fn resolve_function_call(&self, call: &ast::Call) -> Result<FunctionCall> {
+        let ast::Type::Alias(identifier) = &call._type else {
+            return Err(anyhow!("resolve_function_call: non alias"));
+        };
+
+        let callee = self
+            .functions
+            .get(identifier)
+            .ok_or(anyhow!("resolve_function_call: function does not exist"))?;
+
+        Ok(FunctionCall {
+            callee: callee.clone(),
+            call: call.clone(),
+        })
+    }
+
+    fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
+        if call.arguments.len() != 1 {
+            return Err(anyhow!("resolve_type_cast: 1 argument required"));
+        }
+
+        let exp = call.arguments[0].clone();
+        let _type = self.resolve_type(&call._type)?;
+
+        Ok(TypeCast {
+            expression: exp,
+            _type,
+        })
+    }
+
+    fn resolve_variable(&self, _type: &ast::Type) -> Result<Variable> {
+        todo!();
+    }
+
     // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &ast::Call) -> Result<Type> {
+    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<Type> {
         let type_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("new: expected first argument"))?;
@@ -915,11 +964,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         match &_type._type {
             TypeType::Slice(slice_item) => {
                 let def_val = call
+                    .call
                     .arguments
                     .get(1)
                     .ok_or(anyhow!("new: second argument expected"))?;
 
                 let len_val = call
+                    .call
                     .arguments
                     .get(2)
                     .ok_or(anyhow!("new: third argument expected"))?;
@@ -943,8 +994,9 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &ast::Call) -> Result<Type> {
+    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<Type> {
         let slice_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("len: expected first argument"))?;
@@ -964,12 +1016,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &ast::Call) -> Result<Type> {
+    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<Type> {
         let slice_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("append: expected first argument"))?;
         let value_arg = call
+            .call
             .arguments
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
@@ -991,28 +1045,24 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(VOID)
     }
 
-    fn check_function_call_argument_count(
-        &self,
-        call: &ast::Call,
-        callee: &ast::FunctionDeclaration,
-    ) -> Result<()> {
+    fn check_function_call_argument_count(&self, call: &FunctionCall) -> Result<()> {
         // todo: refactor this arguments check somehow
-        if let Some(last) = callee.arguments.last() {
+        if let Some(last) = call.callee.arguments.last() {
             let last_type = self.resolve_type(&last._type)?;
             if let TypeType::Variadic(_type) = &last_type._type {
                 // -1 because variadic can be empty
-                if call.arguments.len() < callee.arguments.len() - 1 {
+                if call.call.arguments.len() < call.callee.arguments.len() - 1 {
                     return Err(anyhow!(
                         "compile_function_call: variadic argument count mismatch"
                     ));
                 }
             } else {
-                if call.arguments.len() != callee.arguments.len() {
+                if call.call.arguments.len() != call.callee.arguments.len() {
                     return Err(anyhow!("compile_function_call: argument count mismatch"));
                 }
             }
         } else {
-            if call.arguments.len() != callee.arguments.len() {
+            if call.call.arguments.len() != call.callee.arguments.len() {
                 return Err(anyhow!("compile_function_call: argument count mismatch"));
             }
         }
@@ -1020,14 +1070,10 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_function_call(
-        &mut self,
-        call: &ast::Call,
-        callee: &ast::FunctionDeclaration,
-    ) -> Result<Type> {
-        self.check_function_call_argument_count(call, callee)?;
+    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
+        self.check_function_call_argument_count(call)?;
 
-        match callee.identifier.as_str() {
+        match call.callee.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
             "new" => return self.compile_function_builtin_new(call),
@@ -1035,13 +1081,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .push_alignment(self.resolve_type(&callee.return_type)?.alignment);
+            .push_alignment(self.resolve_type(&call.callee.return_type)?.alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, expected_type) in callee.arguments.iter().enumerate() {
+            for (i, expected_type) in call.callee.arguments.iter().enumerate() {
                 let expected_type = self.resolve_type(&expected_type._type)?;
-                let arg = call.arguments.get(i);
+                let arg = call.call.arguments.get(i);
 
                 let Some(arg) = arg else {
                     if expected_type.extract_variadic().is_some() {
@@ -1064,7 +1110,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     if exp != expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
-                    if callee.arguments.len() != call.arguments.len() {
+                    if call.callee.arguments.len() != call.call.arguments.len() {
                         return Err(anyhow!("spread must be last argument"));
                     }
 
@@ -1072,7 +1118,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 }
 
                 self.instructions.instr_push_slice();
-                for arg in call.arguments.iter().skip(i) {
+                for arg in call.call.arguments.iter().skip(i) {
                     self.instructions.instr_increment(SLICE_SIZE);
                     self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
 
@@ -1087,7 +1133,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             self.instructions.pop_stack_frame_size()
         };
 
-        match callee.identifier.as_str() {
+        match call.callee.identifier.as_str() {
             "syscall0" => {
                 self.instructions.instr_syscall0();
                 return Ok(UINT);
@@ -1119,7 +1165,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => {}
         }
 
-        let return_type = self.resolve_type(&callee.return_type)?;
+        let return_type = self.resolve_type(&call.callee.return_type)?;
         let return_size = return_type.size;
 
         let reset_size: usize;
@@ -1135,7 +1181,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .instr_jump_and_link(callee.identifier.clone());
+            .instr_jump_and_link(call.callee.identifier.clone());
         self.instructions.instr_reset(reset_size);
 
         Ok(return_type)
@@ -1180,9 +1226,8 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(literal_type)
     }
 
-    fn compile_variable(&mut self, variable: &ast::Variable) -> Result<Type> {
-        let _type = self.resolve_type(&variable._type)?;
-        self.instructions.push_alignment(_type.alignment);
+    fn compile_variable(&mut self, variable: &Variable) -> Result<Type> {
+        self.instructions.push_alignment(variable._type.alignment);
 
         let (offset, var_item) = self
             .instructions
@@ -1195,14 +1240,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             self.instructions.instr_increment(PTR_SIZE);
             self.instructions
                 .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
-            self.instructions.instr_deref(_type.size);
+            self.instructions.instr_deref(variable._type.size);
         } else {
-            self.instructions.instr_increment(_type.size);
+            self.instructions.instr_increment(variable._type.size);
             self.instructions
-                .instr_copy(0, offset + _type.size, _type.size);
+                .instr_copy(0, offset + variable._type.size, variable._type.size);
         }
 
-        Ok(_type)
+        Ok(variable._type.clone())
     }
 
     fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
@@ -1407,15 +1452,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(BOOL)
     }
 
-    fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<Type> {
-        let type_cast_type = self.resolve_type(&type_cast._type)?;
-        self.instructions.push_alignment(type_cast_type.alignment);
+    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
+        self.instructions.push_alignment(type_cast._type.alignment);
 
         let target = self.compile_expression(&type_cast.expression)?;
 
         match target._type {
             TypeType::Builtin(builtin) => match builtin {
-                TypeBuiltin::Int => match &type_cast_type._type {
+                TypeBuiltin::Int => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Uint8 => {
                             self.instructions.instr_cast_int_uint8();
@@ -1427,7 +1471,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Uint8 => match &type_cast_type._type {
+                TypeBuiltin::Uint8 => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Int => {
                             self.instructions.instr_cast_uint8_int();
@@ -1436,14 +1480,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Ptr => match &type_cast_type._type {
+                TypeBuiltin::Ptr => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::String => match &type_cast_type._type {
+                TypeBuiltin::String => match &type_cast._type._type {
                     TypeType::Slice(item) => {
                         if **item != UINT8 {
                             return Err(anyhow!(
@@ -1455,7 +1499,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Slice(item_target) => match &type_cast_type._type {
+            TypeType::Slice(item_target) => match &type_cast._type._type {
                 TypeType::Builtin(builtin_dest) => match builtin_dest {
                     TypeBuiltin::String => {
                         if *item_target != UINT8 {
@@ -1471,7 +1515,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Variadic(item_target) => match &type_cast_type._type {
+            TypeType::Variadic(item_target) => match &type_cast._type._type {
                 TypeType::Slice(item_dest) => {
                     if item_target != *item_dest {
                         return Err(anyhow!(
@@ -1484,7 +1528,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
 
-        Ok(type_cast_type)
+        Ok(type_cast._type.clone())
     }
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
@@ -1606,6 +1650,36 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(*_type)
     }
 
+    fn compile_type_init(&mut self, type_init: &ast::TypeInit) -> Result<Type> {
+        match self.resolve_type(&type_init._type)?._type {
+            TypeType::Slice(_) => self.compile_slice_init(&ast::SliceInit {
+                _type: type_init._type.clone(),
+                expressions: Vec::new(),
+            }),
+            TypeType::Struct(_) => self.compile_struct_init(&ast::StructInit {
+                _type: type_init._type.clone(),
+                fields: HashMap::new(),
+            }),
+            _ => Err(anyhow!("compile_type_init: cant compile this type")),
+        }
+    }
+
+    fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
+        self.compile_variable(&self.resolve_variable(_type)?)
+    }
+
+    fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
+        if let Ok(v) = self.resolve_function_call(call) {
+            return self.compile_function_call(&v);
+        }
+
+        if let Ok(v) = self.resolve_type_cast(call) {
+            return self.compile_type_cast(&v);
+        }
+
+        Err(anyhow!("compile_call: can't resolve call"))
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1613,22 +1687,19 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::AndOr(v) => self.compile_andor(v),
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Variable(v) => self.compile_variable(v),
-            ast::Expression::FunctionCall(v) => self.compile_function_call(v),
+            ast::Expression::Call(v) => self.compile_call(v),
+            ast::Expression::TypeInit(v) => self.compile_type_init(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::SliceInit(v) => self.compile_slice_init(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
-            ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
             ast::Expression::StructInit(v) => self.compile_struct_init(v),
             ast::Expression::DotAccess(v) => self.compile_dot_access(v),
             ast::Expression::Deref(v) => self.compile_deref(v),
             ast::Expression::Address(v) => self.compile_address(v),
-            ast::Expression::Type(v) => {
-                Err(anyhow!("compile_expression: cant compile type {v:#?}"))
-            }
+            ast::Expression::Type(v) => self.compile_type(v),
         }?;
 
         if exp.alignment != 0 {

@@ -110,7 +110,6 @@ pub trait Bfs<'a> {
             Expression::Spread(v) => self.search_expression_spread(v),
             Expression::StructInit(v) => self.search_expression_struct_init(v),
             Expression::Type(v) => self.search_expression_type(v),
-            Expression::Variable(v) => self.search_expression_variable(v),
         }
     }
 
@@ -138,10 +137,6 @@ pub trait Bfs<'a> {
 
     fn search_expression_deref(&self, exp: &Expression) -> BfsRet {
         return_if_some_true!(self.search_expression(exp));
-        BfsRet::Continue
-    }
-
-    fn search_expression_variable(&self, _variable: &Variable) -> BfsRet {
         BfsRet::Continue
     }
 
@@ -313,7 +308,6 @@ pub enum Expression {
     Infix(Infix),
     Negate(Box<Expression>),
     Literal(Literal),
-    Variable(Variable),
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
     Call(Call),
@@ -412,13 +406,13 @@ enum Declaration {
 #[derive(Debug)]
 pub struct Ast {
     pub types: HashMap<String, Type>,
-    pub functions: Vec<FunctionDeclaration>,
+    pub functions: HashMap<String, FunctionDeclaration>,
 }
 
 impl Ast {
     pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
         let mut types = HashMap::new();
-        let mut functions = Vec::new();
+        let mut functions = HashMap::new();
 
         let declarations = TokenParser::new(tokens).parse()?;
         for declaration in declarations {
@@ -427,7 +421,10 @@ impl Ast {
                     types.insert(type_declaration.identifier, type_declaration._type);
                 }
                 Declaration::Function(function_declaration) => {
-                    functions.push(function_declaration);
+                    functions.insert(
+                        function_declaration.identifier.clone(),
+                        function_declaration,
+                    );
                 }
             }
         }
@@ -965,7 +962,9 @@ impl<'a> TokenParser<'a> {
                                 self.next();
                                 self.next();
                             }
-                            lexer::Token::Identifier(_) => match self.peek_token_err(2)? {
+                            lexer::Token::Identifier(_) | lexer::Token::Literal(_) => match self
+                                .peek_token_err(2)?
+                            {
                                 lexer::Token::Colon => {
                                     left = Expression::StructInit(self.parse_struct_init(_type)?);
                                 }
