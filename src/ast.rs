@@ -405,23 +405,23 @@ enum Declaration {
 
 #[derive(Debug)]
 pub struct Ast {
-    pub types: HashMap<String, Type>,
-    pub functions: HashMap<String, FunctionDeclaration>,
+    pub type_declarations: HashMap<String, Type>,
+    pub function_declarations: HashMap<String, FunctionDeclaration>,
 }
 
 impl Ast {
     pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
-        let mut types = HashMap::new();
-        let mut functions = HashMap::new();
+        let mut type_declarations = HashMap::new();
+        let mut function_declarations = HashMap::new();
 
         let declarations = TokenParser::new(tokens).parse()?;
-        for declaration in declarations {
-            match declaration {
+        for v in declarations {
+            match v {
                 Declaration::Type(type_declaration) => {
-                    types.insert(type_declaration.identifier, type_declaration._type);
+                    type_declarations.insert(type_declaration.identifier, type_declaration._type);
                 }
                 Declaration::Function(function_declaration) => {
-                    functions.insert(
+                    function_declarations.insert(
                         function_declaration.identifier.clone(),
                         function_declaration,
                     );
@@ -429,7 +429,10 @@ impl Ast {
             }
         }
 
-        Ok(Self { types, functions })
+        Ok(Self {
+            type_declarations,
+            function_declarations,
+        })
     }
 }
 
@@ -545,10 +548,6 @@ impl<'a> TokenParser<'a> {
         self.next();
 
         let identifier = self.parse_identifier()?;
-
-        self.expect_next_token(lexer::Token::Equals)?;
-        self.next();
-
         let _type = self.parse_type()?;
 
         Ok(TypeDeclaration { _type, identifier })

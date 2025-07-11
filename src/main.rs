@@ -108,8 +108,7 @@ fn main() {
                         nice: 4,
                         three: uint8[]{},
                     }
-                    syscall_write(1, uint8[](itoa(int(s.one))))
-                    syscall_write(1, uint8[](itoa(int(s.two))))
+                    syscall_write(1, uint8[](itoa(s.nice)))
                     s.three = uint8[]{}
                     append(s.three, uint8(20))
                     __debug__
@@ -127,7 +126,7 @@ fn main() {
                         },
                     }
 
-                    u.inner2 = u.inner1
+                    u.inner1 = u.inner2
 
                     __debug__
 
@@ -169,13 +168,17 @@ fn main() {
     let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
     let mut static_memory = vm::StaticMemory::new();
 
-    for function in &ast.functions {
-        let compiled =
-            compiler::FunctionCompiler::new(function, &mut static_memory, &ast.type_declarations)
-                .compile()
-                .unwrap();
+    for (identifier, function) in &ast.function_declarations {
+        let compiled = compiler::FunctionCompiler::new(
+            function,
+            &mut static_memory,
+            &ast.type_declarations,
+            &ast.function_declarations,
+        )
+        .compile()
+        .unwrap();
         println!("{:#?}", compiled);
-        functions.insert(function.identifier.clone(), compiled);
+        functions.insert(identifier.clone(), compiled);
     }
 
     let instructions = linker::link(&functions).unwrap();

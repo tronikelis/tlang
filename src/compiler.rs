@@ -15,11 +15,13 @@ impl<'a> DoesVariableEscape<'a> {
 
 impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
     fn search_expression_address(&self, exp: &ast::Expression) -> ast::BfsRet {
-        if let ast::Expression::Variable(var) = exp {
-            return match var.identifier == self.identifier {
-                true => ast::BfsRet::Found,
-                false => ast::BfsRet::Continue,
-            };
+        if let ast::Expression::Type(_type) = exp {
+            if let ast::Type::Alias(identifier) = _type {
+                return match identifier == self.identifier {
+                    true => ast::BfsRet::Found,
+                    false => ast::BfsRet::Continue,
+                };
+            }
         }
 
         self.search_expression(exp)
@@ -136,7 +138,7 @@ impl VarStack {
         })
     }
 
-    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &VarStackItemVar)> {
+    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
         let mut offset: isize = 0;
         for item in self.iter() {
             match item {
@@ -284,7 +286,7 @@ impl Instructions {
         }
     }
 
-    fn var_mark(&mut self, var: VarStackItemVar) {
+    fn var_mark(&mut self, var: Variable) {
         self.var_stack.push(VarStackItem::Var(var));
     }
 
@@ -292,7 +294,7 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Label);
     }
 
-    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &VarStackItemVar)> {
+    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
         self.var_stack.get_var_offset(identifier)
     }
 
@@ -626,8 +628,9 @@ impl Instructions {
 
             let escaped = compiler_body.does_variable_escape(&arg.identifier, 0);
             self.var_stack.push(VarStackItem::Increment(_type.size));
-            self.var_mark(VarStackItemVar {
+            self.var_mark(Variable {
                 identifier: arg.identifier.clone(),
+                _type: _type.clone(),
                 escaped,
             });
 
@@ -654,8 +657,9 @@ impl Instructions {
             self.instr_increment(_type.size);
             self.instr_copy(0, offset + _type.size + alignment, _type.size);
             self.instr_alloc(_type.size, _type.alignment);
-            self.var_mark(VarStackItemVar {
+            self.var_mark(Variable {
                 escaped: true,
+                _type,
                 identifier,
             });
         }
@@ -888,8 +892,8 @@ pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
     instructions: Instructions,
     function: &'a ast::FunctionDeclaration,
     static_memory: &'b mut vm::StaticMemory,
-    types: &'c HashMap<String, ast::Type>,
-    functions: &'d HashMap<String, ast::FunctionDeclaration>,
+    type_declarations: &'c HashMap<String, ast::Type>,
+    function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
     compiler_body: CompilerBody<'a>,
 }
 
@@ -898,20 +902,20 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         function: &'a ast::FunctionDeclaration,
         static_memory: &'b mut vm::StaticMemory,
         type_declarations: &'c HashMap<String, ast::Type>,
-        functions: &'d HashMap<String, ast::FunctionDeclaration>,
+        function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
         Self {
-            functions,
+            function_declarations,
             static_memory,
             function,
             instructions: Instructions::new(),
-            types: type_declarations,
+            type_declarations,
             compiler_body: CompilerBody::new(&function.body),
         }
     }
 
     fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        resolve_type(self.types, _type)
+        resolve_type(self.type_declarations, _type)
     }
 
     fn resolve_function_call(&self, call: &ast::Call) -> Result<FunctionCall> {
@@ -920,7 +924,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         };
 
         let callee = self
-            .functions
+            .function_declarations
             .get(identifier)
             .ok_or(anyhow!("resolve_function_call: function does not exist"))?;
 
@@ -944,8 +948,17 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         })
     }
 
-    fn resolve_variable(&self, _type: &ast::Type) -> Result<Variable> {
-        todo!();
+    fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
+        let ast::Type::Alias(identifier) = _type else {
+            return Err(anyhow!("resolve_variable: cant resolve non alias"));
+        };
+
+        let variable = self
+            .instructions
+            .var_get_offset(identifier)
+            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
+
+        Ok((variable.0, variable.1.clone()))
     }
 
     // new(_ Type, args Type...) Type
@@ -1603,14 +1616,11 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     }
 
     fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {
-        if let ast::Expression::Variable(var) = expression {
-            let (offset, item_var) = self
-                .instructions
-                .var_get_offset(&var.identifier)
-                .ok_or(anyhow!("compile_address: variable not found"))?;
+        if let ast::Expression::Type(_type) = expression {
+            let (offset, var) = self.resolve_variable(_type)?;
 
             assert_eq!(
-                item_var.escaped, true,
+                var.escaped, true,
                 "compile_address: rn all variables escaped"
             );
 
@@ -1622,7 +1632,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             Ok(Type {
                 size: PTR_SIZE,
                 alignment: PTR_SIZE,
-                _type: TypeType::Address(Box::new(self.resolve_type(&var._type)?)),
+                _type: TypeType::Address(Box::new(var._type.clone())),
             })
         } else {
             self.instructions.push_alignment(PTR_SIZE);
@@ -1665,7 +1675,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     }
 
     fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
-        self.compile_variable(&self.resolve_variable(_type)?)
+        self.compile_variable(&self.resolve_variable(_type)?.1)
     }
 
     fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
@@ -1739,9 +1749,10 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             self.instructions.instr_alloc(exp.size, exp.alignment);
         }
 
-        self.instructions.var_mark(VarStackItemVar {
+        self.instructions.var_mark(Variable {
             escaped,
             identifier: declaration.variable.identifier.clone(),
+            _type: exp,
         });
 
         Ok(())
@@ -1764,17 +1775,13 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             return Ok((offset + field_offset, field_type.clone()));
         }
 
-        let ast::Expression::Variable(variable) = &dot_access.expression else {
-            return Err(anyhow!("cant dot access non variable"));
+        let ast::Expression::Type(_type) = &dot_access.expression else {
+            return Err(anyhow!("cant dot access non Type"));
         };
 
-        let (offset, _) = self
-            .instructions
-            .var_get_offset(&variable.identifier)
-            .ok_or(anyhow!("variable assignment variable not found"))?;
+        let (offset, variable) = self.resolve_variable(_type)?;
 
-        let _type = self.resolve_type(&variable._type)?;
-        let TypeType::Struct(type_struct) = &_type._type else {
+        let TypeType::Struct(type_struct) = &variable._type._type else {
             return Err(anyhow!("cant dot access non struct type"));
         };
 
@@ -1789,13 +1796,10 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         self.instructions.push_stack_frame();
 
         match &assignment.var {
-            ast::Expression::Variable(var) => {
-                let (offset, var_item) = self
-                    .instructions
-                    .var_get_offset(&var.identifier)
-                    .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
+            ast::Expression::Type(_type) => {
+                let (offset, variable) = self.resolve_variable(_type)?;
 
-                if var_item.escaped {
+                if variable.escaped {
                     let alignment = self.instructions.push_alignment(PTR_SIZE);
                     self.instructions.instr_increment(PTR_SIZE);
                     self.instructions
@@ -1803,7 +1807,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
 
                     // no alignment because of PTR_SIZE align above
                     let exp = self.compile_expression(&assignment.expression)?;
-                    if self.resolve_type(&var._type)? != exp {
+                    if variable._type != exp {
                         return Err(anyhow!("variable assignment type mismatch"));
                     }
 
@@ -1811,7 +1815,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 } else {
                     self.instructions.push_stack_frame();
                     let exp = self.compile_expression(&assignment.expression)?;
-                    if self.resolve_type(&var._type)? != exp {
+                    if variable._type != exp {
                         return Err(anyhow!("variable assignment type mismatch"));
                     }
                     let size = self.instructions.pop_stack_frame_size();
@@ -2071,8 +2075,11 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     }
 
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
-        self.instructions
-            .init_function_prologue(self.function, self.types, &self.compiler_body)?;
+        self.instructions.init_function_prologue(
+            self.function,
+            self.type_declarations,
+            &self.compiler_body,
+        )?;
 
         self.compile_body(&self.function.body)?;
 
