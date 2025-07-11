@@ -699,7 +699,7 @@ struct TypeStruct {
 }
 
 impl TypeStruct {
-    fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+    fn get_field_stack_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
         let mut offset = 0;
 
         for field in self.fields.iter().rev() {
@@ -1604,7 +1604,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     }
 
     fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
-        let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
+        let (offset, _type) = self.compute_dot_access_field_stack_offset(dot_access)?;
 
         let alignment = self.instructions.push_alignment(_type.alignment);
 
@@ -1758,18 +1758,18 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         Ok(())
     }
 
-    fn compute_dot_access_field_offset(
+    fn compute_dot_access_field_stack_offset(
         &self,
         dot_access: &ast::DotAccess,
     ) -> Result<(usize, Type)> {
         if let ast::Expression::DotAccess(inner) = &dot_access.expression {
-            let (offset, _type) = self.compute_dot_access_field_offset(inner)?;
+            let (offset, _type) = self.compute_dot_access_field_stack_offset(inner)?;
             let TypeType::Struct(type_struct) = &_type._type else {
                 unreachable!();
             };
 
             let (field_offset, field_type) = type_struct
-                .get_field_offset(&dot_access.identifier)
+                .get_field_stack_offset(&dot_access.identifier)
                 .ok_or(anyhow!("struct field not found"))?;
 
             return Ok((offset + field_offset, field_type.clone()));
@@ -1786,7 +1786,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         };
 
         let (field_offset, field_type) = type_struct
-            .get_field_offset(&dot_access.identifier)
+            .get_field_stack_offset(&dot_access.identifier)
             .ok_or(anyhow!("struct field not found"))?;
 
         Ok((offset + field_offset, field_type.clone()))
@@ -1843,7 +1843,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             }
             ast::Expression::DotAccess(dot_access) => {
                 let exp = self.compile_expression(&assignment.expression)?;
-                let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
+                let (offset, _type) = self.compute_dot_access_field_stack_offset(dot_access)?;
                 if exp != _type {
                     return Err(anyhow!("dot access assign type mismatch"));
                 }
