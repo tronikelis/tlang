@@ -305,6 +305,11 @@ impl Instructions {
             )));
     }
 
+    fn instr_offset(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Offset(size)));
+    }
+
     fn instr_alloc(&mut self, size: usize, alignment: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Alloc(size, alignment)));
@@ -699,10 +704,13 @@ struct TypeStruct {
 }
 
 impl TypeStruct {
-    fn get_field_stack_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+    fn field_offset<'a>(
+        iter: impl Iterator<Item = &'a TypeStructField>,
+        identifier: &str,
+    ) -> Option<(usize, &'a Type)> {
         let mut offset = 0;
 
-        for field in self.fields.iter().rev() {
+        for field in iter {
             match field {
                 TypeStructField::Padding(padding) => offset += padding,
                 TypeStructField::Type(iden, _type) => {
@@ -715,6 +723,24 @@ impl TypeStruct {
         }
 
         None
+    }
+
+    fn get_field_stack_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
+        self.get_field_stack_offset(identifier)
+            .ok_or(anyhow!("get_field_stack_offset: {identifier} not found"))
+    }
+
+    fn get_field_heap_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
+        self.get_field_heap_offset(identifier)
+            .ok_or(anyhow!("get_field_heap_offset: {identifier} not found"))
+    }
+
+    fn get_field_stack_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+        Self::field_offset(self.fields.iter().rev(), identifier)
+    }
+
+    fn get_field_heap_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+        Self::field_offset(self.fields.iter(), identifier)
     }
 
     fn identifier_field_count(&self) -> usize {
@@ -886,6 +912,13 @@ struct Variable {
     _type: Type,
     identifier: String,
     escaped: bool,
+}
+
+enum DotAccessField {
+    // offset from the stack
+    Stack(usize, Type),
+    // offset address is on top of the stack
+    Heap(Type),
 }
 
 pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
@@ -1604,7 +1637,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     }
 
     fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
-        let (offset, _type) = self.compute_dot_access_field_stack_offset(dot_access)?;
+        let (offset, _type) = self.compile_dot_access_field_offset(dot_access)?;
 
         let alignment = self.instructions.push_alignment(_type.alignment);
 
@@ -1758,38 +1791,118 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         Ok(())
     }
 
-    fn compute_dot_access_field_stack_offset(
-        &self,
+    fn compile_dot_access_field_offset(
+        &mut self,
         dot_access: &ast::DotAccess,
-    ) -> Result<(usize, Type)> {
+    ) -> Result<DotAccessField> {
         if let ast::Expression::DotAccess(inner) = &dot_access.expression {
-            let (offset, _type) = self.compute_dot_access_field_stack_offset(inner)?;
-            let TypeType::Struct(type_struct) = &_type._type else {
-                unreachable!();
+            let target_field = self.compile_dot_access_field_offset(inner)?;
+            let target_type = match &target_field {
+                DotAccessField::Stack(_, v) => v,
+                DotAccessField::Heap(v) => v,
             };
 
-            let (field_offset, field_type) = type_struct
-                .get_field_stack_offset(&dot_access.identifier)
-                .ok_or(anyhow!("struct field not found"))?;
+            match &target_field {
+                DotAccessField::Heap(_type) => match &target_type._type {
+                    // target heap -> current stack = offset address
+                    TypeType::Struct(type_struct) => {
+                        let (offset, field_type) =
+                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+                        self.instructions.instr_offset(offset);
 
-            return Ok((offset + field_offset, field_type.clone()));
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    // target heap -> current heap = dereference + offset
+                    TypeType::Address(address_type) => {
+                        let TypeType::Struct(type_struct) = &address_type._type else {
+                            return Err(anyhow!("cant dot access non struct type"));
+                        };
+
+                        let (offset, field_type) =
+                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+
+                        self.instructions.instr_deref(PTR_SIZE);
+                        self.instructions.instr_offset(offset);
+
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    _type => {
+                        return Err(anyhow!("dot access on non struct/address type {_type:#?}"));
+                    }
+                },
+                DotAccessField::Stack(stack_offset, _type) => match &target_type._type {
+                    // target stack -> current stack = offset stack
+                    TypeType::Struct(type_struct) => {
+                        let (offset, field_type) =
+                            type_struct.get_field_stack_offset_err(&dot_access.identifier)?;
+
+                        return Ok(DotAccessField::Stack(
+                            *stack_offset + offset,
+                            field_type.clone(),
+                        ));
+                    }
+                    // target stack -> current heap = dereference + offset
+                    TypeType::Address(address_type) => {
+                        let alignment = self.instructions.push_alignment(PTR_SIZE);
+                        self.instructions.instr_increment(PTR_SIZE);
+                        self.instructions.instr_copy(
+                            0,
+                            alignment + PTR_SIZE + *stack_offset,
+                            PTR_SIZE,
+                        );
+
+                        let TypeType::Struct(type_struct) = &address_type._type else {
+                            return Err(anyhow!("dot access on non struct/address type"));
+                        };
+
+                        let (field_offset, field_type) =
+                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+                        self.instructions.instr_offset(field_offset);
+
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    _type => {
+                        return Err(anyhow!("dot access on non struct/address type {_type:#?}"));
+                    }
+                },
+            }
         }
 
         let ast::Expression::Type(_type) = &dot_access.expression else {
             return Err(anyhow!("cant dot access non Type"));
         };
-
         let (offset, variable) = self.resolve_variable(_type)?;
 
-        let TypeType::Struct(type_struct) = &variable._type._type else {
-            return Err(anyhow!("cant dot access non struct type"));
-        };
+        match &variable._type._type {
+            TypeType::Struct(type_struct) => {
+                let (field_offset, field_type) = type_struct
+                    .get_field_stack_offset(&dot_access.identifier)
+                    .ok_or(anyhow!("struct field not found"))?;
 
-        let (field_offset, field_type) = type_struct
-            .get_field_stack_offset(&dot_access.identifier)
-            .ok_or(anyhow!("struct field not found"))?;
+                Ok(DotAccessField::Stack(
+                    offset + field_offset,
+                    field_type.clone(),
+                ))
+            }
+            TypeType::Address(_type) => match &_type._type {
+                TypeType::Struct(type_struct) => {
+                    let alignment = self.instructions.push_alignment(PTR_SIZE);
+                    self.instructions.instr_increment(PTR_SIZE);
+                    self.instructions
+                        .instr_copy(0, alignment + PTR_SIZE + offset, PTR_SIZE);
 
-        Ok((offset + field_offset, field_type.clone()))
+                    let (field_offset, field_type) = type_struct
+                        .get_field_heap_offset(&dot_access.identifier)
+                        .ok_or(anyhow!("struct field not found"))?;
+
+                    self.instructions.instr_offset(field_offset);
+
+                    Ok(DotAccessField::Heap(field_type.clone()))
+                }
+                _type => Err(anyhow!("cant dot access non struct address")),
+            },
+            _type => Err(anyhow!("cant dot access non struct type")),
+        }
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
@@ -1843,7 +1956,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             }
             ast::Expression::DotAccess(dot_access) => {
                 let exp = self.compile_expression(&assignment.expression)?;
-                let (offset, _type) = self.compute_dot_access_field_stack_offset(dot_access)?;
+                let (offset, _type) = self.compile_dot_access_field_offset(dot_access)?;
                 if exp != _type {
                     return Err(anyhow!("dot access assign type mismatch"));
                 }

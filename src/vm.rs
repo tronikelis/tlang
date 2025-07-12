@@ -259,6 +259,7 @@ pub enum Instruction {
     Syscall5,
     Syscall6,
 
+    Offset(usize),
     Alloc(usize, usize),
     Deref(usize),
     DerefAssign(usize),
@@ -679,6 +680,12 @@ impl Vm {
                     let src = self.stack.pop::<*mut u8>();
                     unsafe {
                         ptr::copy_nonoverlapping(src, dst.as_ptr() as *mut u8, size);
+                    };
+                }
+                Instruction::Offset(size) => {
+                    let ptr = self.stack.pop::<*mut u8>();
+                    unsafe {
+                        self.stack.push(ptr.byte_offset(size as isize));
                     };
                 }
             }

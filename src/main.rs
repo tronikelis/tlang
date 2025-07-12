@@ -108,54 +108,54 @@ fn main() {
                         nice: 4,
                         three: uint8[]{},
                     }
-                    syscall_write(1, uint8[](itoa(s.nice)))
+                    syscall_write(1, uint8[](itoa(int(s.two))))
                     s.three = uint8[]{}
-                    append(s.three, uint8(20))
-                    __debug__
-
-                    let nice *Smol = &s
-
-                    let u User = User{
-                        inner1: UI{
-                            foo: 20,
-                            bar: 20,
-                        },
-                        inner2: UI{
-                            foo: 25,
-                            bar: 25,
-                        },
-                    }
-
-                    u.inner1 = u.inner2
-
-                    __debug__
-
-
-                    if false && true {
-                        syscall_write(1, uint8[](\"NICE GUYS\\n\"))
-                    }
-
-                    let buf uint8[] = new(uint8[], uint8(0), 2048)
-
-                    let nums int[] = int[]{1, 2, 3, 4, 5, 6}
-                    let foo int = add(nums...)
-
-                    for let i int = 0; i < 100; i++ {
-                        let str string = \"\"
-
-                        if i % 3 == 0 {
-                            str = str + \"Fizz\"
-                        }
-                        if i % 5 == 0 {
-                            str = str + \"Buzz\"
-                        }
-
-                        if i % 3 != 0 && i % 5 != 0 {
-                            str = str + itoa(i)
-                        }
-
-                        syscall_write(1, uint8[](str + \"\\n\"))
-                    }
+                    // append(s.three, uint8(20))
+                    // __debug__
+                    //
+                    // let nice *Smol = &s
+                    //
+                    // let u User = User{
+                    //     inner1: UI{
+                    //         foo: 20,
+                    //         bar: 20,
+                    //     },
+                    //     inner2: UI{
+                    //         foo: 25,
+                    //         bar: 25,
+                    //     },
+                    // }
+                    //
+                    // u.inner1 = u.inner2
+                    //
+                    // __debug__
+                    //
+                    //
+                    // if false && true {
+                    //     syscall_write(1, uint8[](\"NICE GUYS\\n\"))
+                    // }
+                    //
+                    // let buf uint8[] = new(uint8[], uint8(0), 2048)
+                    //
+                    // let nums int[] = int[]{1, 2, 3, 4, 5, 6}
+                    // let foo int = add(nums...)
+                    //
+                    // for let i int = 0; i < 100; i++ {
+                    //     let str string = \"\"
+                    //
+                    //     if i % 3 == 0 {
+                    //         str = str + \"Fizz\"
+                    //     }
+                    //     if i % 5 == 0 {
+                    //         str = str + \"Buzz\"
+                    //     }
+                    //
+                    //     if i % 3 != 0 && i % 5 != 0 {
+                    //         str = str + itoa(i)
+                    //     }
+                    //
+                    //     syscall_write(1, uint8[](str + \"\\n\"))
+                    // }
                 }
             ",
     );
