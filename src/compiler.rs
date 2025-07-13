@@ -1943,13 +1943,31 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 }
             }
             TypeType::Address(_type) => match &_type._type {
-                TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
-                    self.compile_dot_access_field_offset_base_heap(
-                        dot_access,
-                        type_struct,
-                        offset,
-                    )?,
-                )),
+                TypeType::Struct(type_struct) => {
+                    if variable.escaped {
+                        let alignment = self.instructions.push_alignment(PTR_SIZE);
+                        self.instructions.instr_increment(PTR_SIZE);
+                        self.instructions
+                            .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
+                        self.instructions.instr_deref(PTR_SIZE);
+
+                        Ok(DotAccessField::Heap(
+                            self.compile_dot_access_field_offset_base_heap(
+                                dot_access,
+                                type_struct,
+                                0,
+                            )?,
+                        ))
+                    } else {
+                        Ok(DotAccessField::Heap(
+                            self.compile_dot_access_field_offset_base_heap(
+                                dot_access,
+                                type_struct,
+                                offset,
+                            )?,
+                        ))
+                    }
+                }
                 _type => Err(anyhow!("cant dot access non struct address")),
             },
             _type => Err(anyhow!("cant dot access non struct type")),
