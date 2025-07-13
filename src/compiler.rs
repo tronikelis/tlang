@@ -1889,7 +1889,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                             field_type.clone(),
                         ));
                     }
-                    // target stack -> current heap = dereference + offset
+                    // target stack -> current heap = offset
                     TypeType::Address(address_type) => {
                         let alignment = self.instructions.push_alignment(PTR_SIZE);
                         self.instructions.instr_increment(PTR_SIZE);
