@@ -1681,6 +1681,9 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 };
                 Ok(_type)
             }
+            ast::Expression::Address(_) => {
+                Err(anyhow!("compile_address: cant take address of this"))
+            }
             expression => {
                 self.instructions.push_alignment(PTR_SIZE);
                 let exp = self.compile_expression(expression)?;
