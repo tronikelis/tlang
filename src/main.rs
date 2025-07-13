@@ -110,11 +110,13 @@ fn main() {
                     }
                     s.one = uint8(200)
 
-                    let nice *Smol = &s
+                    let one *uint8 = &s.one
+                    *one = uint8(300)
+
                     syscall_write(1, uint8[](itoa(int(s.one))))
 
-                    nice.one = uint8(100)
-                    syscall_write(1, uint8[](itoa(int(nice.one))))
+                    // nice.one = uint8(100)
+                    // syscall_write(1, uint8[](itoa(int(nice.one))))
                     // append(s.three, uint8(20))
                     // __debug__
                     //

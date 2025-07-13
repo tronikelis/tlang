@@ -291,6 +291,16 @@ pub struct DotAccess {
     pub identifier: String,
 }
 
+impl DotAccess {
+    pub fn deepest(&self) -> &Self {
+        let mut curr = self;
+        while let Expression::DotAccess(dot_access) = &curr.expression {
+            curr = dot_access;
+        }
+        curr
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SliceInit {
     pub expressions: Vec<Expression>,

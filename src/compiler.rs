@@ -15,13 +15,18 @@ impl<'a> DoesVariableEscape<'a> {
 
 impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
     fn search_expression_address(&self, exp: &ast::Expression) -> ast::BfsRet {
-        if let ast::Expression::Type(_type) = exp {
-            if let ast::Type::Alias(identifier) = _type {
-                return match identifier == self.identifier {
-                    true => ast::BfsRet::Found,
-                    false => ast::BfsRet::Continue,
-                };
+        match exp {
+            ast::Expression::Type(_type) => {
+                if let ast::Type::Alias(identifier) = _type {
+                    if self.identifier == identifier {
+                        return ast::BfsRet::Found;
+                    }
+                }
             }
+            ast::Expression::DotAccess(dot_access) => {
+                return self.search_expression_address(&dot_access.deepest().expression);
+            }
+            _ => {}
         }
 
         self.search_expression(exp)
@@ -58,8 +63,8 @@ impl<'a> CompilerBody<'a> {
     fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
         match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i + skip))
         {
-            ast::BfsRet::Found => return true,
-            _ => return false,
+            ast::BfsRet::Found => true,
+            _ => false,
         }
     }
 }
@@ -898,6 +903,7 @@ struct Variable {
     escaped: bool,
 }
 
+#[derive(Debug)]
 enum DotAccessField {
     // offset from the stack
     Stack(usize, Type),
@@ -1679,7 +1685,12 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                         "compile_address: cant take non heap address dot access"
                     ));
                 };
-                Ok(_type)
+
+                Ok(Type {
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Address(Box::new(_type)),
+                })
             }
             ast::Expression::Address(_) => {
                 Err(anyhow!("compile_address: cant take address of this"))
