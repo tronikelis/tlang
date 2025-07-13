@@ -704,13 +704,10 @@ struct TypeStruct {
 }
 
 impl TypeStruct {
-    fn field_offset<'a>(
-        iter: impl Iterator<Item = &'a TypeStructField>,
-        identifier: &str,
-    ) -> Option<(usize, &'a Type)> {
+    fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
         let mut offset = 0;
 
-        for field in iter {
+        for field in self.fields.iter().rev() {
             match field {
                 TypeStructField::Padding(padding) => offset += padding,
                 TypeStructField::Type(iden, _type) => {
@@ -725,22 +722,9 @@ impl TypeStruct {
         None
     }
 
-    fn get_field_stack_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
-        self.get_field_stack_offset(identifier)
-            .ok_or(anyhow!("get_field_stack_offset: {identifier} not found"))
-    }
-
-    fn get_field_heap_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
-        self.get_field_heap_offset(identifier)
-            .ok_or(anyhow!("get_field_heap_offset: {identifier} not found"))
-    }
-
-    fn get_field_stack_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
-        Self::field_offset(self.fields.iter().rev(), identifier)
-    }
-
-    fn get_field_heap_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
-        Self::field_offset(self.fields.iter(), identifier)
+    fn get_field_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
+        self.get_field_offset(identifier)
+            .ok_or(anyhow!("get_field_offset_err: not found {identifier}"))
     }
 
     fn identifier_field_count(&self) -> usize {
@@ -1833,9 +1817,8 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         self.instructions
             .instr_copy(0, alignment + PTR_SIZE + offset, PTR_SIZE);
 
-        let (field_offset, field_type) = type_struct
-            .get_field_heap_offset(&dot_access.identifier)
-            .ok_or(anyhow!("struct field not found"))?;
+        let (field_offset, field_type) =
+            type_struct.get_field_offset_err(&dot_access.identifier)?;
 
         self.instructions.instr_offset(field_offset);
 
@@ -1855,7 +1838,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     // target heap -> current stack = offset address
                     TypeType::Struct(type_struct) => {
                         let (offset, field_type) =
-                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
                         self.instructions.instr_offset(offset);
 
                         return Ok(DotAccessField::Heap(field_type.clone()));
@@ -1867,7 +1850,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                         };
 
                         let (offset, field_type) =
-                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
 
                         self.instructions.instr_deref(PTR_SIZE);
                         self.instructions.instr_offset(offset);
@@ -1882,7 +1865,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     // target stack -> current stack = offset stack
                     TypeType::Struct(type_struct) => {
                         let (offset, field_type) =
-                            type_struct.get_field_stack_offset_err(&dot_access.identifier)?;
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
 
                         return Ok(DotAccessField::Stack(
                             *stack_offset + offset,
@@ -1904,7 +1887,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                         };
 
                         let (field_offset, field_type) =
-                            type_struct.get_field_heap_offset_err(&dot_access.identifier)?;
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
                         self.instructions.instr_offset(field_offset);
 
                         return Ok(DotAccessField::Heap(field_type.clone()));
@@ -1932,9 +1915,8 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                         )?,
                     ))
                 } else {
-                    let (field_offset, field_type) = type_struct
-                        .get_field_stack_offset(&dot_access.identifier)
-                        .ok_or(anyhow!("struct field not found"))?;
+                    let (field_offset, field_type) =
+                        type_struct.get_field_offset_err(&dot_access.identifier)?;
 
                     Ok(DotAccessField::Stack(
                         offset + field_offset,
