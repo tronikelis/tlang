@@ -676,10 +676,10 @@ impl Vm {
                     self.stack.deref(ptr, size);
                 }
                 Instruction::DerefAssign(size) => {
-                    let dst = self.stack.pop_size(size).to_vec();
-                    let src = self.stack.pop::<*mut u8>();
+                    let src = self.stack.pop_size(size).to_vec();
+                    let dst = self.stack.pop::<*mut u8>();
                     unsafe {
-                        ptr::copy_nonoverlapping(src, dst.as_ptr() as *mut u8, size);
+                        ptr::copy_nonoverlapping(src.as_ptr(), dst, size);
                     };
                 }
                 Instruction::Offset(size) => {
