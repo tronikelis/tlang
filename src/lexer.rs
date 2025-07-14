@@ -50,6 +50,7 @@ pub enum Token {
     Dot,
     Struct,
     Colon,
+    NL,
 }
 
 const CONTROL_CHAR: [char; 22] = [
@@ -73,7 +74,13 @@ impl Lexer {
     pub fn run(mut self) -> Result<Vec<Token>> {
         let mut tokens: Vec<Token> = Vec::new();
 
-        while let Some(_) = self.peek_char(0) {
+        while let Some(ch) = self.peek_char(0) {
+            if ch == '\n' {
+                tokens.push(Token::NL);
+                self.skip_whitespace();
+                continue;
+            }
+
             match self.peek_next_word().as_str() {
                 "struct" => {
                     tokens.push(Token::Struct);
