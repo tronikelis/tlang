@@ -1,6 +1,73 @@
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 
-use crate::{ast, lexer, vm};
+use crate::{ast, ast::Bfs, lexer, vm};
+
+struct DoesVariableEscape<'a> {
+    identifier: &'a str,
+}
+
+impl<'a> DoesVariableEscape<'a> {
+    fn new(identifier: &'a str) -> Self {
+        Self { identifier }
+    }
+}
+
+impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
+    fn search_expression_address(&self, exp: &ast::Expression) -> ast::BfsRet {
+        match exp {
+            ast::Expression::Type(_type) => {
+                if let ast::Type::Alias(identifier) = _type {
+                    if self.identifier == identifier {
+                        return ast::BfsRet::Found;
+                    }
+                }
+            }
+            ast::Expression::DotAccess(dot_access) => {
+                return self.search_expression_address(&dot_access.deepest().expression);
+            }
+            _ => {}
+        }
+
+        self.search_expression(exp)
+    }
+
+    fn search_node_variable_declaration(
+        &self,
+        declaration: &ast::VariableDeclaration,
+    ) -> ast::BfsRet {
+        ast::return_if_some_true!(self.search_expression(&declaration.expression));
+
+        if declaration.variable.identifier == self.identifier {
+            return ast::BfsRet::Return;
+        }
+
+        ast::BfsRet::Continue
+    }
+}
+
+struct CompilerBody<'a> {
+    i: usize,
+    body: &'a [ast::Node],
+}
+
+impl<'a> CompilerBody<'a> {
+    fn new(body: &'a [ast::Node]) -> Self {
+        Self { body, i: 0 }
+    }
+
+    fn next(&mut self) {
+        self.i += 1;
+    }
+
+    fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
+        match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i + skip))
+        {
+            ast::BfsRet::Found => true,
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -11,11 +78,11 @@ pub enum Instruction {
     JumpIfFalse((usize, usize)),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
-    Var(String),
+    Var(Variable),
     Label,
 }
 
@@ -55,22 +122,16 @@ impl VarStack {
         Self::size_for(self.stack.iter().flatten())
     }
 
-    fn offset_for(&self, target: &VarStackItem) -> Option<usize> {
-        let mut offset: isize = 0;
+    fn inc_offset_item(offset: &mut isize, item: &VarStackItem) {
+        match item {
+            VarStackItem::Label | VarStackItem::Var(_) => {}
+            VarStackItem::Increment(size) => *offset += *size as isize,
+            VarStackItem::Reset(size) => *offset -= *size as isize,
+        };
+    }
 
-        for item in self.stack.iter().flatten().rev() {
-            if item == target {
-                return Some(offset.try_into().unwrap());
-            }
-
-            match item {
-                VarStackItem::Label | VarStackItem::Var(_) => {}
-                VarStackItem::Increment(size) => offset += *size as isize,
-                VarStackItem::Reset(size) => offset -= *size as isize,
-            }
-        }
-
-        None
+    fn iter(&self) -> impl Iterator<Item = &VarStackItem> {
+        self.stack.iter().flatten().rev()
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -82,12 +143,32 @@ impl VarStack {
         })
     }
 
-    fn get_var_offset(&self, identifier: &str) -> Option<usize> {
-        self.offset_for(&VarStackItem::Var(identifier.to_string()))
+    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
+        let mut offset: isize = 0;
+        for item in self.iter() {
+            match item {
+                VarStackItem::Var(v) => {
+                    if v.identifier == identifier {
+                        return Some((offset as usize, v));
+                    }
+                }
+                item => Self::inc_offset_item(&mut offset, item),
+            }
+        }
+
+        None
     }
 
     fn get_label_offset(&self) -> Option<usize> {
-        self.offset_for(&VarStackItem::Label)
+        let mut offset: isize = 0;
+        for item in self.iter() {
+            match item {
+                VarStackItem::Label => return Some(offset as usize),
+                item => Self::inc_offset_item(&mut offset, item),
+            }
+        }
+
+        None
     }
 }
 
@@ -210,15 +291,15 @@ impl Instructions {
         }
     }
 
-    fn var_mark(&mut self, identifier: String) {
-        self.var_stack.push(VarStackItem::Var(identifier));
+    fn var_mark(&mut self, var: Variable) {
+        self.var_stack.push(VarStackItem::Var(var));
     }
 
     fn var_mark_label(&mut self) {
         self.var_stack.push(VarStackItem::Label);
     }
 
-    fn var_get_offset(&self, identifier: &str) -> Option<usize> {
+    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
         self.var_stack.get_var_offset(identifier)
     }
 
@@ -227,6 +308,31 @@ impl Instructions {
             .push(Instruction::Real(vm::Instruction::Reset(
                 self.var_stack.get_label_offset().unwrap(),
             )));
+    }
+
+    fn instr_offset(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Offset(size)));
+    }
+
+    fn instr_alloc(&mut self, size: usize, alignment: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Alloc(size, alignment)));
+        self.var_stack.push(VarStackItem::Reset(size));
+        self.var_stack.push(VarStackItem::Increment(PTR_SIZE));
+    }
+
+    fn instr_deref(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::Deref(size)));
+        self.var_stack.push(VarStackItem::Reset(PTR_SIZE));
+        self.var_stack.push(VarStackItem::Increment(size));
+    }
+
+    fn instr_deref_assign(&mut self, size: usize) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::DerefAssign(size)));
+        self.var_stack.push(VarStackItem::Reset(PTR_SIZE + size));
     }
 
     fn instr_slice_index_set(&mut self, size: usize) {
@@ -508,11 +614,14 @@ impl Instructions {
 
     fn init_function_prologue(
         &mut self,
-        function: &ast::Function,
-        type_declarations: &ast::TypeDeclarations,
+        function: &ast::FunctionDeclaration,
+        type_declarations: &HashMap<String, ast::Type>,
+        compiler_body: &CompilerBody,
     ) -> Result<()> {
         // push arguments to var_stack, they are already in the stack
         // push return address to var_stack
+
+        let mut escaped_variables: Vec<(String, Type)> = Vec::new();
 
         for arg in function.arguments.iter() {
             let _type = resolve_type(type_declarations, &arg._type)?;
@@ -527,8 +636,17 @@ impl Instructions {
                 self.var_stack.push(VarStackItem::Increment(alignment));
             }
 
+            let escaped = compiler_body.does_variable_escape(&arg.identifier, 0);
             self.var_stack.push(VarStackItem::Increment(_type.size));
-            self.var_mark(arg.identifier.clone());
+            self.var_mark(Variable {
+                identifier: arg.identifier.clone(),
+                _type: _type.clone(),
+                escaped,
+            });
+
+            if escaped {
+                escaped_variables.push((arg.identifier.clone(), _type));
+            }
         }
 
         // return address
@@ -543,10 +661,23 @@ impl Instructions {
 
         self.var_stack.set_arg_size();
 
+        for (identifier, _type) in escaped_variables {
+            let (offset, _) = self.var_get_offset(&identifier).unwrap();
+            let alignment = self.push_alignment(PTR_SIZE);
+            self.instr_increment(_type.size);
+            self.instr_copy(0, offset + _type.size + alignment, _type.size);
+            self.instr_alloc(_type.size, _type.alignment);
+            self.var_mark(Variable {
+                escaped: true,
+                _type,
+                identifier,
+            });
+        }
+
         Ok(())
     }
 
-    fn init_function_epilogue(&mut self, function: &ast::Function) {
+    fn init_function_epilogue(&mut self, function: &ast::FunctionDeclaration) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
                 self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
@@ -594,6 +725,11 @@ impl TypeStruct {
         }
 
         None
+    }
+
+    fn get_field_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
+        self.get_field_offset(identifier)
+            .ok_or(anyhow!("get_field_offset_err: not found {identifier}"))
     }
 
     fn identifier_field_count(&self) -> usize {
@@ -664,6 +800,7 @@ enum TypeType {
     Variadic(Box<Type>),
     Slice(Box<Type>),
     Builtin(TypeBuiltin),
+    Address(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -682,7 +819,7 @@ impl Type {
     }
 }
 
-fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) -> Result<Type> {
+fn resolve_type(type_declarations: &HashMap<String, ast::Type>, _type: &ast::Type) -> Result<Type> {
     match _type {
         ast::Type::Alias(alias) => {
             match alias.as_str() {
@@ -698,7 +835,6 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
             };
 
             let inner = type_declarations
-                .0
                 .get(alias)
                 .ok_or(anyhow!("can't resolve {alias:#?}"))?;
 
@@ -742,27 +878,71 @@ fn resolve_type(type_declarations: &ast::TypeDeclarations, _type: &ast::Type) ->
                 _type: TypeType::Struct(TypeStruct { fields }),
             })
         }
+        ast::Type::Address(_type) => Ok(Type {
+            size: PTR_SIZE,
+            alignment: PTR_SIZE,
+            _type: TypeType::Address(Box::new(resolve_type(type_declarations, _type)?)),
+        }),
     }
 }
 
-pub struct FunctionCompiler<'a, 'b, 'c> {
-    instructions: Instructions,
-    function: &'a ast::Function,
-    static_memory: &'b mut vm::StaticMemory,
-    type_declarations: &'c ast::TypeDeclarations,
+struct FunctionCall {
+    call: ast::Call,
+    callee: ast::FunctionDeclaration,
 }
 
-impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
+struct TypeCast {
+    expression: ast::Expression,
+    _type: Type,
+}
+
+#[derive(Debug, Clone)]
+struct Variable {
+    _type: Type,
+    identifier: String,
+    escaped: bool,
+}
+
+#[derive(Debug)]
+enum DotAccessField {
+    // offset from the stack
+    Stack(usize, Type),
+    // offset address is on top of the stack
+    Heap(Type),
+}
+
+impl DotAccessField {
+    fn _type(&self) -> &Type {
+        match self {
+            Self::Stack(_, _type) => _type,
+            Self::Heap(_type) => _type,
+        }
+    }
+}
+
+pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
+    instructions: Instructions,
+    function: &'a ast::FunctionDeclaration,
+    static_memory: &'b mut vm::StaticMemory,
+    type_declarations: &'c HashMap<String, ast::Type>,
+    function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
+    compiler_body: CompilerBody<'a>,
+}
+
+impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     pub fn new(
-        function: &'a ast::Function,
+        function: &'a ast::FunctionDeclaration,
         static_memory: &'b mut vm::StaticMemory,
-        type_declarations: &'c ast::TypeDeclarations,
+        type_declarations: &'c HashMap<String, ast::Type>,
+        function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
         Self {
+            function_declarations,
             static_memory,
             function,
             instructions: Instructions::new(),
             type_declarations,
+            compiler_body: CompilerBody::new(&function.body),
         }
     }
 
@@ -770,9 +950,53 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         resolve_type(self.type_declarations, _type)
     }
 
+    fn resolve_function_call(&self, call: &ast::Call) -> Result<FunctionCall> {
+        let ast::Type::Alias(identifier) = &call._type else {
+            return Err(anyhow!("resolve_function_call: non alias"));
+        };
+
+        let callee = self
+            .function_declarations
+            .get(identifier)
+            .ok_or(anyhow!("resolve_function_call: function does not exist"))?;
+
+        Ok(FunctionCall {
+            callee: callee.clone(),
+            call: call.clone(),
+        })
+    }
+
+    fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
+        if call.arguments.len() != 1 {
+            return Err(anyhow!("resolve_type_cast: 1 argument required"));
+        }
+
+        let exp = call.arguments[0].clone();
+        let _type = self.resolve_type(&call._type)?;
+
+        Ok(TypeCast {
+            expression: exp,
+            _type,
+        })
+    }
+
+    fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
+        let ast::Type::Alias(identifier) = _type else {
+            return Err(anyhow!("resolve_variable: cant resolve non alias"));
+        };
+
+        let variable = self
+            .instructions
+            .var_get_offset(identifier)
+            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
+
+        Ok((variable.0, variable.1.clone()))
+    }
+
     // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<Type> {
         let type_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("new: expected first argument"))?;
@@ -785,11 +1009,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         match &_type._type {
             TypeType::Slice(slice_item) => {
                 let def_val = call
+                    .call
                     .arguments
                     .get(1)
                     .ok_or(anyhow!("new: second argument expected"))?;
 
                 let len_val = call
+                    .call
                     .arguments
                     .get(2)
                     .ok_or(anyhow!("new: third argument expected"))?;
@@ -813,15 +1039,15 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<Type> {
         let slice_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("len: expected first argument"))?;
 
         // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
-
         let TypeType::Slice(_) = &slice_exp._type else {
             return Err(anyhow!(
                 "len: expected slice as the argument, got {:#?}",
@@ -835,12 +1061,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<Type> {
         let slice_arg = call
+            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("append: expected first argument"))?;
         let value_arg = call
+            .call
             .arguments
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
@@ -862,24 +1090,24 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(VOID)
     }
 
-    fn check_function_call_argument_count(&self, call: &ast::FunctionCall) -> Result<()> {
+    fn check_function_call_argument_count(&self, call: &FunctionCall) -> Result<()> {
         // todo: refactor this arguments check somehow
-        if let Some(last) = call.function.arguments.last() {
+        if let Some(last) = call.callee.arguments.last() {
             let last_type = self.resolve_type(&last._type)?;
             if let TypeType::Variadic(_type) = &last_type._type {
                 // -1 because variadic can be empty
-                if call.arguments.len() < call.function.arguments.len() - 1 {
+                if call.call.arguments.len() < call.callee.arguments.len() - 1 {
                     return Err(anyhow!(
                         "compile_function_call: variadic argument count mismatch"
                     ));
                 }
             } else {
-                if call.arguments.len() != call.function.arguments.len() {
+                if call.call.arguments.len() != call.callee.arguments.len() {
                     return Err(anyhow!("compile_function_call: argument count mismatch"));
                 }
             }
         } else {
-            if call.arguments.len() != call.function.arguments.len() {
+            if call.call.arguments.len() != call.callee.arguments.len() {
                 return Err(anyhow!("compile_function_call: argument count mismatch"));
             }
         }
@@ -887,10 +1115,10 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_function_call(&mut self, call: &ast::FunctionCall) -> Result<Type> {
+    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
         self.check_function_call_argument_count(call)?;
 
-        match call.function.identifier.as_str() {
+        match call.callee.identifier.as_str() {
             "append" => return self.compile_function_builtin_append(call),
             "len" => return self.compile_function_builtin_len(call),
             "new" => return self.compile_function_builtin_new(call),
@@ -898,13 +1126,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .push_alignment(self.resolve_type(&call.function.return_type)?.alignment);
+            .push_alignment(self.resolve_type(&call.callee.return_type)?.alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, expected_type) in call.function.arguments.iter().enumerate() {
+            for (i, expected_type) in call.callee.arguments.iter().enumerate() {
                 let expected_type = self.resolve_type(&expected_type._type)?;
-                let arg = call.arguments.get(i);
+                let arg = call.call.arguments.get(i);
 
                 let Some(arg) = arg else {
                     if expected_type.extract_variadic().is_some() {
@@ -927,7 +1155,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     if exp != expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
-                    if call.function.arguments.len() != call.arguments.len() {
+                    if call.callee.arguments.len() != call.call.arguments.len() {
                         return Err(anyhow!("spread must be last argument"));
                     }
 
@@ -935,7 +1163,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 }
 
                 self.instructions.instr_push_slice();
-                for arg in call.arguments.iter().skip(i) {
+                for arg in call.call.arguments.iter().skip(i) {
                     self.instructions.instr_increment(SLICE_SIZE);
                     self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
 
@@ -950,7 +1178,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             self.instructions.pop_stack_frame_size()
         };
 
-        match call.function.identifier.as_str() {
+        match call.callee.identifier.as_str() {
             "syscall0" => {
                 self.instructions.instr_syscall0();
                 return Ok(UINT);
@@ -982,7 +1210,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => {}
         }
 
-        let return_type = self.resolve_type(&call.function.return_type)?;
+        let return_type = self.resolve_type(&call.callee.return_type)?;
         let return_size = return_type.size;
 
         let reset_size: usize;
@@ -998,14 +1226,18 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         }
 
         self.instructions
-            .instr_jump_and_link(call.function.identifier.clone());
+            .instr_jump_and_link(call.callee.identifier.clone());
         self.instructions.instr_reset(reset_size);
 
         Ok(return_type)
     }
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
-        let literal_type = self.resolve_type(&literal._type)?;
+        let literal_type = match literal.literal {
+            lexer::Literal::Int(_) => INT,
+            lexer::Literal::Bool(_) => BOOL,
+            lexer::Literal::String(_) => STRING,
+        };
 
         match &literal.literal {
             lexer::Literal::Int(int) => match &literal_type {
@@ -1039,20 +1271,28 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(literal_type)
     }
 
-    fn compile_variable(&mut self, variable: &ast::Variable) -> Result<Type> {
-        let _type = self.resolve_type(&variable._type)?;
-        self.instructions.push_alignment(_type.alignment);
+    fn compile_variable(&mut self, variable: &Variable) -> Result<Type> {
+        self.instructions.push_alignment(variable._type.alignment);
 
-        let offset = self
+        let (offset, var_item) = self
             .instructions
             .var_get_offset(&variable.identifier)
             .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
 
-        self.instructions.instr_increment(_type.size);
-        self.instructions
-            .instr_copy(0, offset + _type.size, _type.size);
+        if var_item.escaped {
+            // this will leak alignment
+            let alignment = self.instructions.push_alignment(PTR_SIZE);
+            self.instructions.instr_increment(PTR_SIZE);
+            self.instructions
+                .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
+            self.instructions.instr_deref(variable._type.size);
+        } else {
+            self.instructions.instr_increment(variable._type.size);
+            self.instructions
+                .instr_copy(0, offset + variable._type.size, variable._type.size);
+        }
 
-        Ok(_type)
+        Ok(variable._type.clone())
     }
 
     fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
@@ -1257,15 +1497,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(BOOL)
     }
 
-    fn compile_type_cast(&mut self, type_cast: &ast::TypeCast) -> Result<Type> {
-        let type_cast_type = self.resolve_type(&type_cast._type)?;
-        self.instructions.push_alignment(type_cast_type.alignment);
+    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
+        self.instructions.push_alignment(type_cast._type.alignment);
 
         let target = self.compile_expression(&type_cast.expression)?;
 
         match target._type {
             TypeType::Builtin(builtin) => match builtin {
-                TypeBuiltin::Int => match &type_cast_type._type {
+                TypeBuiltin::Int => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Uint8 => {
                             self.instructions.instr_cast_int_uint8();
@@ -1277,7 +1516,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Uint8 => match &type_cast_type._type {
+                TypeBuiltin::Uint8 => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Int => {
                             self.instructions.instr_cast_uint8_int();
@@ -1286,14 +1525,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Ptr => match &type_cast_type._type {
+                TypeBuiltin::Ptr => match &type_cast._type._type {
                     TypeType::Builtin(builtin_dest) => match builtin_dest {
                         TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::String => match &type_cast_type._type {
+                TypeBuiltin::String => match &type_cast._type._type {
                     TypeType::Slice(item) => {
                         if **item != UINT8 {
                             return Err(anyhow!(
@@ -1305,7 +1544,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Slice(item_target) => match &type_cast_type._type {
+            TypeType::Slice(item_target) => match &type_cast._type._type {
                 TypeType::Builtin(builtin_dest) => match builtin_dest {
                     TypeBuiltin::String => {
                         if *item_target != UINT8 {
@@ -1321,7 +1560,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Variadic(item_target) => match &type_cast_type._type {
+            TypeType::Variadic(item_target) => match &type_cast._type._type {
                 TypeType::Slice(item_dest) => {
                     if item_target != *item_dest {
                         return Err(anyhow!(
@@ -1334,7 +1573,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
 
-        Ok(type_cast_type)
+        Ok(type_cast._type.clone())
     }
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
@@ -1397,15 +1636,120 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
-        let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
+        let field = self.compile_dot_access_field_offset(dot_access)?;
 
-        let alignment = self.instructions.push_alignment(_type.alignment);
+        match field {
+            DotAccessField::Heap(_type) => {
+                // already aligned on 8 because of address
+                self.instructions.instr_deref(_type.size);
 
-        self.instructions.instr_increment(_type.size);
-        self.instructions
-            .instr_copy(0, offset + _type.size + alignment, _type.size);
+                Ok(_type)
+            }
+            DotAccessField::Stack(offset, _type) => {
+                let alignment = self.instructions.push_alignment(_type.alignment);
 
-        Ok(_type)
+                self.instructions.instr_increment(_type.size);
+                self.instructions
+                    .instr_copy(0, offset + _type.size + alignment, _type.size);
+
+                Ok(_type)
+            }
+        }
+    }
+
+    fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {
+        match expression {
+            ast::Expression::Type(_type) => {
+                let (offset, var) = self.resolve_variable(_type)?;
+
+                assert_eq!(
+                    var.escaped, true,
+                    "compile_address: rn all variables escaped"
+                );
+
+                let alignment = self.instructions.push_alignment(PTR_SIZE);
+                self.instructions.instr_increment(PTR_SIZE);
+                self.instructions
+                    .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
+
+                Ok(Type {
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Address(Box::new(var._type.clone())),
+                })
+            }
+            ast::Expression::DotAccess(dot_access) => {
+                let field = self.compile_dot_access_field_offset(dot_access)?;
+                let DotAccessField::Heap(_type) = field else {
+                    return Err(anyhow!(
+                        "compile_address: cant take non heap address dot access"
+                    ));
+                };
+
+                Ok(Type {
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Address(Box::new(_type)),
+                })
+            }
+            ast::Expression::Address(_) => {
+                Err(anyhow!("compile_address: cant take address of this"))
+            }
+            expression => {
+                self.instructions.push_alignment(PTR_SIZE);
+                let exp = self.compile_expression(expression)?;
+                self.instructions.instr_alloc(exp.size, exp.alignment);
+
+                Ok(Type {
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Address(Box::new(exp)),
+                })
+            }
+        }
+    }
+
+    fn compile_deref(&mut self, expression: &ast::Expression) -> Result<Type> {
+        let exp = self.compile_expression(expression)?;
+        let TypeType::Address(_type) = exp._type else {
+            return Err(anyhow!(
+                "compile_deref: can't dereference non address types"
+            ));
+        };
+
+        self.instructions.instr_deref(exp.size);
+
+        Ok(*_type)
+    }
+
+    fn compile_type_init(&mut self, type_init: &ast::TypeInit) -> Result<Type> {
+        match self.resolve_type(&type_init._type)?._type {
+            TypeType::Slice(_) => self.compile_slice_init(&ast::SliceInit {
+                _type: type_init._type.clone(),
+                expressions: Vec::new(),
+            }),
+            TypeType::Struct(_) => self.compile_struct_init(&ast::StructInit {
+                _type: type_init._type.clone(),
+                fields: HashMap::new(),
+            }),
+            _ => Err(anyhow!("compile_type_init: cant compile this type")),
+        }
+    }
+
+    fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
+        self.compile_variable(&self.resolve_variable(_type)?.1)
+    }
+
+    fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
+        if let Ok(v) = self.resolve_function_call(call) {
+            return self.compile_function_call(&v);
+        }
+
+        if let Ok(v) = self.resolve_type_cast(call) {
+            return self.compile_type_cast(&v);
+        }
+
+        Err(anyhow!("compile_call: can't resolve call"))
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
@@ -1415,20 +1759,19 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             ast::Expression::AndOr(v) => self.compile_andor(v),
             ast::Expression::Literal(v) => self.compile_literal(v),
             ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Variable(v) => self.compile_variable(v),
-            ast::Expression::FunctionCall(v) => self.compile_function_call(v),
+            ast::Expression::Call(v) => self.compile_call(v),
+            ast::Expression::TypeInit(v) => self.compile_type_init(v),
             ast::Expression::Compare(v) => self.compile_compare(v),
             ast::Expression::Infix(v) => self.compile_infix(v),
             ast::Expression::SliceInit(v) => self.compile_slice_init(v),
             ast::Expression::Index(v) => self.compile_expression_index(v),
-            ast::Expression::TypeCast(v) => self.compile_type_cast(v),
             ast::Expression::Negate(v) => self.compile_negate(v),
             ast::Expression::Spread(v) => self.compile_spread(v),
             ast::Expression::StructInit(v) => self.compile_struct_init(v),
-            ast::Expression::Type(v) => {
-                Err(anyhow!("compile_expression: cant compile type {v:#?}"))
-            }
             ast::Expression::DotAccess(v) => self.compile_dot_access(v),
+            ast::Expression::Deref(v) => self.compile_deref(v),
+            ast::Expression::Address(v) => self.compile_address(v),
+            ast::Expression::Type(v) => self.compile_type(v),
         }?;
 
         if exp.alignment != 0 {
@@ -1448,6 +1791,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         &mut self,
         declaration: &ast::VariableDeclaration,
     ) -> Result<()> {
+        let escaped = self
+            .compiler_body
+            .does_variable_escape(&declaration.variable.identifier, 1);
+        if escaped {
+            self.instructions.push_alignment(PTR_SIZE);
+        }
+
         let exp = self.compile_expression(&declaration.expression)?;
         if exp == VOID {
             return Err(anyhow!("can't declare void variable"));
@@ -1457,67 +1807,199 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
             return Err(anyhow!("type mismatch"));
         }
 
-        self.instructions
-            .var_mark(declaration.variable.identifier.clone());
+        if escaped {
+            self.instructions.instr_alloc(exp.size, exp.alignment);
+        }
+
+        self.instructions.var_mark(Variable {
+            escaped,
+            identifier: declaration.variable.identifier.clone(),
+            _type: exp,
+        });
 
         Ok(())
     }
 
-    fn compute_dot_access_field_offset(
-        &self,
+    fn compile_dot_access_field_offset_base_heap(
+        &mut self,
         dot_access: &ast::DotAccess,
-    ) -> Result<(usize, Type)> {
+        type_struct: &TypeStruct,
+        offset: usize,
+    ) -> Result<Type> {
+        let alignment = self.instructions.push_alignment(PTR_SIZE);
+        self.instructions.instr_increment(PTR_SIZE);
+        self.instructions
+            .instr_copy(0, alignment + PTR_SIZE + offset, PTR_SIZE);
+
+        let (field_offset, field_type) =
+            type_struct.get_field_offset_err(&dot_access.identifier)?;
+
+        self.instructions.instr_offset(field_offset);
+
+        Ok(field_type.clone())
+    }
+
+    fn compile_dot_access_field_offset(
+        &mut self,
+        dot_access: &ast::DotAccess,
+    ) -> Result<DotAccessField> {
         if let ast::Expression::DotAccess(inner) = &dot_access.expression {
-            let (offset, _type) = self.compute_dot_access_field_offset(inner)?;
-            let TypeType::Struct(type_struct) = &_type._type else {
-                unreachable!();
-            };
+            let target_field = self.compile_dot_access_field_offset(inner)?;
+            let target_type = target_field._type();
 
-            let (field_offset, field_type) = type_struct
-                .get_field_offset(&dot_access.identifier)
-                .ok_or(anyhow!("struct field not found"))?;
+            match &target_field {
+                DotAccessField::Heap(_type) => match &target_type._type {
+                    // target heap -> current stack = offset address
+                    TypeType::Struct(type_struct) => {
+                        let (offset, field_type) =
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
+                        self.instructions.instr_offset(offset);
 
-            return Ok((offset + field_offset, field_type.clone()));
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    // target heap -> current heap = dereference + offset
+                    TypeType::Address(address_type) => {
+                        let TypeType::Struct(type_struct) = &address_type._type else {
+                            return Err(anyhow!("cant dot access non struct type"));
+                        };
+
+                        let (offset, field_type) =
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
+
+                        self.instructions.instr_deref(PTR_SIZE);
+                        self.instructions.instr_offset(offset);
+
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    _type => {
+                        return Err(anyhow!("dot access on non struct/address type {_type:#?}"));
+                    }
+                },
+                DotAccessField::Stack(stack_offset, _type) => match &target_type._type {
+                    // target stack -> current stack = offset stack
+                    TypeType::Struct(type_struct) => {
+                        let (offset, field_type) =
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
+
+                        return Ok(DotAccessField::Stack(
+                            *stack_offset + offset,
+                            field_type.clone(),
+                        ));
+                    }
+                    // target stack -> current heap = offset
+                    TypeType::Address(address_type) => {
+                        let alignment = self.instructions.push_alignment(PTR_SIZE);
+                        self.instructions.instr_increment(PTR_SIZE);
+                        self.instructions.instr_copy(
+                            0,
+                            alignment + PTR_SIZE + *stack_offset,
+                            PTR_SIZE,
+                        );
+
+                        let TypeType::Struct(type_struct) = &address_type._type else {
+                            return Err(anyhow!("dot access on non struct/address type"));
+                        };
+
+                        let (field_offset, field_type) =
+                            type_struct.get_field_offset_err(&dot_access.identifier)?;
+                        self.instructions.instr_offset(field_offset);
+
+                        return Ok(DotAccessField::Heap(field_type.clone()));
+                    }
+                    _type => {
+                        return Err(anyhow!("dot access on non struct/address type {_type:#?}"));
+                    }
+                },
+            }
         }
 
-        let ast::Expression::Variable(variable) = &dot_access.expression else {
-            return Err(anyhow!("cant dot access non variable"));
+        let ast::Expression::Type(_type) = &dot_access.expression else {
+            return Err(anyhow!("cant dot access non Type"));
         };
+        let (offset, variable) = self.resolve_variable(_type)?;
 
-        let offset = self
-            .instructions
-            .var_get_offset(&variable.identifier)
-            .ok_or(anyhow!("variable assignment variable not found"))?;
+        match &variable._type._type {
+            TypeType::Struct(type_struct) => {
+                if variable.escaped {
+                    Ok(DotAccessField::Heap(
+                        self.compile_dot_access_field_offset_base_heap(
+                            dot_access,
+                            type_struct,
+                            offset,
+                        )?,
+                    ))
+                } else {
+                    let (field_offset, field_type) =
+                        type_struct.get_field_offset_err(&dot_access.identifier)?;
 
-        let _type = self.resolve_type(&variable._type)?;
-        let TypeType::Struct(type_struct) = &_type._type else {
-            return Err(anyhow!("cant dot access non struct type"));
-        };
+                    Ok(DotAccessField::Stack(
+                        offset + field_offset,
+                        field_type.clone(),
+                    ))
+                }
+            }
+            TypeType::Address(_type) => match &_type._type {
+                TypeType::Struct(type_struct) => {
+                    if variable.escaped {
+                        let alignment = self.instructions.push_alignment(PTR_SIZE);
+                        self.instructions.instr_increment(PTR_SIZE);
+                        self.instructions
+                            .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
+                        self.instructions.instr_deref(PTR_SIZE);
 
-        let (field_offset, field_type) = type_struct
-            .get_field_offset(&dot_access.identifier)
-            .ok_or(anyhow!("struct field not found"))?;
-
-        Ok((offset + field_offset, field_type.clone()))
+                        Ok(DotAccessField::Heap(
+                            self.compile_dot_access_field_offset_base_heap(
+                                dot_access,
+                                type_struct,
+                                0,
+                            )?,
+                        ))
+                    } else {
+                        Ok(DotAccessField::Heap(
+                            self.compile_dot_access_field_offset_base_heap(
+                                dot_access,
+                                type_struct,
+                                offset,
+                            )?,
+                        ))
+                    }
+                }
+                _type => Err(anyhow!("cant dot access non struct address")),
+            },
+            _type => Err(anyhow!("cant dot access non struct type")),
+        }
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
         self.instructions.push_stack_frame();
 
         match &assignment.var {
-            ast::Expression::Variable(var) => {
-                let exp = self.compile_expression(&assignment.expression)?;
+            ast::Expression::Type(_type) => {
+                let (offset, variable) = self.resolve_variable(_type)?;
 
-                let offset = self
-                    .instructions
-                    .var_get_offset(&var.identifier)
-                    .ok_or(anyhow!("compile_variable_assignment: var not found"))?;
+                if variable.escaped {
+                    let alignment = self.instructions.push_alignment(PTR_SIZE);
+                    self.instructions.instr_increment(PTR_SIZE);
+                    self.instructions
+                        .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
 
-                if self.resolve_type(&var._type)? != exp {
-                    return Err(anyhow!("variable assignment type mismatch"));
+                    // no alignment because of PTR_SIZE align above
+                    let exp = self.compile_expression(&assignment.expression)?;
+                    if variable._type != exp {
+                        return Err(anyhow!("variable assignment type mismatch"));
+                    }
+
+                    self.instructions.instr_deref_assign(exp.size);
+                } else {
+                    self.instructions.push_stack_frame();
+                    let exp = self.compile_expression(&assignment.expression)?;
+                    if variable._type != exp {
+                        return Err(anyhow!("variable assignment type mismatch"));
+                    }
+                    let size = self.instructions.pop_stack_frame_size();
+
+                    self.instructions.instr_copy(offset + size, 0, exp.size);
                 }
-
-                self.instructions.instr_copy(offset, 0, exp.size);
             }
             ast::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
@@ -1538,13 +2020,37 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
                 self.instructions.instr_slice_index_set(item.size);
             }
             ast::Expression::DotAccess(dot_access) => {
+                let field = self.compile_dot_access_field_offset(dot_access)?;
+
+                self.instructions.push_stack_frame();
                 let exp = self.compile_expression(&assignment.expression)?;
-                let (offset, _type) = self.compute_dot_access_field_offset(dot_access)?;
-                if exp != _type {
+                let exp_size = self.instructions.pop_stack_frame_size();
+
+                if exp != *field._type() {
                     return Err(anyhow!("dot access assign type mismatch"));
                 }
 
-                self.instructions.instr_copy(offset, 0, exp.size);
+                match field {
+                    DotAccessField::Heap(_type) => {
+                        self.instructions.instr_deref_assign(_type.size);
+                    }
+                    DotAccessField::Stack(offset, _type) => {
+                        self.instructions.instr_copy(offset + exp_size, 0, exp.size);
+                    }
+                }
+            }
+            ast::Expression::Deref(expression) => {
+                let dst = self.compile_expression(expression)?;
+                let TypeType::Address(_type) = dst._type else {
+                    return Err(anyhow!("can not dereference non address"));
+                };
+
+                let src = self.compile_expression(&assignment.expression)?;
+                if src != *_type {
+                    return Err(anyhow!("variable assignment type mismatch"));
+                }
+
+                self.instructions.instr_deref_assign(src.size);
             }
             node => return Err(anyhow!("can't assign {node:#?}")),
         }
@@ -1554,7 +2060,11 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
+    fn compile_if_block(
+        &mut self,
+        expression: &ast::Expression,
+        body: &'a [ast::Node],
+    ) -> Result<()> {
         let exp = self.compile_expression(expression)?;
         if exp != BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
@@ -1569,7 +2079,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+    fn compile_if(&mut self, _if: &'a ast::If) -> Result<()> {
         self.instructions.push_stack_frame();
 
         self.instructions.stack_instructions.jump();
@@ -1592,7 +2102,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
+    fn compile_for(&mut self, _for: &'a ast::For) -> Result<()> {
         self.instructions.push_stack_frame();
         if let Some(v) = &_for.initializer {
             self.compile_node(v)?;
@@ -1687,7 +2197,7 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
+    fn compile_node(&mut self, node: &'a ast::Node) -> Result<()> {
         match node {
             ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
             ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
@@ -1717,11 +2227,14 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
+    fn compile_body(&mut self, body: &'a [ast::Node]) -> Result<()> {
+        self.compiler_body = CompilerBody::new(body);
+
         self.instructions.push_stack_frame();
 
         for node in body {
             self.compile_node(node)?;
+            self.compiler_body.next();
         }
 
         self.instructions.pop_stack_frame();
@@ -1751,15 +2264,13 @@ impl<'a, 'b, 'c> FunctionCompiler<'a, 'b, 'c> {
     }
 
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
-        self.instructions
-            .init_function_prologue(self.function, self.type_declarations)?;
-
-        self.compile_body(
-            self.function
-                .body
-                .as_ref()
-                .ok_or(anyhow!("compile: function body empty"))?,
+        self.instructions.init_function_prologue(
+            self.function,
+            self.type_declarations,
+            &self.compiler_body,
         )?;
+
+        self.compile_body(&self.function.body)?;
 
         self.compile_return(None)?;
 

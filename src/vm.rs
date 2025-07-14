@@ -15,6 +15,7 @@ enum PortableSysno {
 #[derive(Debug)]
 enum GcObjectData {
     Slice(*mut Slice),
+    Alloced(*mut u8, Layout),
 }
 
 #[derive(Debug)]
@@ -29,6 +30,18 @@ impl GcObject {
             marked: false,
             data,
         }
+    }
+
+    fn from_slice_val(slice: &[u8], alignment: usize) -> (Self, *mut u8) {
+        let layout = Layout::from_size_align(slice.len(), alignment).unwrap();
+        let ptr = unsafe { alloc(layout) };
+        let data = GcObjectData::Alloced(ptr, layout);
+
+        unsafe {
+            ptr::copy_nonoverlapping(slice.as_ptr(), ptr, slice.len());
+        };
+
+        (Self::new(data), ptr)
     }
 }
 
@@ -46,8 +59,27 @@ impl Gc {
     fn add_object(&mut self, object: GcObject) {
         let addr: *const u8 = match object.data {
             GcObjectData::Slice(slice) => slice.cast(),
+            GcObjectData::Alloced(ptr, _) => ptr,
         };
         self.objects.insert(addr, RefCell::new(object));
+    }
+
+    fn mark_ptr(&self, mut ptr: *mut u8, size: usize) {
+        if size % size_of::<usize>() != 0 {
+            return;
+        }
+
+        for _ in 0..size / size_of::<usize>() {
+            let addr: *const u8 = unsafe {
+                let val = *ptr.cast();
+                ptr = ptr.byte_offset(size_of::<usize>() as isize);
+                val
+            };
+
+            if let Some(obj) = self.objects.get(&addr) {
+                self.mark_object(obj)
+            }
+        }
     }
 
     fn mark_object(&self, object: &RefCell<GcObject>) {
@@ -59,25 +91,10 @@ impl Gc {
         match object.borrow().data {
             GcObjectData::Slice(slice) => {
                 let slice = unsafe { &mut *slice };
-                let len = slice.data.len();
-
-                // check if addresses are even possible
-                if len % size_of::<usize>() != 0 {
-                    return;
-                }
-
-                let mut ptr = slice.data.as_ptr();
-                for _ in 0..len / size_of::<usize>() {
-                    let addr: *const u8 = unsafe {
-                        let val = *ptr.cast();
-                        ptr = ptr.byte_offset(size_of::<usize>() as isize);
-                        val
-                    };
-
-                    if let Some(obj) = self.objects.get(&addr) {
-                        self.mark_object(obj)
-                    }
-                }
+                self.mark_ptr(slice.data.as_mut_ptr(), slice.data.len());
+            }
+            GcObjectData::Alloced(ptr, layout) => {
+                self.mark_ptr(ptr, layout.size());
             }
         }
     }
@@ -110,6 +127,7 @@ impl Gc {
                     GcObjectData::Slice(slice) => {
                         let _ = unsafe { Box::from_raw(slice) };
                     }
+                    GcObjectData::Alloced(ptr, layout) => unsafe { dealloc(ptr, layout) },
                 }
 
                 to_remove.push(*addr);
@@ -145,13 +163,13 @@ impl Slice {
         }))
     }
 
-    pub fn new_from_string(v: &str) -> *mut Self {
+    pub fn from_string(v: &str) -> *mut Self {
         let mut data = Vec::new();
         data.extend_from_slice(v.as_bytes());
         Box::into_raw(Box::new(Self { len: v.len(), data }))
     }
 
-    pub fn new_default_len(len: usize, val: &[u8]) -> *mut Self {
+    pub fn from_default_len(len: usize, val: &[u8]) -> *mut Self {
         let mut data = Vec::with_capacity(val.len() * len);
         for _ in 0..len {
             for v in val {
@@ -240,6 +258,11 @@ pub enum Instruction {
     Syscall4,
     Syscall5,
     Syscall6,
+
+    Offset(usize),
+    Alloc(usize, usize),
+    Deref(usize),
+    DerefAssign(usize),
 }
 
 pub struct Stack {
@@ -347,6 +370,13 @@ impl Stack {
             );
         }
     }
+
+    fn deref(&mut self, ptr: *mut u8, size: usize) {
+        self.increment(size);
+        unsafe {
+            ptr::copy_nonoverlapping(ptr, self.sp, size);
+        };
+    }
 }
 
 pub struct StaticMemory {
@@ -359,7 +389,7 @@ impl StaticMemory {
     }
 
     pub fn push_string_slice(&mut self, string: &str) -> usize {
-        let slice = Slice::new_from_string(string);
+        let slice = Slice::from_string(string);
         let as_raw: [u8; size_of::<*mut Slice>()] = unsafe { mem::transmute(slice) };
         self.push(&as_raw)
     }
@@ -510,7 +540,7 @@ impl Vm {
                     let val = self.stack.pop_size(size).to_vec();
                     let len: isize = self.stack.pop();
 
-                    let slice = Slice::new_default_len(len as usize, &val);
+                    let slice = Slice::from_default_len(len as usize, &val);
                     self.stack.push(slice);
                     self.gc
                         .add_object(GcObject::new(GcObjectData::Slice(slice)));
@@ -565,7 +595,7 @@ impl Vm {
                     let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     let slice =
-                        unsafe { &mut *Slice::new_from_string(str::from_utf8_unchecked(&b.data)) };
+                        unsafe { &mut *Slice::from_string(str::from_utf8_unchecked(&b.data)) };
                     slice.concat(a);
                     let slice = slice as *mut Slice;
                     self.gc
@@ -634,6 +664,29 @@ impl Vm {
                         syscall6(self.pop_sysno(), arg1, arg2, arg3, arg4, arg5, arg6).unwrap()
                     };
                     self.stack.push(result);
+                }
+                Instruction::Alloc(size, alignment) => {
+                    let val = self.stack.pop_size(size);
+                    let (obj, ptr) = GcObject::from_slice_val(val, alignment);
+                    self.stack.push(ptr);
+                    self.gc.add_object(obj);
+                }
+                Instruction::Deref(size) => {
+                    let ptr = self.stack.pop::<*mut u8>();
+                    self.stack.deref(ptr, size);
+                }
+                Instruction::DerefAssign(size) => {
+                    let src = self.stack.pop_size(size).to_vec();
+                    let dst = self.stack.pop::<*mut u8>();
+                    unsafe {
+                        ptr::copy_nonoverlapping(src.as_ptr(), dst, size);
+                    };
+                }
+                Instruction::Offset(size) => {
+                    let ptr = self.stack.pop::<*mut u8>();
+                    unsafe {
+                        self.stack.push(ptr.byte_offset(size as isize));
+                    };
                 }
             }
 

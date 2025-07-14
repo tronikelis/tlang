@@ -1,11 +1,206 @@
-use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+
+use anyhow::{anyhow, Result};
 
 use crate::lexer;
 
-const BOOL_ALIAS: &'static str = "bool";
-const INT_ALIAS: &'static str = "int";
-const STRING_ALIAS: &'static str = "string";
+pub enum BfsRet {
+    Return,
+    Found,
+    Continue,
+}
+
+macro_rules! return_if_some_true {
+    ($v:expr) => {
+        let result = $v;
+        match result {
+            $crate::ast::BfsRet::Found | $crate::ast::BfsRet::Return => {
+                return result;
+            }
+            $crate::ast::BfsRet::Continue => {}
+        }
+    };
+}
+pub(crate) use return_if_some_true;
+
+pub trait Bfs<'a> {
+    fn search_body(&self, body: impl Iterator<Item = &'a Node>) -> BfsRet {
+        for node in body {
+            return_if_some_true!(self.search_node(node));
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node(&self, node: &'a Node) -> BfsRet {
+        match node {
+            Node::Continue | Node::Break | Node::Debug => {}
+            Node::Return(exp) => {
+                if let Some(exp) = exp {
+                    return self.search_expression(exp);
+                }
+            }
+            Node::Expression(v) => return self.search_expression(v),
+            Node::If(v) => return self.search_node_if(v),
+            Node::For(v) => return self.search_node_for(v),
+            Node::VariableDeclaration(v) => return self.search_node_variable_declaration(v),
+            Node::VariableAssignment(v) => return self.search_node_variable_assignment(v),
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node_if(&self, _if: &'a If) -> BfsRet {
+        return_if_some_true!(self.search_expression(&_if.expression));
+        return_if_some_true!(self.search_body(_if.body.iter()));
+
+        for else_if in &_if.elseif {
+            return_if_some_true!(self.search_expression(&else_if.expression));
+            return_if_some_true!(self.search_body(else_if.body.iter()));
+        }
+
+        if let Some(_else) = &_if._else {
+            return_if_some_true!(self.search_body(_else.body.iter()));
+        }
+
+        BfsRet::Continue
+    }
+
+    fn search_node_for(&self, _for: &'a For) -> BfsRet {
+        if let Some(node) = &_for.initializer {
+            return_if_some_true!(self.search_node(node));
+        }
+        if let Some(exp) = &_for.expression {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        if let Some(node) = &_for.after_each {
+            return_if_some_true!(self.search_node(node));
+        }
+
+        return_if_some_true!(self.search_body(_for.body.iter()));
+
+        BfsRet::Continue
+    }
+
+    fn search_node_variable_declaration(&self, declaration: &VariableDeclaration) -> BfsRet {
+        return_if_some_true!(self.search_expression(&declaration.expression));
+        BfsRet::Continue
+    }
+
+    fn search_node_variable_assignment(&self, assignment: &VariableAssignment) -> BfsRet {
+        return_if_some_true!(self.search_expression(&assignment.var));
+        return_if_some_true!(self.search_expression(&assignment.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression(&self, exp: &Expression) -> BfsRet {
+        match exp {
+            Expression::Call(v) => self.search_expression_call(v),
+            Expression::TypeInit(v) => self.search_expression_type_init(v),
+            Expression::Address(v) => self.search_expression_address(v),
+            Expression::AndOr(v) => self.search_expression_andor(v),
+            Expression::Arithmetic(v) => self.search_expression_arithmetic(v),
+            Expression::Compare(v) => self.search_expression_compare(v),
+            Expression::Deref(v) => self.search_expression_deref(v),
+            Expression::DotAccess(v) => self.search_expression_dot_access(v),
+            Expression::Index(v) => self.search_expression_index(v),
+            Expression::Infix(v) => self.search_expression_infix(v),
+            Expression::Literal(v) => self.search_expression_literal(v),
+            Expression::Negate(v) => self.search_expression_negate(v),
+            Expression::SliceInit(v) => self.search_expression_slice_init(v),
+            Expression::Spread(v) => self.search_expression_spread(v),
+            Expression::StructInit(v) => self.search_expression_struct_init(v),
+            Expression::Type(v) => self.search_expression_type(v),
+        }
+    }
+
+    fn search_expression_type_init(&self, _type_init: &TypeInit) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_call(&self, call: &Call) -> BfsRet {
+        for exp in &call.arguments {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        BfsRet::Continue
+    }
+
+    fn search_expression_address(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_andor(&self, andor: &AndOr) -> BfsRet {
+        return_if_some_true!(self.search_expression(&andor.left));
+        return_if_some_true!(self.search_expression(&andor.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_deref(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_type(&self, _type: &Type) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_infix(&self, infix: &Infix) -> BfsRet {
+        return_if_some_true!(self.search_expression(&infix.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression_index(&self, index: &Index) -> BfsRet {
+        return_if_some_true!(self.search_expression(&index.expression));
+        return_if_some_true!(self.search_expression(&index.var));
+        BfsRet::Continue
+    }
+
+    fn search_expression_negate(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_spread(&self, exp: &Expression) -> BfsRet {
+        return_if_some_true!(self.search_expression(exp));
+        BfsRet::Continue
+    }
+
+    fn search_expression_literal(&self, _literal: &Literal) -> BfsRet {
+        BfsRet::Continue
+    }
+
+    fn search_expression_compare(&self, compare: &Compare) -> BfsRet {
+        return_if_some_true!(self.search_expression(&compare.left));
+        return_if_some_true!(self.search_expression(&compare.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_arithmetic(&self, arithmetic: &Arithmetic) -> BfsRet {
+        return_if_some_true!(self.search_expression(&arithmetic.left));
+        return_if_some_true!(self.search_expression(&arithmetic.right));
+        BfsRet::Continue
+    }
+
+    fn search_expression_dot_access(&self, dot_access: &DotAccess) -> BfsRet {
+        return_if_some_true!(self.search_expression(&dot_access.expression));
+        BfsRet::Continue
+    }
+
+    fn search_expression_slice_init(&self, slice_init: &SliceInit) -> BfsRet {
+        for exp in &slice_init.expressions {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        BfsRet::Continue
+    }
+
+    fn search_expression_struct_init(&self, struct_init: &StructInit) -> BfsRet {
+        for exp in struct_init.fields.values() {
+            return_if_some_true!(self.search_expression(exp));
+        }
+        BfsRet::Continue
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
@@ -14,11 +209,17 @@ pub struct VariableDeclaration {
 }
 
 #[derive(Debug, Clone)]
-pub struct Function {
+pub struct TypeDeclaration {
+    pub _type: Type,
+    pub identifier: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionDeclaration {
     pub identifier: String,
     pub arguments: Vec<Variable>,
     pub return_type: Type,
-    pub body: Option<Vec<Node>>,
+    pub body: Vec<Node>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,8 +239,8 @@ pub enum ArithmeticType {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionCall {
-    pub function: Function,
+pub struct Call {
+    pub _type: Type,
     pub arguments: Vec<Expression>,
 }
 
@@ -58,7 +259,6 @@ pub struct Infix {
 #[derive(Debug, Clone)]
 pub struct Literal {
     pub literal: lexer::Literal,
-    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -81,12 +281,6 @@ pub enum AndOrType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeCast {
-    pub expression: Expression,
-    pub _type: Type,
-}
-
-#[derive(Debug, Clone)]
 pub struct StructInit {
     pub fields: HashMap<String, Expression>,
     pub _type: Type,
@@ -98,6 +292,16 @@ pub struct DotAccess {
     pub identifier: String,
 }
 
+impl DotAccess {
+    pub fn deepest(&self) -> &Self {
+        let mut curr = self;
+        while let Expression::DotAccess(dot_access) = &curr.expression {
+            curr = dot_access;
+        }
+        curr
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SliceInit {
     pub expressions: Vec<Expression>,
@@ -105,22 +309,28 @@ pub struct SliceInit {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeInit {
+    pub _type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
-    TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
     Infix(Infix),
     Negate(Box<Expression>),
     Literal(Literal),
-    Variable(Variable),
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
-    FunctionCall(FunctionCall),
+    Call(Call),
     Index(Index),
     Spread(Box<Expression>),
     Type(Type),
     DotAccess(Box<DotAccess>),
     SliceInit(SliceInit),
     StructInit(StructInit),
+    TypeInit(TypeInit),
+    Address(Box<Expression>),
+    Deref(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -185,54 +395,6 @@ pub enum Node {
 }
 
 #[derive(Debug, Clone)]
-struct LexerNavigator<'a> {
-    i: usize,
-    tokens: &'a [lexer::Token],
-}
-
-impl<'a> LexerNavigator<'a> {
-    fn new(tokens: &'a [lexer::Token], i: usize) -> Self {
-        Self { i, tokens }
-    }
-
-    fn next(&mut self) {
-        self.i += 1;
-    }
-
-    fn expect_identifier(&mut self) -> Result<String> {
-        match self.peek_token_err(0)?.clone() {
-            lexer::Token::Identifier(string) => {
-                self.next();
-                Ok(string.clone())
-            }
-            token => Err(anyhow!("expect_identifier: got {token:#?}")),
-        }
-    }
-
-    fn expect_next_token(&self, token: lexer::Token) -> Result<()> {
-        if token == *self.peek_token_err(0)? {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "expect_next_token: assertion failed, want: {:#?}, got: {:#?}, i: {}",
-                token,
-                self.peek_token_err(0),
-                self.i,
-            ))
-        }
-    }
-
-    fn peek_token(&self, n: usize) -> Option<&lexer::Token> {
-        self.tokens.get(self.i + n)
-    }
-
-    fn peek_token_err(&self, n: usize) -> Result<&lexer::Token> {
-        self.peek_token(n)
-            .ok_or(anyhow!("peek_token_err: expected Some"))
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TypeStruct {
     pub fields: Vec<(String, Type)>,
 }
@@ -243,82 +405,187 @@ pub enum Type {
     Struct(TypeStruct),
     Slice(Box<Type>),
     Variadic(Box<Type>),
+    Address(Box<Type>),
 }
 
-struct TypeDeclarationParser<'a, 'b> {
-    lexer_navigator: &'b mut LexerNavigator<'a>,
+#[derive(Debug)]
+enum Declaration {
+    Function(FunctionDeclaration),
+    Type(TypeDeclaration),
+}
+
+#[derive(Debug)]
+pub struct Ast {
+    pub type_declarations: HashMap<String, Type>,
+    pub function_declarations: HashMap<String, FunctionDeclaration>,
+}
+
+impl Ast {
+    pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
+        let mut type_declarations = HashMap::new();
+        let mut function_declarations = HashMap::new();
+
+        let declarations = TokenParser::new(tokens).parse()?;
+        for v in declarations {
+            match v {
+                Declaration::Type(type_declaration) => {
+                    type_declarations.insert(type_declaration.identifier, type_declaration._type);
+                }
+                Declaration::Function(function_declaration) => {
+                    function_declarations.insert(
+                        function_declaration.identifier.clone(),
+                        function_declaration,
+                    );
+                }
+            }
+        }
+
+        Ok(Self {
+            type_declarations,
+            function_declarations,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeDeclarations(pub HashMap<String, Type>);
+pub struct Variable {
+    pub _type: Type,
+    pub identifier: String,
+}
 
-impl TypeDeclarations {
-    fn resolve_alias<'a>(&'a self, mut _type: &'a Type) -> Result<&'a Type> {
-        loop {
-            match _type {
-                Type::Alias(alias) => {
-                    _type = self
-                        .0
-                        .get(alias)
-                        .ok_or(anyhow!("defer_alias: type not found"))?;
+struct TokenIter<'a> {
+    tokens: &'a [lexer::Token],
+    i: usize,
+}
 
-                    // this is for builtin types (int / uint)
-                    if let Type::Alias(alias2) = _type {
-                        if alias2 == alias {
-                            return Err(anyhow!("defer_alias: reached end"));
-                        }
-                    }
-                }
-                _type => return Ok(_type),
-            }
+impl<'a> TokenIter<'a> {
+    fn new(tokens: &'a [lexer::Token]) -> Self {
+        Self { tokens, i: 0 }
+    }
+
+    fn is_newline_i(&self, i: usize) -> bool {
+        if let Some(token) = self.tokens.get(i) {
+            return *token == lexer::Token::NL;
+        } else {
+            false
         }
+    }
+
+    fn is_newline(&self) -> bool {
+        self.is_newline_i(self.i)
+    }
+
+    fn expect(&self, token: lexer::Token) -> Result<()> {
+        if *self.peek_err(0)? == token {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "expect: expected {token:#?}, got: {:#?}",
+                self.peek_err(0)?
+            ))
+        }
+    }
+
+    fn peek_err(&self, n: usize) -> Result<&lexer::Token> {
+        self.peek(n).ok_or(anyhow!("peek_err: expected Some"))
+    }
+
+    fn skip_nl(&self, i: &mut usize) {
+        while self.is_newline_i(*i) {
+            *i += 1;
+        }
+    }
+
+    fn next_skip_nl(&mut self) {
+        let mut i = self.i;
+        self.skip_nl(&mut i);
+        self.i = i;
+    }
+
+    fn peek(&self, n: usize) -> Option<&lexer::Token> {
+        let mut i = self.i;
+        self.skip_nl(&mut i);
+
+        for _ in 0..n {
+            i += 1;
+            self.skip_nl(&mut i);
+        }
+
+        self.tokens.get(i)
+    }
+
+    fn next(&mut self) {
+        self.next_skip_nl();
+        self.i += 1;
     }
 }
 
-impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
-    fn new(lexer_navigator: &'b mut LexerNavigator<'a>) -> Self {
-        Self { lexer_navigator }
+struct TokenParser<'a> {
+    iter: TokenIter<'a>,
+}
+
+impl<'a> TokenParser<'a> {
+    fn new(tokens: &'a [lexer::Token]) -> Self {
+        Self {
+            iter: TokenIter::new(tokens),
+        }
+    }
+
+    fn parse(mut self) -> Result<Vec<Declaration>> {
+        let mut declarations = Vec::new();
+        while let Some(token) = self.iter.peek(0) {
+            declarations.push(match token {
+                lexer::Token::Type => Declaration::Type(self.parse_type_declaration()?),
+                lexer::Token::Function => Declaration::Function(self.parse_function_declaration()?),
+                token => return Err(anyhow!("parse: unknown token {token:#?}")),
+            });
+        }
+
+        Ok(declarations)
     }
 
     fn parse_type_struct(&mut self) -> Result<TypeStruct> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::Struct)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::Struct)?;
+        self.iter.next();
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::COpen)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::COpen)?;
+        self.iter.next();
 
         let mut fields: Vec<(String, Type)> = Vec::new();
 
-        while *self.lexer_navigator.peek_token_err(0)? != lexer::Token::CClose {
-            let field_identifier = self.lexer_navigator.expect_identifier()?;
+        while *self.iter.peek_err(0)? != lexer::Token::CClose {
+            let field_identifier = self.parse_identifier()?;
             let field_type = self.parse_type()?;
             fields.push((field_identifier, field_type));
         }
 
-        self.lexer_navigator.next();
+        self.iter.next();
 
         Ok(TypeStruct { fields })
     }
 
     fn parse_type(&mut self) -> Result<Type> {
-        match self.lexer_navigator.peek_token_err(0)?.clone() {
+        match self.iter.peek_err(0)?.clone() {
+            lexer::Token::Star => {
+                self.iter.next();
+                Ok(Type::Address(Box::new(self.parse_type()?)))
+            }
             lexer::Token::Struct => Ok(Type::Struct(self.parse_type_struct()?)),
             lexer::Token::Identifier(alias) => {
-                self.lexer_navigator.next();
+                self.iter.next();
 
                 let mut _type = Type::Alias(alias.clone());
 
-                while let Some(token) = self.lexer_navigator.peek_token(0) {
+                while let Some(token) = self.iter.peek(0) {
                     if *token != lexer::Token::BOpen {
                         break;
                     }
-                    self.lexer_navigator.next();
+                    if *self.iter.peek_err(1)? != lexer::Token::BClose {
+                        break;
+                    }
 
-                    self.lexer_navigator
-                        .expect_next_token(lexer::Token::BClose)?;
-                    self.lexer_navigator.next();
+                    self.iter.next();
+                    self.iter.next();
 
                     _type = Type::Slice(Box::new(_type));
                 }
@@ -329,228 +596,68 @@ impl<'a, 'b> TypeDeclarationParser<'a, 'b> {
         }
     }
 
-    fn all(mut self) -> Result<TypeDeclarations> {
-        let mut map = HashMap::new();
+    fn parse_type_declaration(&mut self) -> Result<TypeDeclaration> {
+        self.iter.expect(lexer::Token::Type)?;
+        self.iter.next();
 
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
-            if *token != lexer::Token::Type {
-                self.lexer_navigator.next();
-                continue;
-            }
+        let identifier = self.parse_identifier()?;
+        let _type = self.parse_type()?;
 
-            self.lexer_navigator.next();
-            let identifier = self.lexer_navigator.expect_identifier()?;
-
-            let _type = self.parse_type()?;
-            map.insert(identifier.clone(), _type);
-        }
-
-        Ok(TypeDeclarations(map))
-    }
-}
-
-struct FunctionDeclarationParser<'a, 'b> {
-    lexer_navigator: &'b mut LexerNavigator<'a>,
-}
-
-#[derive(Debug, Clone)]
-struct FunctionDeclaration {
-    i: usize,
-    function: Function,
-}
-
-#[derive(Debug)]
-struct FunctionDeclarations(HashMap<String, FunctionDeclaration>);
-
-impl<'a, 'b> FunctionDeclarationParser<'a, 'b> {
-    fn new(lexer_navigator: &'b mut LexerNavigator<'a>) -> Self {
-        Self { lexer_navigator }
+        Ok(TypeDeclaration { _type, identifier })
     }
 
-    fn parse_function_declaration(&mut self) -> Result<Function> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::Function)?;
-        self.lexer_navigator.next();
+    fn parse_function_declaration(&mut self) -> Result<FunctionDeclaration> {
+        self.iter.expect(lexer::Token::Function)?;
+        self.iter.next();
 
-        let identifier = self.lexer_navigator.expect_identifier()?;
+        let identifier = self.parse_identifier()?;
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::POpen)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::POpen)?;
+        self.iter.next();
 
         let mut function_arguments: Vec<Variable> = Vec::new();
 
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
+        while let Some(token) = self.iter.peek(0) {
             match token {
                 lexer::Token::PClose => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     break;
                 }
                 lexer::Token::Comma => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                 }
                 _ => {}
             }
 
-            let identifier = self.lexer_navigator.expect_identifier()?;
-            let mut _type = TypeDeclarationParser::new(self.lexer_navigator).parse_type()?;
+            let identifier = self.parse_identifier()?;
+            let mut _type = self.parse_type()?;
 
-            if let lexer::Token::Dot3 = self.lexer_navigator.peek_token_err(0)? {
-                self.lexer_navigator.next();
+            if let lexer::Token::Dot3 = self.iter.peek_err(0)? {
+                self.iter.next();
                 _type = Type::Variadic(Box::new(_type));
-                self.lexer_navigator
-                    .expect_next_token(lexer::Token::PClose)?;
+                self.iter.expect(lexer::Token::PClose)?;
             }
 
             function_arguments.push(Variable { _type, identifier })
         }
 
-        let return_type = TypeDeclarationParser::new(self.lexer_navigator).parse_type()?;
+        let return_type = self.parse_type()?;
+        let body = self.parse_body()?;
 
-        Ok(Function {
-            body: None,
+        Ok(FunctionDeclaration {
+            body,
             return_type,
             identifier,
             arguments: function_arguments,
         })
     }
 
-    fn all(mut self) -> Result<FunctionDeclarations> {
-        let mut map = HashMap::new();
-
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
-            if *token != lexer::Token::Function {
-                self.lexer_navigator.next();
-                continue;
-            }
-
-            let function = self.parse_function_declaration()?;
-            map.insert(
-                function.identifier.clone(),
-                FunctionDeclaration {
-                    function,
-                    i: self.lexer_navigator.i,
-                },
-            );
-        }
-
-        Ok(FunctionDeclarations(map))
-    }
-}
-
-#[derive(Debug)]
-pub struct Ast {
-    pub type_declarations: TypeDeclarations,
-    pub functions: Vec<Function>,
-}
-
-impl Ast {
-    pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
-        let type_declarations =
-            TypeDeclarationParser::new(&mut LexerNavigator::new(tokens, 0)).all()?;
-        let function_declarations =
-            FunctionDeclarationParser::new(&mut LexerNavigator::new(tokens, 0)).all()?;
-
-        let mut function_declarations_sorted = function_declarations.0.iter().collect::<Vec<_>>();
-        function_declarations_sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let mut functions = Vec::new();
-
-        for (_, function) in function_declarations_sorted {
-            let mut variables = AstVariables::new();
-
-            for arg in &function.function.arguments {
-                variables.push_variable(arg.clone());
-            }
-
-            let mut token_parser = TokenParser::new(
-                LexerNavigator::new(tokens, function.i),
-                &function_declarations,
-                &type_declarations,
-                variables,
-            );
-            functions.push(Function {
-                body: Some(token_parser.parse_body()?),
-                ..function.function.clone()
-            });
-        }
-
-        Ok(Self {
-            type_declarations,
-            functions,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct AstVariables {
-    stack: Vec<Vec<Variable>>,
-}
-
-impl AstVariables {
-    fn new() -> Self {
-        let mut stack = Vec::new();
-        stack.push(Vec::new());
-        Self { stack }
-    }
-
-    fn push_frame(&mut self) {
-        self.stack.push(Vec::new());
-    }
-
-    fn pop_frame(&mut self) {
-        self.stack.pop();
-    }
-
-    fn push_variable(&mut self, variable: Variable) {
-        self.stack.last_mut().unwrap().push(variable);
-    }
-
-    fn get_variable(&self, identifier: &str) -> Option<&Variable> {
-        self.stack
-            .iter()
-            .flatten()
-            .rev()
-            .find(|v| v.identifier == identifier)
-    }
-}
-
-struct TokenParser<'a, 'b, 'c> {
-    lexer_navigator: LexerNavigator<'a>,
-    variables: AstVariables,
-    function_declarations: &'b FunctionDeclarations,
-    type_declarations: &'c TypeDeclarations,
-}
-
-#[derive(Debug, Clone)]
-pub struct Variable {
-    pub _type: Type,
-    pub identifier: String,
-}
-
-impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
-    fn new(
-        lexer_navigator: LexerNavigator<'a>,
-        function_declarations: &'b FunctionDeclarations,
-        type_declarations: &'c TypeDeclarations,
-        variables: AstVariables,
-    ) -> Self {
-        Self {
-            variables,
-            lexer_navigator,
-            type_declarations,
-            function_declarations,
-        }
-    }
-
     fn parse_for(&mut self) -> Result<For> {
-        self.lexer_navigator.expect_next_token(lexer::Token::For)?;
-        self.lexer_navigator.next();
-
-        self.variables.push_frame();
+        self.iter.expect(lexer::Token::For)?;
+        self.iter.next();
 
         // for {}
-        if let lexer::Token::COpen = self.lexer_navigator.peek_token_err(0)? {
+        if let lexer::Token::COpen = self.iter.peek_err(0)? {
             return Ok(For {
                 body: self.parse_body()?,
                 initializer: None,
@@ -571,20 +678,16 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
 
         let initializer = self.parse_token()?;
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::Semicolon)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::Semicolon)?;
+        self.iter.next();
 
         let expression = self.parse_expression()?;
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::Semicolon)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::Semicolon)?;
+        self.iter.next();
 
         let after_each = self.parse_token()?;
         let body = self.parse_body()?;
-
-        self.variables.pop_frame();
 
         Ok(For {
             initializer: Some(Box::new(initializer)),
@@ -597,24 +700,23 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     fn parse_token_else(&mut self) -> Result<Node> {
         let exp = self.parse_expression()?;
 
-        match self.lexer_navigator.peek_token_err(0)? {
+        match self.iter.peek_err(0)? {
             lexer::Token::Equals => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(Node::VariableAssignment(VariableAssignment {
                     var: exp,
                     expression: self.parse_expression()?,
                 }))
             }
             lexer::Token::PlusPlus | lexer::Token::MinusMinus => {
-                let token = self.lexer_navigator.peek_token_err(0)?.clone();
-                self.lexer_navigator.next();
+                let token = self.iter.peek_err(0)?.clone();
+                self.iter.next();
 
                 Ok(Node::VariableAssignment(VariableAssignment {
                     var: exp.clone(),
                     expression: Expression::Arithmetic(Box::new(Arithmetic {
                         left: exp,
                         right: Expression::Literal(Literal {
-                            _type: Type::Alias(INT_ALIAS.to_string()),
                             literal: lexer::Literal::Int(1),
                         }),
                         _type: {
@@ -632,26 +734,26 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_token(&mut self) -> Result<Node> {
-        match self.lexer_navigator.peek_token_err(0)? {
+        match self.iter.peek_err(0)? {
             lexer::Token::Debug => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(Node::Debug)
             }
             lexer::Token::Let => Ok(Node::VariableDeclaration(
                 self.parse_variable_declaration()?,
             )),
             lexer::Token::Return => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(Node::Return(self.parse_expression().ok()))
             }
             lexer::Token::If => Ok(Node::If(self.parse_if()?)),
             lexer::Token::For => Ok(Node::For(self.parse_for()?)),
             lexer::Token::Break => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(Node::Break)
             }
             lexer::Token::Continue => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(Node::Continue)
             }
             _ => self.parse_token_else(),
@@ -659,18 +761,18 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_if(&mut self) -> Result<If> {
-        match self.lexer_navigator.peek_token_err(0)? {
+        match self.iter.peek_err(0)? {
             lexer::Token::If | lexer::Token::ElseIf => {}
             _ => return Err(anyhow!("parse_if: unknown token")),
         }
-        self.lexer_navigator.next();
+        self.iter.next();
 
         let expression = self.parse_expression()?;
         let body = self.parse_body()?;
 
         let mut elseif = Vec::<ElseIf>::new();
-        while let lexer::Token::ElseIf = self.lexer_navigator.peek_token_err(0)? {
-            self.lexer_navigator.next();
+        while let lexer::Token::ElseIf = self.iter.peek_err(0)? {
+            self.iter.next();
             elseif.push(ElseIf {
                 expression: self.parse_expression()?,
                 body: self.parse_body()?,
@@ -678,8 +780,8 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
         }
 
         let mut _else = None;
-        if let lexer::Token::Else = self.lexer_navigator.peek_token_err(0)? {
-            self.lexer_navigator.next();
+        if let lexer::Token::Else = self.iter.peek_err(0)? {
+            self.iter.next();
             _else = Some(Else {
                 body: self.parse_body()?,
             });
@@ -694,74 +796,57 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_body(&mut self) -> Result<Vec<Node>> {
-        self.variables.push_frame();
-
         let mut nodes = Vec::new();
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::COpen)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::COpen)?;
+        self.iter.next();
 
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
+        while let Some(token) = self.iter.peek(0) {
             if let lexer::Token::CClose = token {
-                self.lexer_navigator.next();
+                self.iter.next();
                 break;
             }
 
             nodes.push(self.parse_token()?);
         }
 
-        self.variables.pop_frame();
-
         Ok(nodes)
     }
 
     fn parse_literal(&mut self) -> Result<Literal> {
-        match self.lexer_navigator.peek_token_err(0)?.clone() {
+        match self.iter.peek_err(0)?.clone() {
             lexer::Token::Literal(v) => {
-                self.lexer_navigator.next();
-                Ok(Literal {
-                    literal: v.clone(),
-                    _type: match v {
-                        lexer::Literal::Int(_) => Type::Alias(INT_ALIAS.to_string()),
-                        lexer::Literal::Bool(_) => Type::Alias(BOOL_ALIAS.to_string()),
-                        lexer::Literal::String(_) => Type::Alias(STRING_ALIAS.to_string()),
-                    },
-                })
+                self.iter.next();
+                Ok(Literal { literal: v.clone() })
             }
             _ => Err(anyhow!("parse_literal: expected Literal")),
         }
     }
 
     fn parse_identifier(&mut self) -> Result<String> {
-        match self.lexer_navigator.peek_token_err(0)?.clone() {
+        match self.iter.peek_err(0)?.clone() {
             lexer::Token::Identifier(v) => {
-                self.lexer_navigator.next();
+                self.iter.next();
                 Ok(v.clone())
             }
             _ => Err(anyhow!("parse_identifier: expected Identifier")),
         }
     }
 
-    fn parse_type(&mut self) -> Result<Type> {
-        TypeDeclarationParser::new(&mut self.lexer_navigator).parse_type()
-    }
-
-    fn parse_function_call(&mut self, identifier: String) -> Result<FunctionCall> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::POpen)?;
-        self.lexer_navigator.next();
+    fn parse_call(&mut self, _type: Type) -> Result<Call> {
+        self.iter.expect(lexer::Token::POpen)?;
+        self.iter.next();
 
         let mut arguments = Vec::new();
 
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
+        while let Some(token) = self.iter.peek(0) {
             match token {
                 lexer::Token::PClose => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     break;
                 }
                 lexer::Token::Comma => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                 }
                 _ => {}
             }
@@ -769,75 +854,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
             arguments.push(self.parse_expression()?);
         }
 
-        let function = self
-            .function_declarations
-            .0
-            .get(&identifier)
-            .ok_or(anyhow!(
-                "parse_function_call: context function declaration does not exist"
-            ))?
-            .clone();
-
-        Ok(FunctionCall {
-            arguments,
-            function: function.function,
-        })
-    }
-
-    fn parse_expression_type_cast(&mut self, _type: Type) -> Result<Expression> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::POpen)?;
-        self.lexer_navigator.next();
-
-        let exp = self.parse_expression()?;
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::PClose)?;
-        self.lexer_navigator.next();
-
-        Ok(Expression::TypeCast(Box::new(TypeCast {
-            _type,
-            expression: exp,
-        })))
-    }
-
-    fn parse_expression_type(&mut self) -> Result<Expression> {
-        let _type = self.parse_type()?;
-        if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
-            return self.parse_expression_type_cast(_type);
-        }
-
-        Ok(Expression::Type(_type))
-    }
-
-    fn parse_expression_identifier(&mut self) -> Result<Expression> {
-        let lexer::Token::Identifier(identifier) = self.lexer_navigator.peek_token_err(0)?.clone()
-        else {
-            panic!("incorrect usage of parse_expression_identifier");
-        };
-
-        let is_type = self.type_declarations.0.get(&identifier).is_some();
-        match is_type {
-            true => self.parse_expression_type(),
-            false => {
-                self.lexer_navigator.next();
-
-                if let lexer::Token::POpen = self.lexer_navigator.peek_token_err(0)? {
-                    return Ok(Expression::FunctionCall(
-                        self.parse_function_call(identifier)?,
-                    ));
-                }
-
-                Ok(Expression::Variable(
-                    self.variables
-                        .get_variable(&identifier)
-                        .ok_or(anyhow!(
-                            "parse_expression_identifier: identifier variable {} not found",
-                            identifier,
-                        ))?
-                        .clone(),
-                ))
-            }
-        }
+        Ok(Call { _type, arguments })
     }
 
     fn parse_expression_literal(&mut self) -> Result<Expression> {
@@ -845,24 +862,22 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_slice_init(&mut self, _type: Type) -> Result<SliceInit> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::COpen)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::COpen)?;
+        self.iter.next();
 
         let mut expressions = Vec::new();
 
-        while let Some(v) = self.lexer_navigator.peek_token(0) {
+        while let Some(v) = self.iter.peek(0) {
             if let lexer::Token::CClose = v {
-                self.lexer_navigator.next();
+                self.iter.next();
                 break;
             }
 
             expressions.push(self.parse_expression()?);
 
-            if *self.lexer_navigator.peek_token_err(0)? != lexer::Token::CClose {
-                self.lexer_navigator
-                    .expect_next_token(lexer::Token::Comma)?;
-                self.lexer_navigator.next();
+            if *self.iter.peek_err(0)? != lexer::Token::CClose {
+                self.iter.expect(lexer::Token::Comma)?;
+                self.iter.next();
             }
         }
 
@@ -870,28 +885,25 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_struct_init(&mut self, _type: Type) -> Result<StructInit> {
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::COpen)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::COpen)?;
+        self.iter.next();
 
         let mut fields = HashMap::new();
 
-        while let Some(token) = self.lexer_navigator.peek_token(0) {
+        while let Some(token) = self.iter.peek(0) {
             if let lexer::Token::CClose = token {
-                self.lexer_navigator.next();
+                self.iter.next();
                 break;
             }
 
             let identifier = self.parse_identifier()?;
-            self.lexer_navigator
-                .expect_next_token(lexer::Token::Colon)?;
-            self.lexer_navigator.next();
+            self.iter.expect(lexer::Token::Colon)?;
+            self.iter.next();
 
             let exp = self.parse_expression()?;
 
-            self.lexer_navigator
-                .expect_next_token(lexer::Token::Comma)?;
-            self.lexer_navigator.next();
+            self.iter.expect(lexer::Token::Comma)?;
+            self.iter.next();
 
             fields.insert(identifier, exp);
         }
@@ -924,20 +936,19 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
 
     fn parse_expression_pratt(&mut self, min_bp: usize) -> Result<Expression> {
         let mut left: Expression = {
-            let token = self.lexer_navigator.peek_token_err(0)?.clone();
+            let token = self.iter.peek_err(0)?.clone();
             match token {
                 lexer::Token::POpen => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     let exp = self.parse_expression()?;
-                    self.lexer_navigator
-                        .expect_next_token(lexer::Token::PClose)?;
-                    self.lexer_navigator.next();
+                    self.iter.expect(lexer::Token::PClose)?;
+                    self.iter.next();
                     exp
                 }
                 lexer::Token::Plus | lexer::Token::Minus => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression_pratt(100)?),
+                        expression: Box::new(self.parse_expression()?),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
@@ -946,62 +957,92 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                     })
                 }
                 lexer::Token::Bang => {
-                    self.lexer_navigator.next();
-                    Expression::Negate(Box::new(self.parse_expression_pratt(100)?))
+                    self.iter.next();
+                    Expression::Negate(Box::new(self.parse_expression()?))
                 }
-                lexer::Token::Identifier(_) => self.parse_expression_identifier()?,
+                lexer::Token::Star => {
+                    self.iter.next();
+                    Expression::Deref(Box::new(self.parse_expression()?))
+                }
+                lexer::Token::Amper => {
+                    self.iter.next();
+                    Expression::Address(Box::new(self.parse_expression()?))
+                }
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
-                lexer::Token::Struct => self.parse_expression_type()?,
+                lexer::Token::Struct | lexer::Token::Identifier(_) => {
+                    Expression::Type(self.parse_type()?)
+                }
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };
 
         loop {
-            let token = self.lexer_navigator.peek_token_err(0)?.clone();
+            if self.iter.is_newline() {
+                break;
+            }
+
+            let token = self.iter.peek_err(0)?.clone();
             match token {
                 lexer::Token::BOpen => {
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     left = Expression::Index(Index {
                         var: Box::new(left),
                         expression: Box::new(self.parse_expression()?),
                     });
-                    self.lexer_navigator
-                        .expect_next_token(lexer::Token::BClose)?;
-                    self.lexer_navigator.next();
+                    self.iter.expect(lexer::Token::BClose)?;
+                    self.iter.next();
                     continue;
                 }
                 lexer::Token::Dot3 => {
                     left = Expression::Spread(Box::new(left));
-                    self.lexer_navigator.next();
+                    self.iter.next();
+                    continue;
+                }
+                lexer::Token::POpen => {
+                    let Expression::Type(_type) = left else {
+                        return Err(anyhow!("parse_expression: wrong token on POpen"));
+                    };
+
+                    left = Expression::Call(self.parse_call(_type)?);
                     continue;
                 }
                 lexer::Token::COpen => {
-                    if let Expression::Type(_type) = &left {
-                        match self
-                            .type_declarations
-                            .resolve_alias(&_type)
-                            .map_err(|_| anyhow!("cant initialize this type {_type:#?}"))?
-                        {
-                            Type::Slice(_) => {
-                                left = Expression::SliceInit(self.parse_slice_init(_type.clone())?)
+                    if let Expression::Type(_type) = left {
+                        // variants:
+                        // struct init
+                        // slice init
+                        // type init
+                        match self.iter.peek_err(1)? {
+                            lexer::Token::CClose => {
+                                left = Expression::TypeInit(TypeInit { _type });
+                                self.iter.next();
+                                self.iter.next();
                             }
-                            Type::Struct(_) => {
-                                left =
-                                    Expression::StructInit(self.parse_struct_init(_type.clone())?)
+                            lexer::Token::Identifier(_) | lexer::Token::Literal(_) => {
+                                match self.iter.peek_err(2)? {
+                                    lexer::Token::Colon => {
+                                        left =
+                                            Expression::StructInit(self.parse_struct_init(_type)?);
+                                    }
+                                    _ => {
+                                        left = Expression::SliceInit(self.parse_slice_init(_type)?);
+                                    }
+                                }
                             }
-                            _ => unreachable!(),
+                            token => {
+                                return Err(anyhow!("parse_expression: COpen incorrect {token:#?}"))
+                            }
                         }
                         continue;
                     };
                 }
                 lexer::Token::Dot => {
-                    self.lexer_navigator.next();
-                    let lexer::Token::Identifier(identifier) =
-                        self.lexer_navigator.peek_token_err(0)?.clone()
+                    self.iter.next();
+                    let lexer::Token::Identifier(identifier) = self.iter.peek_err(0)?.clone()
                     else {
                         return Err(anyhow!("dot access expected identifier"));
                     };
-                    self.lexer_navigator.next();
+                    self.iter.next();
                     left = Expression::DotAccess(Box::new(DotAccess {
                         expression: left,
                         identifier: identifier.clone(),
@@ -1011,7 +1052,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
                 _ => {}
             }
 
-            let token = self.lexer_navigator.peek_token_err(0)?.clone();
+            let token = self.iter.peek_err(0)?.clone();
             let (l_bp, r_bp) = match Self::pratt_binding_power(&token) {
                 Some(v) => v,
                 None => break,
@@ -1020,7 +1061,7 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
             if l_bp < min_bp {
                 break;
             }
-            self.lexer_navigator.next();
+            self.iter.next();
             let right = self.parse_expression_pratt(r_bp)?;
 
             match token {
@@ -1077,23 +1118,17 @@ impl<'a, 'b, 'c> TokenParser<'a, 'b, 'c> {
     }
 
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration> {
-        self.lexer_navigator.expect_next_token(lexer::Token::Let)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::Let)?;
+        self.iter.next();
 
         let identifier = self.parse_identifier()?;
 
         let _type = self.parse_type()?;
 
-        self.lexer_navigator
-            .expect_next_token(lexer::Token::Equals)?;
-        self.lexer_navigator.next();
+        self.iter.expect(lexer::Token::Equals)?;
+        self.iter.next();
 
         let expression = self.parse_expression()?;
-
-        self.variables.push_variable(Variable {
-            _type: _type.clone(),
-            identifier: identifier.clone(),
-        });
 
         Ok(VariableDeclaration {
             variable: Variable { identifier, _type },
