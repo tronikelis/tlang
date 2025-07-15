@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.98"
-syscalls = "0.6.18"
+libc = "0.2.174"

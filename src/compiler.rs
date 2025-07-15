@@ -540,45 +540,12 @@ impl Instructions {
         self.var_stack.push(VarStackItem::Reset(amount));
     }
 
-    fn instr_syscall0(&mut self) {
+    fn instr_libc_write(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall0));
-    }
-
-    fn instr_syscall1(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall1));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 1));
-    }
-
-    fn instr_syscall2(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall2));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 2));
-    }
-
-    fn instr_syscall3(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall3));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 3));
-    }
-
-    fn instr_syscall4(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall4));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 4));
-    }
-
-    fn instr_syscall5(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall5));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 5));
-    }
-
-    fn instr_syscall6(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Syscall6));
-        self.var_stack.push(VarStackItem::Reset(UINT.size * 6));
+            .push(Instruction::Real(vm::Instruction::LibcWrite));
+        self.var_stack
+            .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
+        self.var_stack.push(VarStackItem::Increment(INT.size));
     }
 
     fn push_alignment(&mut self, alignment: usize) -> usize {
@@ -1179,33 +1146,9 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         };
 
         match call.callee.identifier.as_str() {
-            "syscall0" => {
-                self.instructions.instr_syscall0();
-                return Ok(UINT);
-            }
-            "syscall1" => {
-                self.instructions.instr_syscall1();
-                return Ok(UINT);
-            }
-            "syscall2" => {
-                self.instructions.instr_syscall2();
-                return Ok(UINT);
-            }
-            "syscall3" => {
-                self.instructions.instr_syscall3();
-                return Ok(UINT);
-            }
-            "syscall4" => {
-                self.instructions.instr_syscall4();
-                return Ok(UINT);
-            }
-            "syscall5" => {
-                self.instructions.instr_syscall5();
-                return Ok(UINT);
-            }
-            "syscall6" => {
-                self.instructions.instr_syscall6();
-                return Ok(UINT);
+            "libc_write" => {
+                self.instructions.instr_libc_write();
+                return Ok(INT);
             }
             _ => {}
         }

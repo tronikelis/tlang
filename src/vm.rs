@@ -4,13 +4,6 @@ use std::{
     collections::HashMap,
     mem, ptr, slice,
 };
-use syscalls::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6, Sysno};
-
-#[allow(dead_code)]
-#[repr(usize)]
-enum PortableSysno {
-    Write = 0,
-}
 
 #[derive(Debug)]
 enum GcObjectData {
@@ -251,13 +244,7 @@ pub enum Instruction {
     CastUint8Int,
     CastSlicePtr,
 
-    Syscall0,
-    Syscall1,
-    Syscall2,
-    Syscall3,
-    Syscall4,
-    Syscall5,
-    Syscall6,
+    LibcWrite,
 
     Offset(usize),
     Alloc(usize, usize),
@@ -420,14 +407,6 @@ impl Vm {
             static_memory,
             gc: Gc::new(),
         };
-    }
-
-    pub unsafe fn pop_sysno(&mut self) -> Sysno {
-        let sysno: usize = self.stack.pop();
-        let portable_sysno: PortableSysno = mem::transmute(sysno);
-        match portable_sysno {
-            PortableSysno::Write => Sysno::write,
-        }
     }
 
     pub fn run(mut self) {
@@ -611,59 +590,17 @@ impl Vm {
                 Instruction::Shift(len, count) => {
                     self.stack.shift(len, count);
                 }
-                Instruction::Syscall0 => {
-                    let result = unsafe { syscall0(self.pop_sysno()).unwrap() };
-                    self.stack.push(result)
-                }
-                Instruction::Syscall1 => {
-                    let arg1: usize = self.stack.pop();
-                    let result = unsafe { syscall1(self.pop_sysno(), arg1).unwrap() };
-                    self.stack.push(result);
-                }
-                Instruction::Syscall2 => {
-                    let arg2: usize = self.stack.pop();
-                    let arg1: usize = self.stack.pop();
-                    let result = unsafe { syscall2(self.pop_sysno(), arg1, arg2).unwrap() };
-                    self.stack.push(result);
-                }
-                Instruction::Syscall3 => {
-                    let arg3: usize = self.stack.pop();
-                    let arg2: usize = self.stack.pop();
-                    let arg1: usize = self.stack.pop();
-                    let result = unsafe { syscall3(self.pop_sysno(), arg1, arg2, arg3).unwrap() };
-                    self.stack.push(result);
-                }
-                Instruction::Syscall4 => {
-                    let arg4: usize = self.stack.pop();
-                    let arg3: usize = self.stack.pop();
-                    let arg2: usize = self.stack.pop();
-                    let arg1: usize = self.stack.pop();
-                    let result =
-                        unsafe { syscall4(self.pop_sysno(), arg1, arg2, arg3, arg4).unwrap() };
-                    self.stack.push(result);
-                }
-                Instruction::Syscall5 => {
-                    let arg5: usize = self.stack.pop();
-                    let arg4: usize = self.stack.pop();
-                    let arg3: usize = self.stack.pop();
-                    let arg2: usize = self.stack.pop();
-                    let arg1: usize = self.stack.pop();
+                Instruction::LibcWrite => {
+                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let fd = self.stack.pop::<isize>();
                     let result = unsafe {
-                        syscall5(self.pop_sysno(), arg1, arg2, arg3, arg4, arg5).unwrap()
+                        libc::write(
+                            fd as i32,
+                            slice.data.as_ptr() as *const libc::c_void,
+                            slice.data.len(),
+                        )
                     };
-                    self.stack.push(result);
-                }
-                Instruction::Syscall6 => {
-                    let arg6: usize = self.stack.pop();
-                    let arg5: usize = self.stack.pop();
-                    let arg4: usize = self.stack.pop();
-                    let arg3: usize = self.stack.pop();
-                    let arg2: usize = self.stack.pop();
-                    let arg1: usize = self.stack.pop();
-                    let result = unsafe {
-                        syscall6(self.pop_sysno(), arg1, arg2, arg3, arg4, arg5, arg6).unwrap()
-                    };
-                    self.stack.push(result);
+                    self.stack.push(result as isize);
                 }
                 Instruction::Alloc(size, alignment) => {
                     let val = self.stack.pop_size(size);

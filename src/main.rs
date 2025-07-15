@@ -41,13 +41,7 @@ fn main() {
                 fn len(slice Type) int {}
                 fn append(slice Type, value Type) void {}
 
-                fn syscall0(sysno uint) uint {}
-                fn syscall1(sysno uint, arg1 uint) uint {}
-                fn syscall2(sysno uint, arg1 uint, arg2 uint) uint {}
-                fn syscall3(sysno uint, arg1 uint, arg2 uint, arg3 uint) uint {}
-                fn syscall4(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint) uint {}
-                fn syscall5(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint) uint {}
-                fn syscall6(sysno uint, arg1 uint, arg2 uint, arg3 uint, arg4 uint, arg5 uint, arg6 uint) uint {}
+                fn libc_write(fd int, slice uint8[]) int {}
 
                 fn add(x int...) int {
                     let final int = 0
@@ -56,11 +50,6 @@ fn main() {
                         final = final + x[i]
                     }
                     return final
-                }
-
-                fn syscall_write(fd int, slice uint8[]) uint {
-                    // ssize_t write(int fd, const void buf[.count], size_t count);
-                    return syscall3(uint(0), uint(fd), uint(ptr(slice)), uint(len(slice)))
                 }
 
                 fn factorial(n int) int {
@@ -113,7 +102,7 @@ fn main() {
                     let one *uint8 = &s.one
                     *one = uint8(255)
 
-                    syscall_write(1, uint8[](itoa(int(s.one))))
+                    libc_write(1, uint8[](itoa(int(s.one))))
 
                     let nice *Smol = &s
 
@@ -134,7 +123,7 @@ fn main() {
 
 
                     if false && true {
-                        syscall_write(1, uint8[](\"NICE GUYS\\n\"))
+                        libc_write(1, uint8[](\"NICE GUYS\\n\"))
                     }
 
                     let buf uint8[] = new(uint8[], uint8(0), 2048)
@@ -156,7 +145,7 @@ fn main() {
                             str = str + itoa(i)
                         }
 
-                        syscall_write(1, uint8[](str + \"\\n\"))
+                        libc_write(1, uint8[](str + \"\\n\"))
                     }
                 }
             ",
