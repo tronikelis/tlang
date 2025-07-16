@@ -974,7 +974,10 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Struct | lexer::Token::Identifier(_) => {
                     Expression::Type(self.parse_type()?)
                 }
-                lexer::Token::Nil => Expression::Nil,
+                lexer::Token::Nil => {
+                    self.iter.next();
+                    Expression::Nil
+                }
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };

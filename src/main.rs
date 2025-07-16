@@ -89,6 +89,10 @@ fn main() {
 
                 fn new(x Type, args Type...) Type {}
 
+                type LinkedList struct {
+                    next *LinkedList
+                }
+
                 fn main() void {
                     let one_two_three string = itoa(69420)
                     let s Smol = Smol {
@@ -98,6 +102,10 @@ fn main() {
                         three: uint8[]{},
                     }
                     s.one = uint8(200)
+
+                    let ll *LinkedList = &LinkedList{
+                        next: __nil__,
+                    }
 
                     let one *uint8 = &s.one
                     *one = uint8(254)
