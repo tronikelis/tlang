@@ -100,7 +100,7 @@ fn main() {
                     s.one = uint8(200)
 
                     let one *uint8 = &s.one
-                    *one = uint8(255)
+                    *one = uint8(254)
 
                     libc_write(1, uint8[](itoa(int(s.one))))
 

@@ -972,28 +972,28 @@ impl DotAccessField {
     }
 }
 
-pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
+pub struct FunctionCompiler<'a> {
     instructions: Instructions,
-    function: &'a ast::FunctionDeclaration,
-    static_memory: &'b mut vm::StaticMemory,
-    type_resolver: &'c TypeResolver<'c>,
-    function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
     compiler_body: CompilerBody<'a>,
+    type_resolver: TypeResolver<'a>,
+    function: &'a ast::FunctionDeclaration,
+    function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
+    static_memory: &'a mut vm::StaticMemory,
 }
 
-impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
+impl<'a> FunctionCompiler<'a> {
     pub fn new(
         function: &'a ast::FunctionDeclaration,
-        static_memory: &'b mut vm::StaticMemory,
-        type_resolver: &'c TypeResolver<'c>,
-        function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
+        static_memory: &'a mut vm::StaticMemory,
+        type_declarations: &'a HashMap<String, ast::Type>,
+        function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
         Self {
             function_declarations,
             static_memory,
             function,
             instructions: Instructions::new(),
-            type_resolver,
+            type_resolver: TypeResolver::new(type_declarations),
             compiler_body: CompilerBody::new(&function.body),
         }
     }
@@ -2283,7 +2283,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         self.instructions.init_function_prologue(
             self.function,
-            self.type_resolver,
+            &self.type_resolver,
             &self.compiler_body,
         )?;
 
