@@ -38,6 +38,7 @@ pub enum Token {
     EqualsEquals,
     BangEquals,
     Debug,
+    Nil,
     PlusPlus,
     MinusMinus,
     For,
@@ -115,6 +116,11 @@ impl Lexer {
                 }
                 "__debug__" => {
                     tokens.push(Token::Debug);
+                    self.read_next_word();
+                    continue;
+                }
+                "__nil__" => {
+                    tokens.push(Token::Nil);
                     self.read_next_word();
                     continue;
                 }
