@@ -919,7 +919,7 @@ impl<'a> TypeResolver<'a> {
                 fields.push(TypeStructField::Padding(end_padding));
 
                 Ok(Type {
-                    id: alias.map(|id| id.to_string()),
+                    id: alias.map(|id| id.to_string() + "{}"),
                     size,
                     alignment: highest_alignment,
                     _type: TypeType::Struct(TypeStruct { fields }),
