@@ -786,6 +786,7 @@ enum TypeType {
     Slice(Box<Type>),
     Builtin(TypeBuiltin),
     Address(Box<Type>),
+    Lazy(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -846,6 +847,13 @@ impl Type {
             _ => None,
         }
     }
+
+    fn resolve_lazy(self, type_resolver: &TypeResolver) -> Result<Self> {
+        match self._type {
+            TypeType::Lazy(alias) => type_resolver.resolve(&ast::Type::Alias(alias)),
+            _ => Ok(self),
+        }
+    }
 }
 
 struct TypeResolver<'a> {
@@ -892,7 +900,7 @@ impl<'a> TypeResolver<'a> {
                             id: Some(alias.to_string() + "{}"),
                             size: 0,
                             alignment: 0,
-                            _type: TypeType::Builtin(TypeBuiltin::Nil),
+                            _type: TypeType::Lazy(alias.to_string()),
                         });
                     }
                 }
@@ -1898,6 +1906,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     // target heap -> current heap = dereference + offset
                     TypeType::Address(address_type) => {
+                        let address_type =
+                            address_type.clone().resolve_lazy(&self.type_resolver)?;
+
                         let TypeType::Struct(type_struct) = &address_type._type else {
                             return Err(anyhow!("cant dot access non struct type"));
                         };
@@ -2065,7 +2076,7 @@ impl<'a> FunctionCompiler<'a> {
                 let exp = self.compile_expression(&assignment.expression)?;
                 let exp_size = self.instructions.pop_stack_frame_size();
 
-                if exp != *field._type() {
+                if !exp.eq(field._type()) {
                     return Err(anyhow!("dot access assign type mismatch"));
                 }
 

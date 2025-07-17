@@ -91,16 +91,45 @@ fn main() {
 
                 type LinkedList struct {
                     next *LinkedList
+                    value int
                 }
 
-                fn main() void {
+                fn create_lists() void {
                     let ll *LinkedList = &LinkedList{
                         next: &LinkedList{
                             next: __nil__,
+                            value: 2,
                         },
+                        value: 1,
                     }
 
+                    ll.next = &LinkedList{
+                        next: __nil__,
+                        value: 2,
+                    }
 
+                    ll.next.next = &LinkedList{
+                        next: __nil__,
+                        value: 3,
+                    }
+
+                    ll.next.next.next = &LinkedList{
+                        next: __nil__,
+                        value: 4,
+                    }
+
+                    print_int(ll.value)
+                    print_int(ll.next.value)
+                    print_int(ll.next.next.value)
+                    print_int(ll.next.next.next.value)
+                }
+
+                fn print_int(x int) void {
+                    libc_write(1, uint8[](itoa(x)))
+                }
+
+                fn main() void {
+                    create_lists()
 
                     let one_two_three string = itoa(69420)
                     let s Smol = Smol {
