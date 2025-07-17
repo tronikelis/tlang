@@ -707,7 +707,13 @@ impl TypeStruct {
 }
 
 lazy_static::lazy_static! {
-    static ref UINT: Type = Type{
+    static ref NIL: Type = Type {
+        id: Some("nil".to_string()),
+        size: PTR_SIZE,
+        alignment: PTR_SIZE,
+        _type: TypeType::Builtin(TypeBuiltin::Nil),
+    };
+    static ref UINT: Type = Type {
         id: Some("uint".to_string()),
         size: size_of::<usize>(),
         alignment: size_of::<usize>(),
@@ -770,6 +776,7 @@ enum TypeBuiltin {
     Void,
     CompilerType,
     Ptr,
+    Nil,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -779,7 +786,6 @@ enum TypeType {
     Slice(Box<Type>),
     Builtin(TypeBuiltin),
     Address(Box<Type>),
-    Nil,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -810,19 +816,18 @@ impl Type {
         }
     }
 
-    fn create_nil() -> Self {
-        Self {
-            id: Some("nil".to_string()),
-            size: PTR_SIZE,
-            alignment: PTR_SIZE,
-            _type: TypeType::Nil,
-        }
-    }
-
     fn eq(&self, other: &Self) -> bool {
-        if let Some(_) = &self.id {
-            if let Some(_) = &other.id {
-                return other == self;
+        if let TypeType::Builtin(builtin) = &self._type {
+            if let TypeBuiltin::Nil = builtin {
+                if let TypeType::Address(_) = &other._type {
+                    return true;
+                }
+            }
+        }
+
+        if let Some(self_id) = &self.id {
+            if let Some(other_id) = &other.id {
+                return self_id == other_id;
             }
         }
 
@@ -858,8 +863,8 @@ impl<'a> TypeResolver<'a> {
 
     fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
         match _type {
-            ast::Type::Alias(alias) => {
-                match alias.as_str() {
+            ast::Type::Alias(inner_alias) => {
+                match inner_alias.as_str() {
                     "uint" => return Ok(UINT.clone()),
                     "uint8" => return Ok(UINT8.clone()),
                     "int" => return Ok(INT.clone()),
@@ -873,10 +878,26 @@ impl<'a> TypeResolver<'a> {
 
                 let inner = self
                     .type_declarations
-                    .get(alias)
-                    .ok_or(anyhow!("can't resolve {alias:#?}"))?;
+                    .get(inner_alias)
+                    .ok_or(anyhow!("can't resolve {inner_alias:#?}"))?;
 
-                self.resolve_with_alias(&inner, Some(alias))
+                if let Some(alias) = alias {
+                    if alias == inner_alias {
+                        match inner {
+                            ast::Type::Struct(_) => {}
+                            _ => panic!("recursive non struct?"),
+                        }
+
+                        return Ok(Type {
+                            id: Some(alias.to_string() + "{}"),
+                            size: 0,
+                            alignment: 0,
+                            _type: TypeType::Builtin(TypeBuiltin::Nil),
+                        });
+                    }
+                }
+
+                self.resolve_with_alias(&inner, Some(inner_alias))
             }
             ast::Type::Slice(_type) => {
                 let nested = self.resolve_with_alias(_type, alias)?;
@@ -1648,7 +1669,8 @@ impl<'a> FunctionCompiler<'a> {
                     ))?;
 
                     let exp_type = self.compile_expression(exp)?;
-                    if exp_type != *_type {
+                    if !exp_type.eq(_type) {
+                        println!("exp_type: {exp_type:#?}, _type: {_type:#?}");
                         return Err(anyhow!("compile_struct_init: incorrect field type"));
                     }
                 }
@@ -1765,7 +1787,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_nil(&mut self) -> Result<Type> {
         self.instructions.instr_push_i(0)?;
-        Ok(Type::create_nil())
+        Ok(NIL.clone())
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {

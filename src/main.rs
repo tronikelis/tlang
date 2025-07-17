@@ -94,6 +94,14 @@ fn main() {
                 }
 
                 fn main() void {
+                    let ll *LinkedList = &LinkedList{
+                        next: &LinkedList{
+                            next: __nil__,
+                        },
+                    }
+
+
+
                     let one_two_three string = itoa(69420)
                     let s Smol = Smol {
                         one: uint8(65),
@@ -102,10 +110,6 @@ fn main() {
                         three: uint8[]{},
                     }
                     s.one = uint8(200)
-
-                    let ll *LinkedList = &LinkedList{
-                        next: __nil__,
-                    }
 
                     let one *uint8 = &s.one
                     *one = uint8(254)
