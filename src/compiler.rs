@@ -172,7 +172,7 @@ impl VarStack {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct StackLabel {
     identifier: String,
     index: usize,
@@ -582,7 +582,7 @@ impl Instructions {
     fn init_function_prologue(
         &mut self,
         function: &ast::FunctionDeclaration,
-        type_declarations: &HashMap<String, ast::Type>,
+        type_resolver: &TypeResolver,
         compiler_body: &CompilerBody,
     ) -> Result<()> {
         // push arguments to var_stack, they are already in the stack
@@ -591,8 +591,8 @@ impl Instructions {
         let mut escaped_variables: Vec<(String, Type)> = Vec::new();
 
         for arg in function.arguments.iter() {
-            let _type = resolve_type(type_declarations, &arg._type)?;
-            let return_type = resolve_type(type_declarations, &function.return_type)?;
+            let _type = type_resolver.resolve(&arg._type)?;
+            let return_type = type_resolver.resolve(&function.return_type)?;
 
             let alignment = align(
                 _type.alignment,
@@ -706,46 +706,63 @@ impl TypeStruct {
     }
 }
 
-const UINT: Type = Type {
-    size: size_of::<usize>(),
-    alignment: size_of::<usize>(),
-    _type: TypeType::Builtin(TypeBuiltin::Uint),
-};
-const UINT8: Type = Type {
-    size: 1,
-    alignment: 1,
-    _type: TypeType::Builtin(TypeBuiltin::Uint8),
-};
-const INT: Type = Type {
-    size: size_of::<isize>(),
-    alignment: size_of::<isize>(),
-    _type: TypeType::Builtin(TypeBuiltin::Int),
-};
-const BOOL: Type = Type {
-    size: size_of::<usize>(),      // for now
-    alignment: size_of::<usize>(), // for now
-    _type: TypeType::Builtin(TypeBuiltin::Bool),
-};
-const STRING: Type = Type {
-    size: size_of::<usize>(),
-    alignment: size_of::<usize>(),
-    _type: TypeType::Builtin(TypeBuiltin::String),
-};
-const COMPILER_TYPE: Type = Type {
-    size: 0,
-    alignment: 0,
-    _type: TypeType::Builtin(TypeBuiltin::CompilerType),
-};
-const VOID: Type = Type {
-    size: 0,
-    alignment: 0,
-    _type: TypeType::Builtin(TypeBuiltin::Void),
-};
-const PTR: Type = Type {
-    size: PTR_SIZE,
-    alignment: PTR_SIZE,
-    _type: TypeType::Builtin(TypeBuiltin::Ptr),
-};
+lazy_static::lazy_static! {
+    static ref NIL: Type = Type {
+        id: Some("nil".to_string()),
+        size: PTR_SIZE,
+        alignment: PTR_SIZE,
+        _type: TypeType::Builtin(TypeBuiltin::Nil),
+    };
+    static ref UINT: Type = Type {
+        id: Some("uint".to_string()),
+        size: size_of::<usize>(),
+        alignment: size_of::<usize>(),
+        _type: TypeType::Builtin(TypeBuiltin::Uint),
+    };
+    static ref UINT8: Type = Type {
+        id: Some("uint8".to_string()),
+        size: 1,
+        alignment: 1,
+        _type: TypeType::Builtin(TypeBuiltin::Uint8),
+    };
+    static ref INT: Type = Type {
+        id: Some("int".to_string()),
+        size: size_of::<isize>(),
+        alignment: size_of::<isize>(),
+        _type: TypeType::Builtin(TypeBuiltin::Int),
+    };
+    static ref BOOL: Type = Type {
+        id: Some("bool".to_string()),
+        size: size_of::<usize>(),      // for now
+        alignment: size_of::<usize>(), // for now
+        _type: TypeType::Builtin(TypeBuiltin::Bool),
+    };
+    static ref STRING: Type = Type {
+        id: Some("string".to_string()),
+        size: size_of::<usize>(),
+        alignment: size_of::<usize>(),
+        _type: TypeType::Builtin(TypeBuiltin::String),
+    };
+    static ref COMPILER_TYPE: Type = Type {
+        id: Some("Type".to_string()),
+        size: 0,
+        alignment: 0,
+        _type: TypeType::Builtin(TypeBuiltin::CompilerType),
+    };
+    static ref VOID: Type = Type {
+        id: Some("void".to_string()),
+        size: 0,
+        alignment: 0,
+        _type: TypeType::Builtin(TypeBuiltin::Void),
+    };
+    static ref PTR: Type = Type {
+        id: Some("ptr".to_string()),
+        size: PTR_SIZE,
+        alignment: PTR_SIZE,
+        _type: TypeType::Builtin(TypeBuiltin::Ptr),
+    };
+}
+
 const SLICE_SIZE: usize = size_of::<usize>();
 const PTR_SIZE: usize = size_of::<usize>();
 
@@ -759,6 +776,7 @@ enum TypeBuiltin {
     Void,
     CompilerType,
     Ptr,
+    Nil,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -768,88 +786,184 @@ enum TypeType {
     Slice(Box<Type>),
     Builtin(TypeBuiltin),
     Address(Box<Type>),
+    Lazy(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct Type {
+    // None for inline types
+    id: Option<String>,
     size: usize,
     alignment: usize,
     _type: TypeType,
 }
 
 impl Type {
+    fn create_variadic(item: Self) -> Self {
+        Self {
+            id: item.id.as_ref().map(|id| id.clone() + "..."),
+            size: SLICE_SIZE,
+            alignment: SLICE_SIZE,
+            _type: TypeType::Variadic(Box::new(item)),
+        }
+    }
+
+    fn create_address(item: Self) -> Self {
+        Self {
+            id: item.id.as_ref().map(|id| id.clone() + "&"),
+            size: PTR_SIZE,
+            alignment: PTR_SIZE,
+            _type: TypeType::Address(Box::new(item)),
+        }
+    }
+
+    fn eq(&self, other: &Self) -> bool {
+        if let TypeType::Builtin(builtin) = &self._type {
+            if let TypeBuiltin::Nil = builtin {
+                if let TypeType::Address(_) = &other._type {
+                    return true;
+                }
+            }
+        }
+
+        if let Some(self_id) = &self.id {
+            if let Some(other_id) = &other.id {
+                return self_id == other_id;
+            }
+        }
+
+        let mut self_clone = self.clone();
+        let mut other_clone = other.clone();
+
+        self_clone.id = None;
+        other_clone.id = None;
+
+        other == self
+    }
+
     fn extract_variadic(&self) -> Option<Self> {
         match &self._type {
             TypeType::Variadic(item) => Some(*item.clone()),
             _ => None,
         }
     }
+
+    fn resolve_lazy(self, type_resolver: &TypeResolver) -> Result<Self> {
+        match self._type {
+            TypeType::Lazy(alias) => type_resolver.resolve(&ast::Type::Alias(alias)),
+            _ => Ok(self),
+        }
+    }
 }
 
-fn resolve_type(type_declarations: &HashMap<String, ast::Type>, _type: &ast::Type) -> Result<Type> {
-    match _type {
-        ast::Type::Alias(alias) => {
-            match alias.as_str() {
-                "uint" => return Ok(UINT),
-                "uint8" => return Ok(UINT8),
-                "int" => return Ok(INT),
-                "bool" => return Ok(BOOL),
-                "string" => return Ok(STRING),
-                "Type" => return Ok(COMPILER_TYPE),
-                "void" => return Ok(VOID),
-                "ptr" => return Ok(PTR),
-                _ => {}
-            };
+struct TypeResolver<'a> {
+    type_declarations: &'a HashMap<String, ast::Type>,
+}
 
-            let inner = type_declarations
-                .get(alias)
-                .ok_or(anyhow!("can't resolve {alias:#?}"))?;
+impl<'a> TypeResolver<'a> {
+    fn new(type_declarations: &'a HashMap<String, ast::Type>) -> Self {
+        Self { type_declarations }
+    }
 
-            resolve_type(type_declarations, &inner)
-        }
-        ast::Type::Slice(_type) => Ok(Type {
-            size: SLICE_SIZE,
-            alignment: SLICE_SIZE,
-            _type: TypeType::Slice(Box::new(resolve_type(type_declarations, _type)?)),
-        }),
-        ast::Type::Variadic(_type) => Ok(Type {
-            size: size_of::<usize>(),
-            alignment: size_of::<usize>(),
-            _type: TypeType::Variadic(Box::new(resolve_type(type_declarations, _type)?)),
-        }),
-        ast::Type::Struct(type_struct) => {
-            let mut fields: Vec<TypeStructField> = Vec::new();
-            let mut size: usize = 0;
-            let mut highest_alignment: usize = 0;
+    fn resolve(&self, _type: &ast::Type) -> Result<Type> {
+        self.resolve_with_alias(_type, None)
+    }
 
-            for (identifier, _type) in &type_struct.fields {
-                let resolved = resolve_type(type_declarations, _type)?;
-                if resolved.alignment > highest_alignment {
-                    highest_alignment = resolved.alignment;
+    fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
+        match _type {
+            ast::Type::Alias(inner_alias) => {
+                match inner_alias.as_str() {
+                    "uint" => return Ok(UINT.clone()),
+                    "uint8" => return Ok(UINT8.clone()),
+                    "int" => return Ok(INT.clone()),
+                    "bool" => return Ok(BOOL.clone()),
+                    "string" => return Ok(STRING.clone()),
+                    "Type" => return Ok(COMPILER_TYPE.clone()),
+                    "void" => return Ok(VOID.clone()),
+                    "ptr" => return Ok(PTR.clone()),
+                    _ => {}
+                };
+
+                let inner = self
+                    .type_declarations
+                    .get(inner_alias)
+                    .ok_or(anyhow!("can't resolve {inner_alias:#?}"))?;
+
+                if let Some(alias) = alias {
+                    if alias == inner_alias {
+                        match inner {
+                            ast::Type::Struct(_) => {}
+                            _ => panic!("recursive non struct?"),
+                        }
+
+                        return Ok(Type {
+                            id: Some(alias.to_string() + "{}"),
+                            size: 0,
+                            alignment: 0,
+                            _type: TypeType::Lazy(alias.to_string()),
+                        });
+                    }
                 }
 
-                let alignment = align(resolved.alignment, size);
-                size += resolved.size;
-                size += alignment;
-                fields.push(TypeStructField::Padding(alignment));
-                fields.push(TypeStructField::Type(identifier.clone(), resolved));
+                self.resolve_with_alias(&inner, Some(inner_alias))
             }
+            ast::Type::Slice(_type) => {
+                let nested = self.resolve_with_alias(_type, alias)?;
+                Ok(Type {
+                    id: nested.id.as_ref().map(|id| id.clone() + "[]"),
+                    size: SLICE_SIZE,
+                    alignment: SLICE_SIZE,
+                    _type: TypeType::Slice(Box::new(nested)),
+                })
+            }
+            ast::Type::Variadic(_type) => {
+                let nested = self.resolve_with_alias(_type, alias)?;
+                Ok(Type {
+                    id: nested.id.as_ref().map(|id| id.clone() + "..."),
+                    size: size_of::<usize>(),
+                    alignment: size_of::<usize>(),
+                    _type: TypeType::Variadic(Box::new(nested)),
+                })
+            }
+            ast::Type::Struct(type_struct) => {
+                let mut fields: Vec<TypeStructField> = Vec::new();
+                let mut size: usize = 0;
+                let mut highest_alignment: usize = 0;
 
-            let end_padding = align(highest_alignment, size);
-            size += end_padding;
-            fields.push(TypeStructField::Padding(end_padding));
+                for (identifier, _type) in &type_struct.fields {
+                    let resolved = self.resolve_with_alias(_type, alias)?;
+                    if resolved.alignment > highest_alignment {
+                        highest_alignment = resolved.alignment;
+                    }
 
-            Ok(Type {
-                size,
-                alignment: highest_alignment,
-                _type: TypeType::Struct(TypeStruct { fields }),
-            })
+                    let alignment = align(resolved.alignment, size);
+                    size += resolved.size;
+                    size += alignment;
+                    fields.push(TypeStructField::Padding(alignment));
+                    fields.push(TypeStructField::Type(identifier.clone(), resolved));
+                }
+
+                let end_padding = align(highest_alignment, size);
+                size += end_padding;
+                fields.push(TypeStructField::Padding(end_padding));
+
+                Ok(Type {
+                    id: alias.map(|id| id.to_string() + "{}"),
+                    size,
+                    alignment: highest_alignment,
+                    _type: TypeType::Struct(TypeStruct { fields }),
+                })
+            }
+            ast::Type::Address(_type) => {
+                let nested = self.resolve_with_alias(_type, alias)?;
+                Ok(Type {
+                    id: nested.id.as_ref().map(|id| id.clone() + "&"),
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Address(Box::new(nested)),
+                })
+            }
         }
-        ast::Type::Address(_type) => Ok(Type {
-            size: PTR_SIZE,
-            alignment: PTR_SIZE,
-            _type: TypeType::Address(Box::new(resolve_type(type_declarations, _type)?)),
-        }),
     }
 }
 
@@ -887,34 +1001,34 @@ impl DotAccessField {
     }
 }
 
-pub struct FunctionCompiler<'a, 'b, 'c, 'd> {
+pub struct FunctionCompiler<'a> {
     instructions: Instructions,
-    function: &'a ast::FunctionDeclaration,
-    static_memory: &'b mut vm::StaticMemory,
-    type_declarations: &'c HashMap<String, ast::Type>,
-    function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
     compiler_body: CompilerBody<'a>,
+    type_resolver: TypeResolver<'a>,
+    function: &'a ast::FunctionDeclaration,
+    function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
+    static_memory: &'a mut vm::StaticMemory,
 }
 
-impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
+impl<'a> FunctionCompiler<'a> {
     pub fn new(
         function: &'a ast::FunctionDeclaration,
-        static_memory: &'b mut vm::StaticMemory,
-        type_declarations: &'c HashMap<String, ast::Type>,
-        function_declarations: &'d HashMap<String, ast::FunctionDeclaration>,
+        static_memory: &'a mut vm::StaticMemory,
+        type_declarations: &'a HashMap<String, ast::Type>,
+        function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
         Self {
             function_declarations,
             static_memory,
             function,
             instructions: Instructions::new(),
-            type_declarations,
+            type_resolver: TypeResolver::new(type_declarations),
             compiler_body: CompilerBody::new(&function.body),
         }
     }
 
     fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        resolve_type(self.type_declarations, _type)
+        self.type_resolver.resolve(_type)
     }
 
     fn resolve_function_call(&self, call: &ast::Call) -> Result<FunctionCall> {
@@ -988,7 +1102,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     .ok_or(anyhow!("new: third argument expected"))?;
 
                 let len_exp = self.compile_expression(len_val)?;
-                if len_exp != INT {
+                if len_exp != *INT {
                     return Err(anyhow!("new: length should be of type int"));
                 }
 
@@ -1024,7 +1138,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
 
         self.instructions.instr_slice_len();
 
-        Ok(INT)
+        Ok(INT.clone())
     }
 
     // append(slice Type, value Type) void
@@ -1054,7 +1168,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
 
         self.instructions.instr_slice_append(value_exp.size);
 
-        Ok(VOID)
+        Ok(VOID.clone())
     }
 
     fn check_function_call_argument_count(&self, call: &FunctionCall) -> Result<()> {
@@ -1148,7 +1262,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         match call.callee.identifier.as_str() {
             "libc_write" => {
                 self.instructions.instr_libc_write();
-                return Ok(INT);
+                return Ok(INT.clone());
             }
             _ => {}
         }
@@ -1177,23 +1291,23 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
 
     fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
         let literal_type = match literal.literal {
-            lexer::Literal::Int(_) => INT,
-            lexer::Literal::Bool(_) => BOOL,
-            lexer::Literal::String(_) => STRING,
+            lexer::Literal::Int(_) => INT.clone(),
+            lexer::Literal::Bool(_) => BOOL.clone(),
+            lexer::Literal::String(_) => STRING.clone(),
         };
 
         match &literal.literal {
-            lexer::Literal::Int(int) => match &literal_type {
-                &UINT8 => {
+            lexer::Literal::Int(int) => {
+                if literal_type == *UINT8 {
                     self.instructions.instr_push_u8(*int)?;
-                }
-                &INT => {
+                } else if literal_type == *INT {
                     self.instructions.instr_push_i(*int)?;
+                } else {
+                    return Err(anyhow!("can't cast int to {literal_type:#?}"));
                 }
-                _type => return Err(anyhow!("can't cast int to {_type:#?}")),
-            },
-            lexer::Literal::Bool(bool) => match &literal_type {
-                &BOOL => {
+            }
+            lexer::Literal::Bool(bool) => {
+                if literal_type == *BOOL {
                     self.instructions.instr_push_i({
                         if *bool {
                             1
@@ -1201,9 +1315,10 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                             0
                         }
                     })?;
+                } else {
+                    return Err(anyhow!("can't cast bool to {literal_type:#?}"));
                 }
-                _type => return Err(anyhow!("can't cast bool to {_type:#?}")),
-            },
+            }
             lexer::Literal::String(string) => {
                 let index = self.static_memory.push_string_slice(&string);
                 self.instructions
@@ -1245,13 +1360,13 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         if a != b {
             return Err(anyhow!("can't add different types"));
         }
-        if a == VOID {
+        if a == *VOID {
             return Err(anyhow!("can't add void type"));
         }
 
         match arithmetic._type {
             ast::ArithmeticType::Minus => {
-                if INT == a {
+                if *INT == a {
                     self.instructions.instr_minus_int();
                     self.instructions.instr_add_i();
                 } else {
@@ -1259,30 +1374,30 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 }
             }
             ast::ArithmeticType::Plus => {
-                if INT == a {
+                if *INT == a {
                     self.instructions.instr_add_i();
-                } else if a == STRING {
+                } else if a == *STRING {
                     self.instructions.instr_add_string();
                 } else {
                     return Err(anyhow!("can only plus int and string"));
                 }
             }
             ast::ArithmeticType::Multiply => {
-                if INT == a {
+                if *INT == a {
                     self.instructions.instr_multiply_i();
                 } else {
                     return Err(anyhow!("can only multiply int"));
                 }
             }
             ast::ArithmeticType::Divide => {
-                if INT == a {
+                if *INT == a {
                     self.instructions.instr_divide_i();
                 } else {
                     return Err(anyhow!("can only divide int"));
                 }
             }
             ast::ArithmeticType::Modulo => {
-                if INT == a {
+                if *INT == a {
                     self.instructions.instr_modulo_i();
                 } else {
                     return Err(anyhow!("can only modulo int"));
@@ -1318,10 +1433,8 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         if a._type != b._type {
             return Err(anyhow!("can't compare different types"));
         }
-
-        match a {
-            BOOL | INT => {}
-            _type => return Err(anyhow!("can only compare int/bool")),
+        if a != *BOOL && a != *INT {
+            return Err(anyhow!("can only compare int/bool"));
         }
 
         match compare.compare_type {
@@ -1344,7 +1457,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             }
         }
 
-        Ok(BOOL)
+        Ok(BOOL.clone())
     }
 
     fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
@@ -1394,7 +1507,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         };
 
         let exp_index = self.compile_expression(&index.expression)?;
-        if exp_index != INT {
+        if exp_index != *INT {
             return Err(anyhow!("cant index with {exp_index:#?}"));
         }
 
@@ -1407,7 +1520,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         self.instructions.stack_instructions.jump();
 
         let left = self.compile_expression(&andor.left)?;
-        if left != BOOL {
+        if left != *BOOL {
             return Err(anyhow!("compile_andor: expected bool expression"));
         }
 
@@ -1416,7 +1529,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 self.instructions.stack_instructions.back_if_true(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != BOOL {
+                if right != *BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
@@ -1426,7 +1539,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 self.instructions.stack_instructions.back_if_false(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != BOOL {
+                if right != *BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
@@ -1437,7 +1550,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
-        Ok(BOOL)
+        Ok(BOOL.clone())
     }
 
     fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
@@ -1477,7 +1590,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 },
                 TypeBuiltin::String => match &type_cast._type._type {
                     TypeType::Slice(item) => {
-                        if **item != UINT8 {
+                        if **item != *UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
@@ -1490,7 +1603,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             TypeType::Slice(item_target) => match &type_cast._type._type {
                 TypeType::Builtin(builtin_dest) => match builtin_dest {
                     TypeBuiltin::String => {
-                        if *item_target != UINT8 {
+                        if *item_target != *UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
@@ -1521,13 +1634,13 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
 
     fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
         let exp_bool = self.compile_expression(negate)?;
-        if exp_bool != BOOL {
+        if exp_bool != *BOOL {
             return Err(anyhow!("can only negate bools"));
         }
 
         self.instructions.instr_negate_bool();
 
-        Ok(BOOL)
+        Ok(BOOL.clone())
     }
 
     fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
@@ -1537,11 +1650,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             return Err(anyhow!("compile_spread: can only spread slice types"));
         };
 
-        Ok(Type {
-            size: SLICE_SIZE,
-            alignment: SLICE_SIZE,
-            _type: TypeType::Variadic(slice_item),
-        })
+        Ok(Type::create_variadic(*slice_item))
     }
 
     fn compile_struct_init(&mut self, struct_init: &ast::StructInit) -> Result<Type> {
@@ -1568,7 +1677,8 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     ))?;
 
                     let exp_type = self.compile_expression(exp)?;
-                    if exp_type != *_type {
+                    if !exp_type.eq(_type) {
+                        println!("exp_type: {exp_type:#?}, _type: {_type:#?}");
                         return Err(anyhow!("compile_struct_init: incorrect field type"));
                     }
                 }
@@ -1615,11 +1725,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 self.instructions
                     .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
 
-                Ok(Type {
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Address(Box::new(var._type.clone())),
-                })
+                Ok(Type::create_address(var._type))
             }
             ast::Expression::DotAccess(dot_access) => {
                 let field = self.compile_dot_access_field_offset(dot_access)?;
@@ -1629,11 +1735,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     ));
                 };
 
-                Ok(Type {
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Address(Box::new(_type)),
-                })
+                Ok(Type::create_address(_type))
             }
             ast::Expression::Address(_) => {
                 Err(anyhow!("compile_address: cant take address of this"))
@@ -1643,11 +1745,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 let exp = self.compile_expression(expression)?;
                 self.instructions.instr_alloc(exp.size, exp.alignment);
 
-                Ok(Type {
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Address(Box::new(exp)),
-                })
+                Ok(Type::create_address(exp))
             }
         }
     }
@@ -1695,6 +1793,11 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         Err(anyhow!("compile_call: can't resolve call"))
     }
 
+    fn compile_nil(&mut self) -> Result<Type> {
+        self.instructions.instr_push_i(0)?;
+        Ok(NIL.clone())
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1715,6 +1818,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             ast::Expression::Deref(v) => self.compile_deref(v),
             ast::Expression::Address(v) => self.compile_address(v),
             ast::Expression::Type(v) => self.compile_type(v),
+            ast::Expression::Nil => self.compile_nil(),
         }?;
 
         if exp.alignment != 0 {
@@ -1742,7 +1846,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         }
 
         let exp = self.compile_expression(&declaration.expression)?;
-        if exp == VOID {
+        if exp == *VOID {
             return Err(anyhow!("can't declare void variable"));
         }
 
@@ -1802,6 +1906,9 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                     }
                     // target heap -> current heap = dereference + offset
                     TypeType::Address(address_type) => {
+                        let address_type =
+                            address_type.clone().resolve_lazy(&self.type_resolver)?;
+
                         let TypeType::Struct(type_struct) = &address_type._type else {
                             return Err(anyhow!("cant dot access non struct type"));
                         };
@@ -1951,7 +2058,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 };
 
                 let item_index = self.compile_expression(&index.expression)?;
-                if item_index != INT {
+                if item_index != *INT {
                     return Err(anyhow!("can only index with int type"));
                 }
 
@@ -1969,7 +2076,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
                 let exp = self.compile_expression(&assignment.expression)?;
                 let exp_size = self.instructions.pop_stack_frame_size();
 
-                if exp != *field._type() {
+                if !exp.eq(field._type()) {
                     return Err(anyhow!("dot access assign type mismatch"));
                 }
 
@@ -2009,7 +2116,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
         body: &'a [ast::Node],
     ) -> Result<()> {
         let exp = self.compile_expression(expression)?;
-        if exp != BOOL {
+        if exp != *BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
         }
 
@@ -2071,7 +2178,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
             if let Some(v) = &_for.expression {
                 self.instructions.push_stack_frame();
                 let exp = self.compile_expression(v)?;
-                if exp != BOOL {
+                if exp != *BOOL {
                     return Err(anyhow!("compile_for: expected expression to return bool"));
                 }
                 let size = self.instructions.pop_stack_frame_size();
@@ -2209,7 +2316,7 @@ impl<'a, 'b, 'c, 'd> FunctionCompiler<'a, 'b, 'c, 'd> {
     pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
         self.instructions.init_function_prologue(
             self.function,
-            self.type_declarations,
+            &self.type_resolver,
             &self.compiler_body,
         )?;
 

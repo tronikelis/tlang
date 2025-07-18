@@ -111,6 +111,7 @@ pub trait Bfs<'a> {
             Expression::Spread(v) => self.search_expression_spread(v),
             Expression::StructInit(v) => self.search_expression_struct_init(v),
             Expression::Type(v) => self.search_expression_type(v),
+            Expression::Nil => BfsRet::Continue,
         }
     }
 
@@ -331,6 +332,7 @@ pub enum Expression {
     TypeInit(TypeInit),
     Address(Box<Expression>),
     Deref(Box<Expression>),
+    Nil,
 }
 
 #[derive(Debug, Clone)]
@@ -971,6 +973,10 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
                 lexer::Token::Struct | lexer::Token::Identifier(_) => {
                     Expression::Type(self.parse_type()?)
+                }
+                lexer::Token::Nil => {
+                    self.iter.next();
+                    Expression::Nil
                 }
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
