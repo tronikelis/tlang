@@ -25,6 +25,35 @@ impl GcObject {
         }
     }
 
+    fn new_closure(vars: &[*mut u8], function_index: usize) -> (Self, *mut u8) {
+        // closure:
+        //
+        // vars count N
+        // ...var1
+        // ...var2
+        // ...varN
+        // function index
+
+        let size = vars.len() * size_of::<usize>() + size_of::<usize>() * 2;
+        let layout = Layout::from_size_align(size, size_of::<usize>()).unwrap();
+        let alloced = unsafe { alloc(layout) };
+
+        unsafe {
+            let mut alloced = alloced;
+            *alloced.cast() = vars.len();
+
+            for var in vars {
+                alloced = alloced.byte_offset(size_of::<usize>() as isize);
+                *alloced.cast::<*mut u8>() = *var;
+            }
+
+            alloced = alloced.byte_offset(size_of::<usize>() as isize);
+            *alloced.cast() = function_index;
+        }
+
+        (Self::new(GcObjectData::Alloced(alloced, layout)), alloced)
+    }
+
     fn from_slice_val(slice: &[u8], alignment: usize) -> (Self, *mut u8) {
         let layout = Layout::from_size_align(slice.len(), alignment).unwrap();
         let ptr = unsafe { alloc(layout) };
@@ -216,6 +245,8 @@ pub enum Instruction {
     PushSliceNewLen(usize),
     // index, len
     PushStatic(usize, usize),
+    // var count, function index
+    PushClosure(usize, usize),
 
     MinusInt,
     AddI,
@@ -624,6 +655,17 @@ impl Vm {
                     unsafe {
                         self.stack.push(ptr.byte_offset(size as isize));
                     };
+                }
+                Instruction::PushClosure(var_count, function_index) => {
+                    let mut vars = Vec::with_capacity(var_count);
+                    for _ in 0..var_count {
+                        let var = self.stack.pop::<*mut u8>();
+                        vars.push(var);
+                    }
+
+                    let (obj, ptr) = GcObject::new_closure(&vars, function_index);
+                    self.gc.add_object(obj);
+                    self.stack.push(ptr);
                 }
             }
 

@@ -82,18 +82,18 @@ pub trait Bfs<'a> {
         BfsRet::Continue
     }
 
-    fn search_node_variable_declaration(&self, declaration: &VariableDeclaration) -> BfsRet {
+    fn search_node_variable_declaration(&self, declaration: &'a VariableDeclaration) -> BfsRet {
         return_if_some_true!(self.search_expression(&declaration.expression));
         BfsRet::Continue
     }
 
-    fn search_node_variable_assignment(&self, assignment: &VariableAssignment) -> BfsRet {
+    fn search_node_variable_assignment(&self, assignment: &'a VariableAssignment) -> BfsRet {
         return_if_some_true!(self.search_expression(&assignment.var));
         return_if_some_true!(self.search_expression(&assignment.expression));
         BfsRet::Continue
     }
 
-    fn search_expression(&self, exp: &Expression) -> BfsRet {
+    fn search_expression(&self, exp: &'a Expression) -> BfsRet {
         match exp {
             Expression::Call(v) => self.search_expression_call(v),
             Expression::TypeInit(v) => self.search_expression_type_init(v),
@@ -111,33 +111,38 @@ pub trait Bfs<'a> {
             Expression::Spread(v) => self.search_expression_spread(v),
             Expression::StructInit(v) => self.search_expression_struct_init(v),
             Expression::Type(v) => self.search_expression_type(v),
+            Expression::Closure(v) => self.search_expression_closure(v),
             Expression::Nil => BfsRet::Continue,
         }
+    }
+
+    fn search_expression_closure(&self, closure: &'a Closure) -> BfsRet {
+        self.search_body(closure.body.iter())
     }
 
     fn search_expression_type_init(&self, _type_init: &TypeInit) -> BfsRet {
         BfsRet::Continue
     }
 
-    fn search_expression_call(&self, call: &Call) -> BfsRet {
+    fn search_expression_call(&self, call: &'a Call) -> BfsRet {
         for exp in &call.arguments {
             return_if_some_true!(self.search_expression(exp));
         }
         BfsRet::Continue
     }
 
-    fn search_expression_address(&self, exp: &Expression) -> BfsRet {
+    fn search_expression_address(&self, exp: &'a Expression) -> BfsRet {
         return_if_some_true!(self.search_expression(exp));
         BfsRet::Continue
     }
 
-    fn search_expression_andor(&self, andor: &AndOr) -> BfsRet {
+    fn search_expression_andor(&self, andor: &'a AndOr) -> BfsRet {
         return_if_some_true!(self.search_expression(&andor.left));
         return_if_some_true!(self.search_expression(&andor.right));
         BfsRet::Continue
     }
 
-    fn search_expression_deref(&self, exp: &Expression) -> BfsRet {
+    fn search_expression_deref(&self, exp: &'a Expression) -> BfsRet {
         return_if_some_true!(self.search_expression(exp));
         BfsRet::Continue
     }
@@ -146,23 +151,23 @@ pub trait Bfs<'a> {
         BfsRet::Continue
     }
 
-    fn search_expression_infix(&self, infix: &Infix) -> BfsRet {
+    fn search_expression_infix(&self, infix: &'a Infix) -> BfsRet {
         return_if_some_true!(self.search_expression(&infix.expression));
         BfsRet::Continue
     }
 
-    fn search_expression_index(&self, index: &Index) -> BfsRet {
+    fn search_expression_index(&self, index: &'a Index) -> BfsRet {
         return_if_some_true!(self.search_expression(&index.expression));
         return_if_some_true!(self.search_expression(&index.var));
         BfsRet::Continue
     }
 
-    fn search_expression_negate(&self, exp: &Expression) -> BfsRet {
+    fn search_expression_negate(&self, exp: &'a Expression) -> BfsRet {
         return_if_some_true!(self.search_expression(exp));
         BfsRet::Continue
     }
 
-    fn search_expression_spread(&self, exp: &Expression) -> BfsRet {
+    fn search_expression_spread(&self, exp: &'a Expression) -> BfsRet {
         return_if_some_true!(self.search_expression(exp));
         BfsRet::Continue
     }
@@ -171,31 +176,31 @@ pub trait Bfs<'a> {
         BfsRet::Continue
     }
 
-    fn search_expression_compare(&self, compare: &Compare) -> BfsRet {
+    fn search_expression_compare(&self, compare: &'a Compare) -> BfsRet {
         return_if_some_true!(self.search_expression(&compare.left));
         return_if_some_true!(self.search_expression(&compare.right));
         BfsRet::Continue
     }
 
-    fn search_expression_arithmetic(&self, arithmetic: &Arithmetic) -> BfsRet {
+    fn search_expression_arithmetic(&self, arithmetic: &'a Arithmetic) -> BfsRet {
         return_if_some_true!(self.search_expression(&arithmetic.left));
         return_if_some_true!(self.search_expression(&arithmetic.right));
         BfsRet::Continue
     }
 
-    fn search_expression_dot_access(&self, dot_access: &DotAccess) -> BfsRet {
+    fn search_expression_dot_access(&self, dot_access: &'a DotAccess) -> BfsRet {
         return_if_some_true!(self.search_expression(&dot_access.expression));
         BfsRet::Continue
     }
 
-    fn search_expression_slice_init(&self, slice_init: &SliceInit) -> BfsRet {
+    fn search_expression_slice_init(&self, slice_init: &'a SliceInit) -> BfsRet {
         for exp in &slice_init.expressions {
             return_if_some_true!(self.search_expression(exp));
         }
         BfsRet::Continue
     }
 
-    fn search_expression_struct_init(&self, struct_init: &StructInit) -> BfsRet {
+    fn search_expression_struct_init(&self, struct_init: &'a StructInit) -> BfsRet {
         for exp in struct_init.fields.values() {
             return_if_some_true!(self.search_expression(exp));
         }
@@ -315,6 +320,12 @@ pub struct TypeInit {
 }
 
 #[derive(Debug, Clone)]
+pub struct Closure {
+    pub _type: Type,
+    pub body: Vec<Node>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     AndOr(Box<AndOr>),
     Infix(Infix),
@@ -332,6 +343,7 @@ pub enum Expression {
     TypeInit(TypeInit),
     Address(Box<Expression>),
     Deref(Box<Expression>),
+    Closure(Closure),
     Nil,
 }
 
@@ -402,12 +414,19 @@ pub struct TypeStruct {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeClosure {
+    arguments: Vec<(String, Type)>,
+    return_type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Alias(String),
     Struct(TypeStruct),
     Slice(Box<Type>),
     Variadic(Box<Type>),
     Address(Box<Type>),
+    Closure(Box<TypeClosure>),
 }
 
 #[derive(Debug)]
@@ -593,6 +612,37 @@ impl<'a> TokenParser<'a> {
                 }
 
                 Ok(_type)
+            }
+            lexer::Token::Function => {
+                self.iter.expect(lexer::Token::POpen)?;
+                self.iter.next();
+
+                let mut arguments = Vec::new();
+
+                while let Some(token) = self.iter.peek(0) {
+                    match token {
+                        lexer::Token::PClose => {
+                            self.iter.next();
+                            break;
+                        }
+                        lexer::Token::Comma => {
+                            self.iter.next();
+                        }
+                        _ => {}
+                    }
+
+                    let iden = self.parse_identifier()?;
+                    let _type = self.parse_type()?;
+
+                    arguments.push((iden, _type));
+                }
+
+                let return_type = self.parse_type()?;
+
+                Ok(Type::Closure(Box::new(TypeClosure {
+                    return_type,
+                    arguments,
+                })))
             }
             token => return Err(anyhow!("type_declaration: parse unknown {token:#?}")),
         }
@@ -913,6 +963,16 @@ impl<'a> TokenParser<'a> {
         Ok(StructInit { fields, _type })
     }
 
+    fn parse_closure(&mut self) -> Result<Closure> {
+        self.iter.expect(lexer::Token::Function)?;
+        self.iter.next();
+
+        let _type = self.parse_type()?;
+        let body = self.parse_body()?;
+
+        Ok(Closure { _type, body })
+    }
+
     fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
             lexer::Token::Percent => Some((11, 12)),
@@ -978,6 +1038,7 @@ impl<'a> TokenParser<'a> {
                     self.iter.next();
                     Expression::Nil
                 }
+                lexer::Token::Function => Expression::Closure(self.parse_closure()?),
                 token => return Err(anyhow!("parse_expression: incorrect token {token:#?}")),
             }
         };

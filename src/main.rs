@@ -94,6 +94,24 @@ fn main() {
                     value int
                 }
 
+                type Incrementer struct {
+                    get fn() int
+                    set fn(value int) void
+                }
+
+                fn create_incrementer() Incrementer {
+                    let value int = 0
+
+                    return Incrementer {
+                        get: fn() int {
+                            return value
+                        },
+                        set: fn(v int) void {
+                            value = v
+                        }
+                    }
+                }
+
                 fn create_lists() void {
                     let ll *LinkedList = &LinkedList{
                         next: &LinkedList{
