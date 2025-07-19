@@ -4,35 +4,52 @@ use anyhow::{anyhow, Result};
 
 use crate::lexer;
 
-pub enum BfsRet {
-    Return,
+pub enum DfsRet {
     Found,
     Continue,
+    Break,
 }
 
-macro_rules! return_if_some_true {
+macro_rules! dfsret_return_if {
     ($v:expr) => {
-        let result = $v;
-        match result {
-            $crate::ast::BfsRet::Found | $crate::ast::BfsRet::Return => {
-                return result;
+        match $v {
+            $crate::ast::DfsRet::Found => {
+                return $crate::ast::DfsRet::Found;
             }
-            $crate::ast::BfsRet::Continue => {}
+            $crate::ast::DfsRet::Break => {
+                return $crate::ast::DfsRet::Break;
+            }
+            $crate::ast::DfsRet::Continue => {}
         }
     };
 }
-pub(crate) use return_if_some_true;
+pub(crate) use dfsret_return_if;
 
-pub trait Bfs<'a> {
-    fn search_body(&self, body: impl Iterator<Item = &'a Node>) -> BfsRet {
-        for node in body {
-            return_if_some_true!(self.search_node(node));
+macro_rules! dfsret_search_body {
+    ($self:ident, $body:expr) => {{
+        for node in $body {
+            match $self.search_node(node) {
+                $crate::ast::DfsRet::Found => {
+                    return $crate::ast::DfsRet::Found;
+                }
+                $crate::ast::DfsRet::Break => {
+                    break;
+                }
+                $crate::ast::DfsRet::Continue => {}
+            }
         }
 
-        BfsRet::Continue
+        $crate::ast::DfsRet::Continue
+    }};
+}
+pub(crate) use dfsret_search_body;
+
+pub trait Dfs<'a> {
+    fn search_body(&self, body: impl Iterator<Item = &'a Node>) -> DfsRet {
+        dfsret_search_body!(self, body)
     }
 
-    fn search_node(&self, node: &'a Node) -> BfsRet {
+    fn search_node(&self, node: &'a Node) -> DfsRet {
         match node {
             Node::Continue | Node::Break | Node::Debug => {}
             Node::Return(exp) => {
@@ -47,53 +64,51 @@ pub trait Bfs<'a> {
             Node::VariableAssignment(v) => return self.search_node_variable_assignment(v),
         }
 
-        BfsRet::Continue
+        DfsRet::Continue
     }
 
-    fn search_node_if(&self, _if: &'a If) -> BfsRet {
-        return_if_some_true!(self.search_expression(&_if.expression));
-        return_if_some_true!(self.search_body(_if.body.iter()));
+    fn search_node_if(&self, _if: &'a If) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&_if.expression));
+        dfsret_return_if!(self.search_body(_if.body.iter()));
 
         for else_if in &_if.elseif {
-            return_if_some_true!(self.search_expression(&else_if.expression));
-            return_if_some_true!(self.search_body(else_if.body.iter()));
+            dfsret_return_if!(self.search_expression(&else_if.expression));
+            dfsret_return_if!(self.search_body(else_if.body.iter()));
         }
 
         if let Some(_else) = &_if._else {
-            return_if_some_true!(self.search_body(_else.body.iter()));
+            dfsret_return_if!(self.search_body(_else.body.iter()));
         }
 
-        BfsRet::Continue
+        DfsRet::Continue
     }
 
-    fn search_node_for(&self, _for: &'a For) -> BfsRet {
+    fn search_node_for(&self, _for: &'a For) -> DfsRet {
         if let Some(node) = &_for.initializer {
-            return_if_some_true!(self.search_node(node));
+            dfsret_return_if!(self.search_node(node));
         }
         if let Some(exp) = &_for.expression {
-            return_if_some_true!(self.search_expression(exp));
+            dfsret_return_if!(self.search_expression(exp));
         }
         if let Some(node) = &_for.after_each {
-            return_if_some_true!(self.search_node(node));
+            dfsret_return_if!(self.search_node(node));
         }
 
-        return_if_some_true!(self.search_body(_for.body.iter()));
-
-        BfsRet::Continue
+        self.search_body(_for.body.iter())
     }
 
-    fn search_node_variable_declaration(&self, declaration: &'a VariableDeclaration) -> BfsRet {
-        return_if_some_true!(self.search_expression(&declaration.expression));
-        BfsRet::Continue
+    fn search_node_variable_declaration(&self, declaration: &'a VariableDeclaration) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&declaration.expression));
+        DfsRet::Continue
     }
 
-    fn search_node_variable_assignment(&self, assignment: &'a VariableAssignment) -> BfsRet {
-        return_if_some_true!(self.search_expression(&assignment.var));
-        return_if_some_true!(self.search_expression(&assignment.expression));
-        BfsRet::Continue
+    fn search_node_variable_assignment(&self, assignment: &'a VariableAssignment) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&assignment.var));
+        dfsret_return_if!(self.search_expression(&assignment.expression));
+        DfsRet::Continue
     }
 
-    fn search_expression(&self, exp: &'a Expression) -> BfsRet {
+    fn search_expression(&self, exp: &'a Expression) -> DfsRet {
         match exp {
             Expression::Call(v) => self.search_expression_call(v),
             Expression::TypeInit(v) => self.search_expression_type_init(v),
@@ -112,99 +127,278 @@ pub trait Bfs<'a> {
             Expression::StructInit(v) => self.search_expression_struct_init(v),
             Expression::Type(v) => self.search_expression_type(v),
             Expression::Closure(v) => self.search_expression_closure(v),
-            Expression::Nil => BfsRet::Continue,
+            Expression::Nil => DfsRet::Continue,
         }
     }
 
-    fn search_expression_closure(&self, closure: &'a Closure) -> BfsRet {
+    fn search_expression_closure(&self, closure: &'a Closure) -> DfsRet {
         self.search_body(closure.body.iter())
     }
 
-    fn search_expression_type_init(&self, _type_init: &TypeInit) -> BfsRet {
-        BfsRet::Continue
+    fn search_expression_type_init(&self, _type_init: &TypeInit) -> DfsRet {
+        DfsRet::Continue
     }
 
-    fn search_expression_call(&self, call: &'a Call) -> BfsRet {
+    fn search_expression_call(&self, call: &'a Call) -> DfsRet {
         for exp in &call.arguments {
-            return_if_some_true!(self.search_expression(exp));
+            dfsret_return_if!(self.search_expression(exp));
         }
-        BfsRet::Continue
+        DfsRet::Continue
     }
 
-    fn search_expression_address(&self, exp: &'a Expression) -> BfsRet {
-        return_if_some_true!(self.search_expression(exp));
-        BfsRet::Continue
+    fn search_expression_address(&self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
     }
 
-    fn search_expression_andor(&self, andor: &'a AndOr) -> BfsRet {
-        return_if_some_true!(self.search_expression(&andor.left));
-        return_if_some_true!(self.search_expression(&andor.right));
-        BfsRet::Continue
+    fn search_expression_andor(&self, andor: &'a AndOr) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&andor.left));
+        dfsret_return_if!(self.search_expression(&andor.right));
+        DfsRet::Continue
     }
 
-    fn search_expression_deref(&self, exp: &'a Expression) -> BfsRet {
-        return_if_some_true!(self.search_expression(exp));
-        BfsRet::Continue
+    fn search_expression_deref(&self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
     }
 
-    fn search_expression_type(&self, _type: &Type) -> BfsRet {
-        BfsRet::Continue
+    fn search_expression_type(&self, _type: &Type) -> DfsRet {
+        DfsRet::Continue
     }
 
-    fn search_expression_infix(&self, infix: &'a Infix) -> BfsRet {
-        return_if_some_true!(self.search_expression(&infix.expression));
-        BfsRet::Continue
+    fn search_expression_infix(&self, infix: &'a Infix) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&infix.expression));
+        DfsRet::Continue
     }
 
-    fn search_expression_index(&self, index: &'a Index) -> BfsRet {
-        return_if_some_true!(self.search_expression(&index.expression));
-        return_if_some_true!(self.search_expression(&index.var));
-        BfsRet::Continue
+    fn search_expression_index(&self, index: &'a Index) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&index.expression));
+        dfsret_return_if!(self.search_expression(&index.var));
+        DfsRet::Continue
     }
 
-    fn search_expression_negate(&self, exp: &'a Expression) -> BfsRet {
-        return_if_some_true!(self.search_expression(exp));
-        BfsRet::Continue
+    fn search_expression_negate(&self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
     }
 
-    fn search_expression_spread(&self, exp: &'a Expression) -> BfsRet {
-        return_if_some_true!(self.search_expression(exp));
-        BfsRet::Continue
+    fn search_expression_spread(&self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
     }
 
-    fn search_expression_literal(&self, _literal: &Literal) -> BfsRet {
-        BfsRet::Continue
+    fn search_expression_literal(&self, _literal: &Literal) -> DfsRet {
+        DfsRet::Continue
     }
 
-    fn search_expression_compare(&self, compare: &'a Compare) -> BfsRet {
-        return_if_some_true!(self.search_expression(&compare.left));
-        return_if_some_true!(self.search_expression(&compare.right));
-        BfsRet::Continue
+    fn search_expression_compare(&self, compare: &'a Compare) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&compare.left));
+        dfsret_return_if!(self.search_expression(&compare.right));
+        DfsRet::Continue
     }
 
-    fn search_expression_arithmetic(&self, arithmetic: &'a Arithmetic) -> BfsRet {
-        return_if_some_true!(self.search_expression(&arithmetic.left));
-        return_if_some_true!(self.search_expression(&arithmetic.right));
-        BfsRet::Continue
+    fn search_expression_arithmetic(&self, arithmetic: &'a Arithmetic) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&arithmetic.left));
+        dfsret_return_if!(self.search_expression(&arithmetic.right));
+        DfsRet::Continue
     }
 
-    fn search_expression_dot_access(&self, dot_access: &'a DotAccess) -> BfsRet {
-        return_if_some_true!(self.search_expression(&dot_access.expression));
-        BfsRet::Continue
+    fn search_expression_dot_access(&self, dot_access: &'a DotAccess) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&dot_access.expression));
+        DfsRet::Continue
     }
 
-    fn search_expression_slice_init(&self, slice_init: &'a SliceInit) -> BfsRet {
+    fn search_expression_slice_init(&self, slice_init: &'a SliceInit) -> DfsRet {
         for exp in &slice_init.expressions {
-            return_if_some_true!(self.search_expression(exp));
+            dfsret_return_if!(self.search_expression(exp));
         }
-        BfsRet::Continue
+        DfsRet::Continue
     }
 
-    fn search_expression_struct_init(&self, struct_init: &'a StructInit) -> BfsRet {
+    fn search_expression_struct_init(&self, struct_init: &'a StructInit) -> DfsRet {
         for exp in struct_init.fields.values() {
-            return_if_some_true!(self.search_expression(exp));
+            dfsret_return_if!(self.search_expression(exp));
         }
-        BfsRet::Continue
+        DfsRet::Continue
+    }
+}
+
+pub trait DfsMut<'a> {
+    fn search_body(&mut self, body: impl Iterator<Item = &'a Node>) -> DfsRet {
+        dfsret_search_body!(self, body)
+    }
+
+    fn search_node(&mut self, node: &'a Node) -> DfsRet {
+        match node {
+            Node::Continue | Node::Break | Node::Debug => {}
+            Node::Return(exp) => {
+                if let Some(exp) = exp {
+                    return self.search_expression(exp);
+                }
+            }
+            Node::Expression(v) => return self.search_expression(v),
+            Node::If(v) => return self.search_node_if(v),
+            Node::For(v) => return self.search_node_for(v),
+            Node::VariableDeclaration(v) => return self.search_node_variable_declaration(v),
+            Node::VariableAssignment(v) => return self.search_node_variable_assignment(v),
+        }
+
+        DfsRet::Continue
+    }
+
+    fn search_node_if(&mut self, _if: &'a If) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&_if.expression));
+        dfsret_return_if!(self.search_body(_if.body.iter()));
+
+        for else_if in &_if.elseif {
+            dfsret_return_if!(self.search_expression(&else_if.expression));
+            dfsret_return_if!(self.search_body(else_if.body.iter()));
+        }
+
+        if let Some(_else) = &_if._else {
+            dfsret_return_if!(self.search_body(_else.body.iter()));
+        }
+
+        DfsRet::Continue
+    }
+
+    fn search_node_for(&mut self, _for: &'a For) -> DfsRet {
+        if let Some(node) = &_for.initializer {
+            dfsret_return_if!(self.search_node(node));
+        }
+        if let Some(exp) = &_for.expression {
+            dfsret_return_if!(self.search_expression(exp));
+        }
+        if let Some(node) = &_for.after_each {
+            dfsret_return_if!(self.search_node(node));
+        }
+
+        self.search_body(_for.body.iter())
+    }
+
+    fn search_node_variable_declaration(&mut self, declaration: &'a VariableDeclaration) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&declaration.expression));
+        DfsRet::Continue
+    }
+
+    fn search_node_variable_assignment(&mut self, assignment: &'a VariableAssignment) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&assignment.var));
+        dfsret_return_if!(self.search_expression(&assignment.expression));
+        DfsRet::Continue
+    }
+
+    fn search_expression(&mut self, exp: &'a Expression) -> DfsRet {
+        match exp {
+            Expression::Call(v) => self.search_expression_call(v),
+            Expression::TypeInit(v) => self.search_expression_type_init(v),
+            Expression::Address(v) => self.search_expression_address(v),
+            Expression::AndOr(v) => self.search_expression_andor(v),
+            Expression::Arithmetic(v) => self.search_expression_arithmetic(v),
+            Expression::Compare(v) => self.search_expression_compare(v),
+            Expression::Deref(v) => self.search_expression_deref(v),
+            Expression::DotAccess(v) => self.search_expression_dot_access(v),
+            Expression::Index(v) => self.search_expression_index(v),
+            Expression::Infix(v) => self.search_expression_infix(v),
+            Expression::Literal(v) => self.search_expression_literal(v),
+            Expression::Negate(v) => self.search_expression_negate(v),
+            Expression::SliceInit(v) => self.search_expression_slice_init(v),
+            Expression::Spread(v) => self.search_expression_spread(v),
+            Expression::StructInit(v) => self.search_expression_struct_init(v),
+            Expression::Type(v) => self.search_expression_type(v),
+            Expression::Closure(v) => self.search_expression_closure(v),
+            Expression::Nil => DfsRet::Continue,
+        }
+    }
+
+    fn search_expression_closure(&mut self, closure: &'a Closure) -> DfsRet {
+        self.search_body(closure.body.iter())
+    }
+
+    fn search_expression_type_init(&mut self, _type_init: &TypeInit) -> DfsRet {
+        DfsRet::Continue
+    }
+
+    fn search_expression_call(&mut self, call: &'a Call) -> DfsRet {
+        for exp in &call.arguments {
+            dfsret_return_if!(self.search_expression(exp));
+        }
+        DfsRet::Continue
+    }
+
+    fn search_expression_address(&mut self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
+    }
+
+    fn search_expression_andor(&mut self, andor: &'a AndOr) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&andor.left));
+        dfsret_return_if!(self.search_expression(&andor.right));
+        DfsRet::Continue
+    }
+
+    fn search_expression_deref(&mut self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
+    }
+
+    fn search_expression_type(&mut self, _type: &Type) -> DfsRet {
+        DfsRet::Continue
+    }
+
+    fn search_expression_infix(&mut self, infix: &'a Infix) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&infix.expression));
+        DfsRet::Continue
+    }
+
+    fn search_expression_index(&mut self, index: &'a Index) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&index.expression));
+        dfsret_return_if!(self.search_expression(&index.var));
+        DfsRet::Continue
+    }
+
+    fn search_expression_negate(&mut self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
+    }
+
+    fn search_expression_spread(&mut self, exp: &'a Expression) -> DfsRet {
+        dfsret_return_if!(self.search_expression(exp));
+        DfsRet::Continue
+    }
+
+    fn search_expression_literal(&mut self, _literal: &Literal) -> DfsRet {
+        DfsRet::Continue
+    }
+
+    fn search_expression_compare(&mut self, compare: &'a Compare) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&compare.left));
+        dfsret_return_if!(self.search_expression(&compare.right));
+        DfsRet::Continue
+    }
+
+    fn search_expression_arithmetic(&mut self, arithmetic: &'a Arithmetic) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&arithmetic.left));
+        dfsret_return_if!(self.search_expression(&arithmetic.right));
+        DfsRet::Continue
+    }
+
+    fn search_expression_dot_access(&mut self, dot_access: &'a DotAccess) -> DfsRet {
+        dfsret_return_if!(self.search_expression(&dot_access.expression));
+        DfsRet::Continue
+    }
+
+    fn search_expression_slice_init(&mut self, slice_init: &'a SliceInit) -> DfsRet {
+        for exp in &slice_init.expressions {
+            dfsret_return_if!(self.search_expression(exp));
+        }
+        DfsRet::Continue
+    }
+
+    fn search_expression_struct_init(&mut self, struct_init: &'a StructInit) -> DfsRet {
+        for exp in struct_init.fields.values() {
+            dfsret_return_if!(self.search_expression(exp));
+        }
+        DfsRet::Continue
     }
 }
 
@@ -614,6 +808,8 @@ impl<'a> TokenParser<'a> {
                 Ok(_type)
             }
             lexer::Token::Function => {
+                self.iter.next();
+
                 self.iter.expect(lexer::Token::POpen)?;
                 self.iter.next();
 
@@ -644,7 +840,7 @@ impl<'a> TokenParser<'a> {
                     arguments,
                 })))
             }
-            token => return Err(anyhow!("type_declaration: parse unknown {token:#?}")),
+            token => return Err(anyhow!("parse_type: parse unknown {token:#?}")),
         }
     }
 
@@ -964,9 +1160,6 @@ impl<'a> TokenParser<'a> {
     }
 
     fn parse_closure(&mut self) -> Result<Closure> {
-        self.iter.expect(lexer::Token::Function)?;
-        self.iter.next();
-
         let _type = self.parse_type()?;
         let body = self.parse_body()?;
 

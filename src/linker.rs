@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::{compiler, vm};
 
 fn link_jumps(
-    instructions: &Vec<Vec<compiler::Instruction>>,
+    instructions: &compiler::CompiledInstructions,
     offset: usize,
 ) -> Result<Vec<compiler::Instruction>> {
     let mut ins = Vec::<compiler::Instruction>::new();
@@ -52,7 +52,7 @@ fn link_jumps(
 }
 
 pub fn link(
-    functions: &HashMap<String, Vec<Vec<compiler::Instruction>>>,
+    functions: &HashMap<String, compiler::CompiledInstructions>,
 ) -> Result<Vec<vm::Instruction>> {
     let main = functions
         .get("main")
@@ -84,6 +84,7 @@ pub fn link(
                 compiler::Instruction::Jump((v, _)) => vm::Instruction::Jump(*v),
                 compiler::Instruction::JumpIfTrue((v, _)) => vm::Instruction::JumpIfTrue(*v),
                 compiler::Instruction::JumpIfFalse((v, _)) => vm::Instruction::JumpIfFalse(*v),
+                compiler::Instruction::PushClosure(_, _) => todo!(),
             })
         })
         .collect::<Result<Vec<vm::Instruction>>>()?;

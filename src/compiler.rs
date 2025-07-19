@@ -1,7 +1,126 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
-use crate::{ast, ast::Bfs, lexer, vm};
+use crate::{
+    ast::{self, Dfs, DfsMut},
+    lexer, vm,
+};
+
+#[derive(Debug)]
+struct VarStack<T> {
+    items: Vec<Vec<T>>,
+}
+
+impl<T> VarStack<T> {
+    fn new() -> Self {
+        let mut items = Vec::new();
+        items.push(Vec::new());
+        Self { items }
+    }
+
+    fn push(&mut self, item: T) {
+        self.items.last_mut().unwrap().push(item);
+    }
+
+    fn push_frame(&mut self) {
+        self.items.push(Vec::new());
+    }
+
+    fn pop_frame(&mut self) -> Option<Vec<T>> {
+        self.items.pop()
+    }
+}
+
+struct ClosureEscapedVariables<'a> {
+    closure: &'a ast::Closure,
+    var_stack: VarStack<String>,
+    not_found_variables: Vec<String>,
+}
+
+impl<'a> ClosureEscapedVariables<'a> {
+    fn new(closure: &'a ast::Closure) -> Self {
+        Self {
+            closure,
+            var_stack: VarStack::new(),
+            not_found_variables: Vec::new(),
+        }
+    }
+
+    fn search(mut self) -> Vec<String> {
+        self.search_body(self.closure.body.iter());
+        self.not_found_variables
+    }
+}
+
+impl<'a, 'b> ast::DfsMut<'b> for ClosureEscapedVariables<'a> {
+    fn search_body(&mut self, body: impl Iterator<Item = &'b ast::Node>) -> ast::DfsRet {
+        self.var_stack.push_frame();
+        let result = ast::dfsret_search_body!(self, body);
+        self.var_stack.pop_frame();
+        result
+    }
+
+    fn search_expression_type(&mut self, _type: &ast::Type) -> ast::DfsRet {
+        let ast::Type::Alias(identifier) = _type else {
+            return ast::DfsRet::Continue;
+        };
+
+        if let None = self
+            .var_stack
+            .items
+            .iter()
+            .flatten()
+            .find(|v| *v == identifier)
+        {
+            self.not_found_variables.push(identifier.clone());
+        }
+
+        ast::DfsRet::Continue
+    }
+
+    fn search_expression_closure(&mut self, _closure: &ast::Closure) -> ast::DfsRet {
+        // short cicruit on another closure
+        ast::DfsRet::Break
+    }
+
+    fn search_node_variable_declaration(
+        &mut self,
+        declaration: &ast::VariableDeclaration,
+    ) -> ast::DfsRet {
+        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
+        self.var_stack.push(declaration.variable.identifier.clone());
+        ast::DfsRet::Continue
+    }
+}
+
+struct DoesVariableEscapeInClosure<'a, 'b>(&'b DoesVariableEscape<'a>);
+
+impl<'a, 'b, 'c> ast::Dfs<'c> for DoesVariableEscapeInClosure<'a, 'b> {
+    fn search_expression_type(&self, _type: &ast::Type) -> ast::DfsRet {
+        let ast::Type::Alias(identifier) = _type else {
+            return ast::DfsRet::Continue;
+        };
+
+        if self.0.identifier == identifier {
+            ast::DfsRet::Found
+        } else {
+            ast::DfsRet::Continue
+        }
+    }
+
+    fn search_node_variable_declaration(
+        &self,
+        declaration: &ast::VariableDeclaration,
+    ) -> ast::DfsRet {
+        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
+
+        if declaration.variable.identifier == self.0.identifier {
+            return ast::DfsRet::Break;
+        }
+
+        ast::DfsRet::Continue
+    }
+}
 
 struct DoesVariableEscape<'a> {
     identifier: &'a str,
@@ -13,13 +132,13 @@ impl<'a> DoesVariableEscape<'a> {
     }
 }
 
-impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
-    fn search_expression_address(&self, exp: &ast::Expression) -> ast::BfsRet {
+impl<'a, 'b> ast::Dfs<'b> for DoesVariableEscape<'a> {
+    fn search_expression_address(&self, exp: &ast::Expression) -> ast::DfsRet {
         match exp {
             ast::Expression::Type(_type) => {
                 if let ast::Type::Alias(identifier) = _type {
                     if self.identifier == identifier {
-                        return ast::BfsRet::Found;
+                        return ast::DfsRet::Found;
                     }
                 }
             }
@@ -35,14 +154,18 @@ impl<'a, 'b> ast::Bfs<'b> for DoesVariableEscape<'a> {
     fn search_node_variable_declaration(
         &self,
         declaration: &ast::VariableDeclaration,
-    ) -> ast::BfsRet {
-        ast::return_if_some_true!(self.search_expression(&declaration.expression));
+    ) -> ast::DfsRet {
+        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
 
         if declaration.variable.identifier == self.identifier {
-            return ast::BfsRet::Return;
+            return ast::DfsRet::Break;
         }
 
-        ast::BfsRet::Continue
+        ast::DfsRet::Continue
+    }
+
+    fn search_expression_closure(&self, closure: &'b ast::Closure) -> ast::DfsRet {
+        DoesVariableEscapeInClosure(self).search_expression_closure(closure)
     }
 }
 
@@ -63,7 +186,7 @@ impl<'a> CompilerBody<'a> {
     fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
         match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i + skip))
         {
-            ast::BfsRet::Found => true,
+            ast::DfsRet::Found => true,
             _ => false,
         }
     }
@@ -76,6 +199,7 @@ pub enum Instruction {
     Jump((usize, usize)),
     JumpIfTrue((usize, usize)),
     JumpIfFalse((usize, usize)),
+    PushClosure(usize, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -86,18 +210,16 @@ enum VarStackItem {
     Label,
 }
 
-#[derive(Debug, Clone)]
-struct VarStack {
-    stack: Vec<Vec<VarStackItem>>,
+#[derive(Debug)]
+struct CompilerVarStack {
+    stack: VarStack<VarStackItem>,
     arg_size: Option<usize>,
 }
 
-impl VarStack {
+impl CompilerVarStack {
     fn new() -> Self {
-        let mut stack = Vec::new();
-        stack.push(Vec::new());
         Self {
-            stack,
+            stack: VarStack::new(),
             arg_size: None,
         }
     }
@@ -106,20 +228,8 @@ impl VarStack {
         self.arg_size = Some(self.total_size());
     }
 
-    fn push_frame(&mut self, frame: Vec<VarStackItem>) {
-        self.stack.push(frame);
-    }
-
-    fn pop_frame(&mut self) -> Vec<VarStackItem> {
-        self.stack.pop().unwrap_or(Vec::new())
-    }
-
-    fn push(&mut self, item: VarStackItem) {
-        self.stack.last_mut().unwrap().push(item);
-    }
-
     fn total_size(&self) -> usize {
-        Self::size_for(self.stack.iter().flatten())
+        Self::size_for(self.stack.items.iter().flatten())
     }
 
     fn inc_offset_item(offset: &mut isize, item: &VarStackItem) {
@@ -131,7 +241,7 @@ impl VarStack {
     }
 
     fn iter(&self) -> impl Iterator<Item = &VarStackItem> {
-        self.stack.iter().flatten().rev()
+        self.stack.items.iter().flatten().rev()
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -280,23 +390,23 @@ fn align(alignment: usize, stack_size: usize) -> usize {
 
 struct Instructions {
     stack_instructions: StackInstructions,
-    var_stack: VarStack,
+    var_stack: CompilerVarStack,
 }
 
 impl Instructions {
     fn new() -> Self {
         Self {
             stack_instructions: StackInstructions::new(),
-            var_stack: VarStack::new(),
+            var_stack: CompilerVarStack::new(),
         }
     }
 
     fn var_mark(&mut self, var: Variable) {
-        self.var_stack.push(VarStackItem::Var(var));
+        self.var_stack.stack.push(VarStackItem::Var(var));
     }
 
     fn var_mark_label(&mut self) {
-        self.var_stack.push(VarStackItem::Label);
+        self.var_stack.stack.push(VarStackItem::Label);
     }
 
     fn var_get_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
@@ -318,27 +428,30 @@ impl Instructions {
     fn instr_alloc(&mut self, size: usize, alignment: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Alloc(size, alignment)));
-        self.var_stack.push(VarStackItem::Reset(size));
-        self.var_stack.push(VarStackItem::Increment(PTR_SIZE));
+        self.var_stack.stack.push(VarStackItem::Reset(size));
+        self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
     }
 
     fn instr_deref(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Deref(size)));
-        self.var_stack.push(VarStackItem::Reset(PTR_SIZE));
-        self.var_stack.push(VarStackItem::Increment(size));
+        self.var_stack.stack.push(VarStackItem::Reset(PTR_SIZE));
+        self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_deref_assign(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::DerefAssign(size)));
-        self.var_stack.push(VarStackItem::Reset(PTR_SIZE + size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(PTR_SIZE + size));
     }
 
     fn instr_slice_index_set(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::SliceIndexSet(size)));
         self.var_stack
+            .stack
             .push(VarStackItem::Reset(size + SLICE_SIZE + INT.size));
     }
 
@@ -346,33 +459,36 @@ impl Instructions {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::SliceIndexGet(size)));
         self.var_stack
+            .stack
             .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
-        self.var_stack.push(VarStackItem::Increment(size));
+        self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_slice_len(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::SliceLen));
-        self.var_stack.push(VarStackItem::Reset(SLICE_SIZE));
-        self.var_stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(SLICE_SIZE));
+        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
     }
 
     fn instr_slice_append(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::SliceAppend(size)));
-        self.var_stack.push(VarStackItem::Reset(SLICE_SIZE + size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(SLICE_SIZE + size));
     }
 
     fn instr_and(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::And));
-        self.var_stack.push(VarStackItem::Reset(BOOL.size));
+        self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
     }
 
     fn instr_or(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Or));
-        self.var_stack.push(VarStackItem::Reset(BOOL.size));
+        self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
     }
 
     fn instr_negate_bool(&mut self) {
@@ -383,7 +499,7 @@ impl Instructions {
     fn instr_increment(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Increment(size)));
-        self.var_stack.push(VarStackItem::Increment(size));
+        self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_reset_dangerous_not_synced(&mut self, size: usize) {
@@ -394,13 +510,22 @@ impl Instructions {
     fn instr_reset(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(size)));
-        self.var_stack.push(VarStackItem::Reset(size));
+        self.var_stack.stack.push(VarStackItem::Reset(size));
+    }
+
+    fn instr_push_closure(&mut self, escaped_count: usize, function_index: usize) {
+        self.stack_instructions
+            .push(Instruction::PushClosure(escaped_count, function_index));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(escaped_count * PTR_SIZE));
     }
 
     fn instr_push_slice_new_len(&mut self, size: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushSliceNewLen(size)));
         self.var_stack
+            .stack
             .push(VarStackItem::Reset(size + INT.size - SLICE_SIZE));
     }
 
@@ -409,7 +534,9 @@ impl Instructions {
 
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushSlice));
-        self.var_stack.push(VarStackItem::Increment(SLICE_SIZE));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(SLICE_SIZE));
     }
 
     fn instr_push_u8(&mut self, int: usize) -> Result<()> {
@@ -418,7 +545,9 @@ impl Instructions {
 
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushU8(uint8)));
-        self.var_stack.push(VarStackItem::Increment(UINT8.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(UINT8.size));
 
         Ok(())
     }
@@ -429,7 +558,7 @@ impl Instructions {
 
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushI(int)));
-        self.var_stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
 
         Ok(())
     }
@@ -442,45 +571,49 @@ impl Instructions {
     fn instr_add_i(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::AddI));
-        self.var_stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_multiply_i(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::MultiplyI));
-        self.var_stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_divide_i(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::DivideI));
-        self.var_stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_modulo_i(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::ModuloI));
-        self.var_stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_to_bool(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::ToBoolI));
-        self.var_stack.push(VarStackItem::Reset(INT.size));
-        self.var_stack.push(VarStackItem::Increment(BOOL.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(BOOL.size));
     }
 
     fn instr_compare_i(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::CompareI));
-        self.var_stack.push(VarStackItem::Reset(INT.size * 2));
-        self.var_stack.push(VarStackItem::Increment(BOOL.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(BOOL.size));
     }
 
     fn instr_add_string(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::AddString));
-        self.var_stack.push(VarStackItem::Reset(STRING.size));
+        self.var_stack.stack.push(VarStackItem::Reset(STRING.size));
     }
 
     fn instr_push_static(&mut self, index: usize, size: usize, alignment: usize) {
@@ -488,7 +621,7 @@ impl Instructions {
 
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::PushStatic(index, size)));
-        self.var_stack.push(VarStackItem::Increment(size));
+        self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_copy(&mut self, dst: usize, src: usize, size: usize) {
@@ -501,8 +634,10 @@ impl Instructions {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::CastIntUint8));
 
-        self.var_stack.push(VarStackItem::Reset(INT.size));
-        self.var_stack.push(VarStackItem::Increment(UINT8.size));
+        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(UINT8.size));
     }
 
     // align before calling this
@@ -510,8 +645,8 @@ impl Instructions {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::CastUint8Int));
 
-        self.var_stack.push(VarStackItem::Reset(UINT8.size));
-        self.var_stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(UINT8.size));
+        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
     }
 
     fn instr_cast_slice_ptr(&mut self) {
@@ -537,15 +672,16 @@ impl Instructions {
     fn instr_shift(&mut self, size: usize, amount: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Shift(size, amount)));
-        self.var_stack.push(VarStackItem::Reset(amount));
+        self.var_stack.stack.push(VarStackItem::Reset(amount));
     }
 
     fn instr_libc_write(&mut self) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::LibcWrite));
         self.var_stack
+            .stack
             .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
-        self.var_stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
     }
 
     fn push_alignment(&mut self, alignment: usize) -> usize {
@@ -561,21 +697,21 @@ impl Instructions {
     }
 
     fn push_stack_frame(&mut self) {
-        self.var_stack.push_frame(Vec::new());
+        self.var_stack.stack.push_frame();
     }
 
     fn pop_stack_frame(&mut self) {
-        let frame = self.var_stack.pop_frame();
+        let frame = self.var_stack.stack.pop_frame().unwrap();
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
-                VarStack::size_for(frame.iter()),
+                CompilerVarStack::size_for(frame.iter()),
             )));
     }
 
     fn pop_stack_frame_size(&mut self) -> usize {
-        let frame = self.var_stack.pop_frame();
-        let size = VarStack::size_for(frame.iter());
-        frame.into_iter().for_each(|v| self.var_stack.push(v));
+        let frame = self.var_stack.stack.pop_frame().unwrap();
+        let size = CompilerVarStack::size_for(frame.iter());
+        frame.into_iter().for_each(|v| self.var_stack.stack.push(v));
         size
     }
 
@@ -600,11 +736,15 @@ impl Instructions {
             );
 
             if alignment != 0 {
-                self.var_stack.push(VarStackItem::Increment(alignment));
+                self.var_stack
+                    .stack
+                    .push(VarStackItem::Increment(alignment));
             }
 
             let escaped = compiler_body.does_variable_escape(&arg.identifier, 0);
-            self.var_stack.push(VarStackItem::Increment(_type.size));
+            self.var_stack
+                .stack
+                .push(VarStackItem::Increment(_type.size));
             self.var_mark(Variable {
                 identifier: arg.identifier.clone(),
                 _type: _type.clone(),
@@ -620,10 +760,12 @@ impl Instructions {
         if function.identifier != "main" {
             let alignment = align(PTR_SIZE, self.var_stack.total_size());
             if alignment != 0 {
-                self.var_stack.push(VarStackItem::Increment(alignment));
+                self.var_stack
+                    .stack
+                    .push(VarStackItem::Increment(alignment));
             }
 
-            self.var_stack.push(VarStackItem::Increment(PTR_SIZE));
+            self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
         }
 
         self.var_stack.set_arg_size();
@@ -963,6 +1105,7 @@ impl<'a> TypeResolver<'a> {
                     _type: TypeType::Address(Box::new(nested)),
                 })
             }
+            ast::Type::Closure(type_closure) => todo!(),
         }
     }
 }
@@ -1003,11 +1146,20 @@ impl DotAccessField {
 
 pub struct FunctionCompiler<'a> {
     instructions: Instructions,
-    compiler_body: CompilerBody<'a>,
+    closures: Vec<CompiledInstructions>,
+    compiler_body: Vec<CompilerBody<'a>>,
     type_resolver: TypeResolver<'a>,
     function: &'a ast::FunctionDeclaration,
     function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
     static_memory: &'a mut vm::StaticMemory,
+}
+
+pub type CompiledInstructions = Vec<Vec<Instruction>>;
+
+#[derive(Debug)]
+pub struct CompiledFunction {
+    pub instructions: CompiledInstructions,
+    pub closures: Vec<CompiledInstructions>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -1017,13 +1169,16 @@ impl<'a> FunctionCompiler<'a> {
         type_declarations: &'a HashMap<String, ast::Type>,
         function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
     ) -> Self {
+        let mut compiler_body = Vec::new();
+        compiler_body.push(CompilerBody::new(&function.body));
         Self {
             function_declarations,
             static_memory,
             function,
+            closures: Vec::new(),
             instructions: Instructions::new(),
             type_resolver: TypeResolver::new(type_declarations),
-            compiler_body: CompilerBody::new(&function.body),
+            compiler_body,
         }
     }
 
@@ -1715,10 +1870,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Type(_type) => {
                 let (offset, var) = self.resolve_variable(_type)?;
 
-                assert_eq!(
-                    var.escaped, true,
-                    "compile_address: rn all variables escaped"
-                );
+                assert!(var.escaped, "compile_address: rn all variables escaped");
 
                 let alignment = self.instructions.push_alignment(PTR_SIZE);
                 self.instructions.instr_increment(PTR_SIZE);
@@ -1798,6 +1950,25 @@ impl<'a> FunctionCompiler<'a> {
         Ok(NIL.clone())
     }
 
+    fn compile_closure(&mut self, closure: &ast::Closure) -> Result<Type> {
+        self.instructions.push_alignment(PTR_SIZE);
+
+        let escaped_variables = ClosureEscapedVariables::new(closure).search();
+        for var in &escaped_variables {
+            let (offset, variable) = self.resolve_variable(&ast::Type::Alias(var.clone()))?;
+            assert!(
+                variable.escaped,
+                "found non escaped variable when compiling closure",
+            );
+
+            self.instructions.instr_increment(PTR_SIZE);
+            self.instructions.instr_copy(0, PTR_SIZE + offset, PTR_SIZE);
+        }
+
+        self.instructions
+            .instr_push_closure(escaped_variables.len(), self.closures.len());
+    }
+
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
@@ -1818,6 +1989,7 @@ impl<'a> FunctionCompiler<'a> {
             ast::Expression::Deref(v) => self.compile_deref(v),
             ast::Expression::Address(v) => self.compile_address(v),
             ast::Expression::Type(v) => self.compile_type(v),
+            ast::Expression::Closure(v) => self.compile_closure(v),
             ast::Expression::Nil => self.compile_nil(),
         }?;
 
@@ -1840,6 +2012,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<()> {
         let escaped = self
             .compiler_body
+            .last()
+            .unwrap()
             .does_variable_escape(&declaration.variable.identifier, 1);
         if escaped {
             self.instructions.push_alignment(PTR_SIZE);
@@ -2278,15 +2452,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_body(&mut self, body: &'a [ast::Node]) -> Result<()> {
-        self.compiler_body = CompilerBody::new(body);
-
+        self.compiler_body.push(CompilerBody::new(body));
         self.instructions.push_stack_frame();
 
         for node in body {
             self.compile_node(node)?;
-            self.compiler_body.next();
+            self.compiler_body.last_mut().unwrap().next();
         }
 
+        self.compiler_body.pop();
         self.instructions.pop_stack_frame();
 
         Ok(())
@@ -2313,18 +2487,21 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    pub fn compile(mut self) -> Result<Vec<Vec<Instruction>>> {
+    pub fn compile(mut self) -> Result<CompiledFunction> {
         self.instructions.init_function_prologue(
             self.function,
             &self.type_resolver,
-            &self.compiler_body,
+            self.compiler_body.last().unwrap(),
         )?;
 
         self.compile_body(&self.function.body)?;
 
         self.compile_return(None)?;
 
-        Ok(self.instructions.get_instructions())
+        Ok(CompiledFunction {
+            instructions: self.instructions.get_instructions(),
+            closures: self.closures,
+        })
     }
 }
 
