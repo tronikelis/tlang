@@ -330,28 +330,19 @@ impl Lexer {
 
                 tokens.push(Token::Identifier(identifier));
 
-                if let Some(ch) = self.peek_char(0) {
-                    match ch {
-                        '+' => {
-                            if let Some(ch) = self.peek_char(1) {
-                                if ch == '+' {
-                                    self.next();
-                                    self.next();
-                                    tokens.push(Token::PlusPlus);
-                                }
-                            }
+                match (self.peek_char(0), self.peek_char(1)) {
+                    (Some(ch1), Some(ch2)) => {
+                        if ch1 == '+' && ch2 == '+' {
+                            self.next();
+                            self.next();
+                            tokens.push(Token::PlusPlus);
+                        } else if ch1 == '-' && ch2 == '-' {
+                            self.next();
+                            self.next();
+                            tokens.push(Token::MinusMinus);
                         }
-                        '-' => {
-                            if let Some(ch) = self.peek_char(1) {
-                                if ch == '-' {
-                                    self.next();
-                                    self.next();
-                                    tokens.push(Token::MinusMinus);
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    _ => {}
                 }
 
                 continue;

@@ -968,10 +968,11 @@ impl Type {
             }
         }
 
-        if let Some(self_id) = &self.id {
-            if let Some(other_id) = &other.id {
+        match (&self.id, &other.id) {
+            (Some(self_id), Some(other_id)) => {
                 return self_id == other_id;
             }
+            _ => {}
         }
 
         let mut self_clone = self.clone();
