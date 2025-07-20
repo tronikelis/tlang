@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 mod vm;
 
@@ -226,14 +226,17 @@ fn main() {
     println!("{:#?}", ast);
 
     let mut functions = HashMap::<String, compiler::CompiledInstructions>::new();
-    let mut static_memory = vm::StaticMemory::new();
+    let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
-    for (identifier, function) in &ast.function_declarations {
+    let type_resolver = Rc::new(compiler::TypeResolver::new(ast.type_declarations));
+    let function_declarations = Rc::new(ast.function_declarations);
+
+    for (identifier, declaration) in function_declarations.iter() {
         let compiled = compiler::FunctionCompiler::new(
-            function,
-            &mut static_memory,
-            &ast.type_declarations,
-            &ast.function_declarations,
+            compiler::Function::from_declaration(&type_resolver, declaration).unwrap(),
+            static_memory.clone(),
+            type_resolver.clone(),
+            function_declarations.clone(),
         )
         .compile()
         .unwrap();
@@ -245,5 +248,5 @@ fn main() {
 
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
-    vm::Vm::new(instructions, static_memory).run();
+    vm::Vm::new(instructions, static_memory.borrow().clone()).run();
 }

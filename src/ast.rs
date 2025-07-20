@@ -604,13 +604,13 @@ pub enum Node {
 
 #[derive(Debug, Clone)]
 pub struct TypeStruct {
-    pub fields: Vec<(String, Type)>,
+    pub fields: Vec<Variable>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeClosure {
-    arguments: Vec<(String, Type)>,
-    return_type: Type,
+    pub arguments: Vec<Variable>,
+    pub return_type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -621,6 +621,15 @@ pub enum Type {
     Variadic(Box<Type>),
     Address(Box<Type>),
     Closure(Box<TypeClosure>),
+}
+
+impl Type {
+    pub fn closure_err(&self) -> Result<&TypeClosure> {
+        match self {
+            Self::Closure(v) => Ok(v),
+            _type => Err(anyhow!("closure_err: got {_type:#?}")),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -766,12 +775,15 @@ impl<'a> TokenParser<'a> {
         self.iter.expect(lexer::Token::COpen)?;
         self.iter.next();
 
-        let mut fields: Vec<(String, Type)> = Vec::new();
+        let mut fields: Vec<Variable> = Vec::new();
 
         while *self.iter.peek_err(0)? != lexer::Token::CClose {
             let field_identifier = self.parse_identifier()?;
             let field_type = self.parse_type()?;
-            fields.push((field_identifier, field_type));
+            fields.push(Variable {
+                _type: field_type,
+                identifier: field_identifier,
+            });
         }
 
         self.iter.next();
@@ -830,7 +842,10 @@ impl<'a> TokenParser<'a> {
                     let iden = self.parse_identifier()?;
                     let _type = self.parse_type()?;
 
-                    arguments.push((iden, _type));
+                    arguments.push(Variable {
+                        identifier: iden,
+                        _type,
+                    });
                 }
 
                 let return_type = self.parse_type()?;

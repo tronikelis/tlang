@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
     ast::{self, Dfs, DfsMut},
@@ -39,9 +39,15 @@ struct ClosureEscapedVariables<'a> {
 
 impl<'a> ClosureEscapedVariables<'a> {
     fn new(closure: &'a ast::Closure) -> Self {
+        let mut var_stack = VarStack::new();
+
+        for var in &closure._type.closure_err().unwrap().arguments {
+            var_stack.push(var.identifier.clone());
+        }
+
         Self {
             closure,
-            var_stack: VarStack::new(),
+            var_stack,
             not_found_variables: Vec::new(),
         }
     }
@@ -130,6 +136,13 @@ impl<'a> DoesVariableEscape<'a> {
     fn new(identifier: &'a str) -> Self {
         Self { identifier }
     }
+
+    fn search(self, iter: impl Iterator<Item = &'a ast::Node>) -> bool {
+        match self.search_body(iter) {
+            ast::DfsRet::Found => true,
+            _ => false,
+        }
+    }
 }
 
 impl<'a, 'b> ast::Dfs<'b> for DoesVariableEscape<'a> {
@@ -169,13 +182,13 @@ impl<'a, 'b> ast::Dfs<'b> for DoesVariableEscape<'a> {
     }
 }
 
-struct CompilerBody<'a> {
+struct CompilerBody {
     i: usize,
-    body: &'a [ast::Node],
+    body: Vec<ast::Node>,
 }
 
-impl<'a> CompilerBody<'a> {
-    fn new(body: &'a [ast::Node]) -> Self {
+impl CompilerBody {
+    fn new(body: Vec<ast::Node>) -> Self {
         Self { body, i: 0 }
     }
 
@@ -184,11 +197,7 @@ impl<'a> CompilerBody<'a> {
     }
 
     fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
-        match DoesVariableEscape::new(identifier).search_body(self.body.iter().skip(self.i + skip))
-        {
-            ast::DfsRet::Found => true,
-            _ => false,
-        }
+        DoesVariableEscape::new(identifier).search(self.body.iter().skip(self.i + skip))
     }
 }
 
@@ -715,20 +724,15 @@ impl Instructions {
         size
     }
 
-    fn init_function_prologue(
-        &mut self,
-        function: &ast::FunctionDeclaration,
-        type_resolver: &TypeResolver,
-        compiler_body: &CompilerBody,
-    ) -> Result<()> {
+    fn init_function_prologue(&mut self, function: &Function) -> Result<()> {
         // push arguments to var_stack, they are already in the stack
         // push return address to var_stack
 
         let mut escaped_variables: Vec<(String, Type)> = Vec::new();
 
-        for arg in function.arguments.iter() {
-            let _type = type_resolver.resolve(&arg._type)?;
-            let return_type = type_resolver.resolve(&function.return_type)?;
+        for arg in &function.arguments {
+            let _type = arg._type.clone();
+            let return_type = function.return_type.clone();
 
             let alignment = align(
                 _type.alignment,
@@ -741,17 +745,12 @@ impl Instructions {
                     .push(VarStackItem::Increment(alignment));
             }
 
-            let escaped = compiler_body.does_variable_escape(&arg.identifier, 0);
             self.var_stack
                 .stack
                 .push(VarStackItem::Increment(_type.size));
-            self.var_mark(Variable {
-                identifier: arg.identifier.clone(),
-                _type: _type.clone(),
-                escaped,
-            });
+            self.var_mark(arg.clone());
 
-            if escaped {
+            if arg.escaped {
                 escaped_variables.push((arg.identifier.clone(), _type));
             }
         }
@@ -786,7 +785,7 @@ impl Instructions {
         Ok(())
     }
 
-    fn init_function_epilogue(&mut self, function: &ast::FunctionDeclaration) {
+    fn init_function_epilogue(&mut self, function: &Function) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Reset(
                 self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
@@ -922,6 +921,12 @@ enum TypeBuiltin {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct TypeClosure {
+    arguments: Vec<(String, Type)>,
+    return_type: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum TypeType {
     Struct(TypeStruct),
     Variadic(Box<Type>),
@@ -929,6 +934,16 @@ enum TypeType {
     Builtin(TypeBuiltin),
     Address(Box<Type>),
     Lazy(String),
+    Closure(Box<TypeClosure>),
+}
+
+impl TypeType {
+    fn closure_err(self) -> Result<TypeClosure> {
+        match self {
+            Self::Closure(v) => Ok(*v),
+            _type => Err(anyhow!("closure_err: got {_type:#?}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -999,12 +1014,13 @@ impl Type {
     }
 }
 
-struct TypeResolver<'a> {
-    type_declarations: &'a HashMap<String, ast::Type>,
+#[derive(Debug, Clone)]
+pub struct TypeResolver {
+    type_declarations: HashMap<String, ast::Type>,
 }
 
-impl<'a> TypeResolver<'a> {
-    fn new(type_declarations: &'a HashMap<String, ast::Type>) -> Self {
+impl TypeResolver {
+    pub fn new(type_declarations: HashMap<String, ast::Type>) -> Self {
         Self { type_declarations }
     }
 
@@ -1073,8 +1089,8 @@ impl<'a> TypeResolver<'a> {
                 let mut size: usize = 0;
                 let mut highest_alignment: usize = 0;
 
-                for (identifier, _type) in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(_type, alias)?;
+                for var in &type_struct.fields {
+                    let resolved = self.resolve_with_alias(&var._type, alias)?;
                     if resolved.alignment > highest_alignment {
                         highest_alignment = resolved.alignment;
                     }
@@ -1083,7 +1099,7 @@ impl<'a> TypeResolver<'a> {
                     size += resolved.size;
                     size += alignment;
                     fields.push(TypeStructField::Padding(alignment));
-                    fields.push(TypeStructField::Type(identifier.clone(), resolved));
+                    fields.push(TypeStructField::Type(var.identifier.clone(), resolved));
                 }
 
                 let end_padding = align(highest_alignment, size);
@@ -1106,7 +1122,27 @@ impl<'a> TypeResolver<'a> {
                     _type: TypeType::Address(Box::new(nested)),
                 })
             }
-            ast::Type::Closure(type_closure) => todo!(),
+            ast::Type::Closure(type_closure) => {
+                let mut arguments = Vec::new();
+
+                for var in &type_closure.arguments {
+                    let resolved = self.resolve_with_alias(&var._type, alias)?;
+                    arguments.push((var.identifier.clone(), resolved));
+                }
+
+                let resolved_return_type =
+                    self.resolve_with_alias(&type_closure.return_type, alias)?;
+
+                Ok(Type {
+                    id: None,
+                    size: PTR_SIZE,
+                    alignment: PTR_SIZE,
+                    _type: TypeType::Closure(Box::new(TypeClosure {
+                        arguments,
+                        return_type: resolved_return_type,
+                    })),
+                })
+            }
         }
     }
 }
@@ -1145,14 +1181,69 @@ impl DotAccessField {
     }
 }
 
-pub struct FunctionCompiler<'a> {
+pub struct Function {
+    identifier: String,
+    arguments: Vec<Variable>,
+    return_type: Type,
+    body: Vec<ast::Node>,
+}
+
+impl Function {
+    pub fn from_declaration(
+        type_resolver: &TypeResolver,
+        declaration: &ast::FunctionDeclaration,
+    ) -> Result<Self> {
+        Ok(Self {
+            identifier: declaration.identifier.clone(),
+            body: declaration.body.clone(),
+            return_type: type_resolver.resolve(&declaration.return_type)?,
+            arguments: declaration
+                .arguments
+                .iter()
+                .map(|v| {
+                    Ok(Variable {
+                        _type: type_resolver.resolve(&v._type)?,
+                        identifier: v.identifier.clone(),
+                        escaped: DoesVariableEscape::new(&v.identifier)
+                            .search(declaration.body.iter()),
+                    })
+                })
+                .collect::<Result<_, anyhow::Error>>()?,
+        })
+    }
+
+    fn from_closure(type_resolver: &TypeResolver, closure: &ast::Closure) -> Result<Self> {
+        let closure_type = type_resolver
+            .resolve(&closure._type)?
+            ._type
+            .closure_err()
+            .unwrap();
+
+        Ok(Self {
+            identifier: "".to_string(), // todo??? what to do
+            body: closure.body.clone(),
+            return_type: closure_type.return_type.clone(),
+            arguments: closure_type
+                .arguments
+                .iter()
+                .map(|(identifier, _type)| Variable {
+                    _type: _type.clone(),
+                    identifier: identifier.clone(),
+                    escaped: DoesVariableEscape::new(identifier).search(closure.body.iter()),
+                })
+                .collect(),
+        })
+    }
+}
+
+pub struct FunctionCompiler {
     instructions: Instructions,
-    closures: Vec<CompiledInstructions>,
-    compiler_body: Vec<CompilerBody<'a>>,
-    type_resolver: TypeResolver<'a>,
-    function: &'a ast::FunctionDeclaration,
-    function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
-    static_memory: &'a mut vm::StaticMemory,
+    function: Function,
+    closures: Vec<CompiledFunction>,
+    current_body: Vec<CompilerBody>,
+    type_resolver: Rc<TypeResolver>,
+    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
 pub type CompiledInstructions = Vec<Vec<Instruction>>;
@@ -1160,26 +1251,26 @@ pub type CompiledInstructions = Vec<Vec<Instruction>>;
 #[derive(Debug)]
 pub struct CompiledFunction {
     pub instructions: CompiledInstructions,
-    pub closures: Vec<CompiledInstructions>,
+    pub closures: Vec<CompiledFunction>,
 }
 
-impl<'a> FunctionCompiler<'a> {
+impl FunctionCompiler {
     pub fn new(
-        function: &'a ast::FunctionDeclaration,
-        static_memory: &'a mut vm::StaticMemory,
-        type_declarations: &'a HashMap<String, ast::Type>,
-        function_declarations: &'a HashMap<String, ast::FunctionDeclaration>,
+        function: Function,
+        static_memory: Rc<RefCell<vm::StaticMemory>>,
+        type_resolver: Rc<TypeResolver>,
+        function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
     ) -> Self {
-        let mut compiler_body = Vec::new();
-        compiler_body.push(CompilerBody::new(&function.body));
+        let mut current_body = Vec::new();
+        current_body.push(CompilerBody::new(function.body.clone()));
         Self {
             function_declarations,
             static_memory,
             function,
             closures: Vec::new(),
             instructions: Instructions::new(),
-            type_resolver: TypeResolver::new(type_declarations),
-            compiler_body,
+            type_resolver,
+            current_body,
         }
     }
 
@@ -1476,7 +1567,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             lexer::Literal::String(string) => {
-                let index = self.static_memory.push_string_slice(&string);
+                let index = self.static_memory.borrow_mut().push_string_slice(&string);
                 self.instructions
                     .instr_push_static(index, SLICE_SIZE, SLICE_SIZE);
             }
@@ -1954,20 +2045,40 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_closure(&mut self, closure: &ast::Closure) -> Result<Type> {
         self.instructions.push_alignment(PTR_SIZE);
 
-        let escaped_variables = ClosureEscapedVariables::new(closure).search();
-        for var in &escaped_variables {
-            let (offset, variable) = self.resolve_variable(&ast::Type::Alias(var.clone()))?;
-            assert!(
-                variable.escaped,
-                "found non escaped variable when compiling closure",
-            );
+        let escaped_variables = ClosureEscapedVariables::new(closure)
+            .search()
+            .into_iter()
+            .map(|v| {
+                let (offset, variable) = self.resolve_variable(&ast::Type::Alias(v))?;
+                assert!(
+                    variable.escaped,
+                    "found non escaped variable when compiling closure",
+                );
 
-            self.instructions.instr_increment(PTR_SIZE);
-            self.instructions.instr_copy(0, PTR_SIZE + offset, PTR_SIZE);
-        }
+                self.instructions.instr_increment(PTR_SIZE);
+                self.instructions.instr_copy(0, PTR_SIZE + offset, PTR_SIZE);
+
+                Ok(variable)
+            })
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
         self.instructions
             .instr_push_closure(escaped_variables.len(), self.closures.len());
+
+        let mut closure_function = Function::from_closure(&self.type_resolver, &closure).unwrap();
+        closure_function.arguments = [escaped_variables, closure_function.arguments].concat();
+
+        self.closures.push(
+            Self::new(
+                closure_function,
+                self.static_memory.clone(),
+                self.type_resolver.clone(),
+                self.function_declarations.clone(),
+            )
+            .compile()?,
+        );
+
+        Ok(self.resolve_type(&closure._type)?)
     }
 
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
@@ -2012,7 +2123,7 @@ impl<'a> FunctionCompiler<'a> {
         declaration: &ast::VariableDeclaration,
     ) -> Result<()> {
         let escaped = self
-            .compiler_body
+            .current_body
             .last()
             .unwrap()
             .does_variable_escape(&declaration.variable.identifier, 1);
@@ -2285,11 +2396,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_if_block(
-        &mut self,
-        expression: &ast::Expression,
-        body: &'a [ast::Node],
-    ) -> Result<()> {
+    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
         let exp = self.compile_expression(expression)?;
         if exp != *BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
@@ -2304,7 +2411,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_if(&mut self, _if: &'a ast::If) -> Result<()> {
+    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
         self.instructions.push_stack_frame();
 
         self.instructions.stack_instructions.jump();
@@ -2327,7 +2434,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_for(&mut self, _for: &'a ast::For) -> Result<()> {
+    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
         self.instructions.push_stack_frame();
         if let Some(v) = &_for.initializer {
             self.compile_node(v)?;
@@ -2422,7 +2529,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_node(&mut self, node: &'a ast::Node) -> Result<()> {
+    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
         match node {
             ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
             ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
@@ -2452,16 +2559,16 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &'a [ast::Node]) -> Result<()> {
-        self.compiler_body.push(CompilerBody::new(body));
+    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
+        self.current_body.push(CompilerBody::new(body.to_vec()));
         self.instructions.push_stack_frame();
 
         for node in body {
             self.compile_node(node)?;
-            self.compiler_body.last_mut().unwrap().next();
+            self.current_body.last_mut().unwrap().next();
         }
 
-        self.compiler_body.pop();
+        self.current_body.pop();
         self.instructions.pop_stack_frame();
 
         Ok(())
@@ -2470,7 +2577,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_return(&mut self, exp: Option<&ast::Expression>) -> Result<()> {
         if let Some(exp) = exp {
             let exp = self.compile_expression(exp)?;
-            if exp != self.resolve_type(&self.function.return_type)? {
+            if exp != self.function.return_type {
                 return Err(anyhow!("incorrect type"));
             }
 
@@ -2483,19 +2590,15 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
 
-        self.instructions.init_function_epilogue(self.function);
+        self.instructions.init_function_epilogue(&self.function);
 
         Ok(())
     }
 
     pub fn compile(mut self) -> Result<CompiledFunction> {
-        self.instructions.init_function_prologue(
-            self.function,
-            &self.type_resolver,
-            self.compiler_body.last().unwrap(),
-        )?;
+        self.instructions.init_function_prologue(&self.function)?;
 
-        self.compile_body(&self.function.body)?;
+        self.compile_body(&self.function.body.clone())?;
 
         self.compile_return(None)?;
 
