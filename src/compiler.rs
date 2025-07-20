@@ -249,7 +249,7 @@ impl CompilerVarStack {
         };
     }
 
-    fn iter(&self) -> impl Iterator<Item = &VarStackItem> {
+    fn iter_rev(&self) -> impl Iterator<Item = &VarStackItem> {
         self.stack.items.iter().flatten().rev()
     }
 
@@ -264,7 +264,7 @@ impl CompilerVarStack {
 
     fn get_var_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
         let mut offset: isize = 0;
-        for item in self.iter() {
+        for item in self.iter_rev() {
             match item {
                 VarStackItem::Var(v) => {
                     if v.identifier == identifier {
@@ -280,7 +280,7 @@ impl CompilerVarStack {
 
     fn get_label_offset(&self) -> Option<usize> {
         let mut offset: isize = 0;
-        for item in self.iter() {
+        for item in self.iter_rev() {
             match item {
                 VarStackItem::Label => return Some(offset as usize),
                 item => Self::inc_offset_item(&mut offset, item),
