@@ -153,10 +153,10 @@ fn main() {
                         let ok fn() void = fn() void {
                             foo1 = 20
                         }
-                        ok()
+                        // ok()
                     }
 
-                    nice()
+                    // nice()
                     create_lists()
 
                     let one_two_three string = itoa(69420)

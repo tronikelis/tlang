@@ -84,11 +84,6 @@ impl<'a, 'b> ast::DfsMut<'b> for ClosureEscapedVariables<'a> {
         ast::DfsRet::Continue
     }
 
-    fn search_expression_closure(&mut self, _closure: &ast::Closure) -> ast::DfsRet {
-        // short cicruit on another closure
-        ast::DfsRet::Break
-    }
-
     fn search_node_variable_declaration(
         &mut self,
         declaration: &ast::VariableDeclaration,
@@ -2034,7 +2029,7 @@ impl FunctionCompiler {
             return self.compile_type_cast(&v);
         }
 
-        Err(anyhow!("compile_call: can't resolve call"))
+        Err(anyhow!("compile_call: can't resolve call {call:#?}"))
     }
 
     fn compile_nil(&mut self) -> Result<Type> {
@@ -2045,6 +2040,18 @@ impl FunctionCompiler {
     fn compile_closure(&mut self, closure: &ast::Closure) -> Result<Type> {
         self.instructions.push_alignment(PTR_SIZE);
 
+        // right now all nested closures capture everything inside them
+        // todo: find solution for this
+        //
+        // let foo = 20
+        // fn() void { <- this closure does not need to capture "foo" (BUT IT DOES)
+        //  fn() void { <- only this closure has to capture "foo"
+        //    foo = 50
+        //  }
+        // }
+        //
+        // is it even possible to fix this? closures are created lazily right now, so outer HAS to
+        // have inner values for it to copy them from the stack into nested closure
         let escaped_variables = ClosureEscapedVariables::new(closure)
             .search()
             .into_iter()
