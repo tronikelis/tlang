@@ -721,10 +721,8 @@ impl Instructions {
     }
 
     fn init_function_prologue(&mut self, function: &Function) -> Result<()> {
-        // push arguments to var_stack, they are already in the stack
-        // push return address to var_stack
-
         let mut escaped_variables: Vec<(String, Type)> = Vec::new();
+        let mut argument_size: usize = 0;
 
         for arg in &function.arguments {
             let (escaped, _type) = {
@@ -735,6 +733,8 @@ impl Instructions {
                 }
             };
             let return_type = function.return_type.clone();
+
+            argument_size += _type.size;
 
             let alignment = align(
                 _type.alignment,
@@ -755,6 +755,12 @@ impl Instructions {
             if escaped {
                 escaped_variables.push((arg.identifier.clone(), _type));
             }
+        }
+
+        if argument_size < function.return_type.size {
+            self.var_stack.stack.push(VarStackItem::Increment(
+                function.return_type.size - argument_size,
+            ))
         }
 
         // return address
