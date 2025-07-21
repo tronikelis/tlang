@@ -523,6 +523,7 @@ impl Instructions {
         self.var_stack
             .stack
             .push(VarStackItem::Reset(escaped_count * PTR_SIZE));
+        self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
     }
 
     fn instr_push_slice_new_len(&mut self, size: usize) {
@@ -769,6 +770,12 @@ impl Instructions {
         }
 
         self.var_stack.set_arg_size();
+
+        // already aligned because of return address
+        for arg in &function.closure_arguments {
+            self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
+            self.var_mark(arg.clone());
+        }
 
         for (identifier, _type) in escaped_variables {
             let (offset, _) = self.var_get_offset(&identifier).unwrap();
@@ -1207,6 +1214,7 @@ impl DotAccessField {
 pub struct Function {
     identifier: String,
     arguments: Vec<Variable>,
+    closure_arguments: Vec<Variable>,
     return_type: Type,
     body: Vec<ast::Node>,
 }
@@ -1220,6 +1228,7 @@ impl Function {
             identifier: declaration.identifier.clone(),
             body: declaration.body.clone(),
             return_type: type_resolver.resolve(&declaration.return_type)?,
+            closure_arguments: Vec::new(),
             arguments: declaration
                 .arguments
                 .iter()
@@ -1241,7 +1250,11 @@ impl Function {
         })
     }
 
-    fn from_closure(type_resolver: &TypeResolver, closure: &ast::Closure) -> Result<Self> {
+    fn from_closure(
+        type_resolver: &TypeResolver,
+        closure: &ast::Closure,
+        closure_arguments: Vec<Variable>,
+    ) -> Result<Self> {
         let closure_type = type_resolver
             .resolve(&closure._type)?
             ._type
@@ -1252,6 +1265,7 @@ impl Function {
             identifier: "".to_string(), // todo??? what to do
             body: closure.body.clone(),
             return_type: closure_type.return_type.clone(),
+            closure_arguments,
             arguments: closure_type
                 .arguments
                 .iter()
@@ -2110,7 +2124,8 @@ impl FunctionCompiler {
         self.instructions
             .instr_push_closure(escaped_variables.len(), self.closures.len());
 
-        let closure_function = Function::from_closure(&self.type_resolver, &closure).unwrap();
+        let closure_function =
+            Function::from_closure(&self.type_resolver, &closure, escaped_variables).unwrap();
 
         self.closures.push(
             Self::new(
