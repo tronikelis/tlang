@@ -726,7 +726,13 @@ impl Instructions {
         let mut escaped_variables: Vec<(String, Type)> = Vec::new();
 
         for arg in &function.arguments {
-            let _type = arg._type.clone();
+            let (escaped, _type) = {
+                if let TypeType::Escaped(_type) = arg._type._type.clone() {
+                    (true, *_type)
+                } else {
+                    (false, arg._type.clone())
+                }
+            };
             let return_type = function.return_type.clone();
 
             let alignment = align(
@@ -745,7 +751,7 @@ impl Instructions {
                 .push(VarStackItem::Increment(_type.size));
             self.var_mark(arg.clone());
 
-            if arg.escaped {
+            if escaped {
                 escaped_variables.push((arg.identifier.clone(), _type));
             }
         }
@@ -771,8 +777,7 @@ impl Instructions {
             self.instr_copy(0, offset + _type.size + alignment, _type.size);
             self.instr_alloc(_type.size, _type.alignment);
             self.var_mark(Variable {
-                escaped: true,
-                _type,
+                _type: Type::create_escaped(_type),
                 identifier,
             });
         }
@@ -930,6 +935,7 @@ enum TypeType {
     Address(Box<Type>),
     Lazy(String),
     Closure(Box<TypeClosure>),
+    Escaped(Box<Type>),
 }
 
 impl TypeType {
@@ -937,6 +943,13 @@ impl TypeType {
         match self {
             Self::Closure(v) => Ok(*v),
             _type => Err(anyhow!("closure_err: got {_type:#?}")),
+        }
+    }
+
+    fn is_escaped(&self) -> bool {
+        match self {
+            Self::Escaped(_) => true,
+            _ => false,
         }
     }
 }
@@ -969,6 +982,15 @@ impl Type {
         }
     }
 
+    fn create_escaped(item: Self) -> Self {
+        Self {
+            id: item.id.clone(),
+            size: PTR_SIZE,
+            alignment: PTR_SIZE,
+            _type: TypeType::Escaped(Box::new(item)),
+        }
+    }
+
     fn eq(&self, other: &Self) -> bool {
         if let TypeType::Builtin(builtin) = &self._type {
             if let TypeBuiltin::Nil = builtin {
@@ -994,9 +1016,9 @@ impl Type {
         other == self
     }
 
-    fn extract_variadic(&self) -> Option<Self> {
+    fn extract_variadic(&self) -> Option<&Self> {
         match &self._type {
-            TypeType::Variadic(item) => Some(*item.clone()),
+            TypeType::Variadic(item) => Some(&item),
             _ => None,
         }
     }
@@ -1156,7 +1178,6 @@ struct TypeCast {
 struct Variable {
     _type: Type,
     identifier: String,
-    escaped: bool,
 }
 
 #[derive(Debug)]
@@ -1196,11 +1217,17 @@ impl Function {
                 .arguments
                 .iter()
                 .map(|v| {
+                    let escaped =
+                        DoesVariableEscape::new(&v.identifier).search(declaration.body.iter());
+
+                    let mut _type = type_resolver.resolve(&v._type)?;
+                    if escaped {
+                        _type = Type::create_escaped(_type);
+                    }
+
                     Ok(Variable {
-                        _type: type_resolver.resolve(&v._type)?,
+                        _type,
                         identifier: v.identifier.clone(),
-                        escaped: DoesVariableEscape::new(&v.identifier)
-                            .search(declaration.body.iter()),
                     })
                 })
                 .collect::<Result<_, anyhow::Error>>()?,
@@ -1221,10 +1248,18 @@ impl Function {
             arguments: closure_type
                 .arguments
                 .iter()
-                .map(|(identifier, _type)| Variable {
-                    _type: _type.clone(),
-                    identifier: identifier.clone(),
-                    escaped: DoesVariableEscape::new(identifier).search(closure.body.iter()),
+                .map(|(identifier, _type)| {
+                    let escaped = DoesVariableEscape::new(identifier).search(closure.body.iter());
+
+                    let mut _type = _type.clone();
+                    if escaped {
+                        _type = Type::create_escaped(_type);
+                    }
+
+                    Variable {
+                        _type,
+                        identifier: identifier.clone(),
+                    }
                 })
                 .collect(),
         })
@@ -1491,7 +1526,7 @@ impl FunctionCompiler {
                     self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
 
                     let value_exp = self.compile_expression(arg)?;
-                    if value_exp != inner {
+                    if value_exp != *inner {
                         return Err(anyhow!("variadic argument type mismatch"));
                     }
 
@@ -1571,21 +1606,16 @@ impl FunctionCompiler {
         Ok(literal_type)
     }
 
-    fn compile_variable(&mut self, variable: &Variable) -> Result<Type> {
-        self.instructions.push_alignment(variable._type.alignment);
+    fn compile_variable(&mut self, mut offset: usize, variable: &Variable) -> Result<Type> {
+        offset += self.instructions.push_alignment(variable._type.alignment);
 
-        let (offset, var_item) = self
-            .instructions
-            .var_get_offset(&variable.identifier)
-            .ok_or(anyhow!("compile_identifier: unknown identifier"))?;
-
-        if var_item.escaped {
+        if let TypeType::Escaped(_type) = &variable._type._type {
             // this will leak alignment
             let alignment = self.instructions.push_alignment(PTR_SIZE);
             self.instructions.instr_increment(PTR_SIZE);
             self.instructions
                 .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
-            self.instructions.instr_deref(variable._type.size);
+            self.instructions.instr_deref(_type.size);
         } else {
             self.instructions.instr_increment(variable._type.size);
             self.instructions
@@ -1957,7 +1987,10 @@ impl FunctionCompiler {
             ast::Expression::Type(_type) => {
                 let (offset, var) = self.resolve_variable(_type)?;
 
-                assert!(var.escaped, "compile_address: rn all variables escaped");
+                assert!(
+                    var._type._type.is_escaped(),
+                    "compile_address: rn all variables escaped"
+                );
 
                 let alignment = self.instructions.push_alignment(PTR_SIZE);
                 self.instructions.instr_increment(PTR_SIZE);
@@ -2017,7 +2050,8 @@ impl FunctionCompiler {
     }
 
     fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
-        self.compile_variable(&self.resolve_variable(_type)?.1)
+        let (offset, variable) = self.resolve_variable(_type)?;
+        self.compile_variable(offset, &variable)
     }
 
     fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
@@ -2058,7 +2092,7 @@ impl FunctionCompiler {
             .map(|v| {
                 let (offset, variable) = self.resolve_variable(&ast::Type::Alias(v))?;
                 assert!(
-                    variable.escaped,
+                    variable._type._type.is_escaped(),
                     "found non escaped variable when compiling closure",
                 );
 
@@ -2072,8 +2106,7 @@ impl FunctionCompiler {
         self.instructions
             .instr_push_closure(escaped_variables.len(), self.closures.len());
 
-        let mut closure_function = Function::from_closure(&self.type_resolver, &closure).unwrap();
-        closure_function.arguments = [escaped_variables, closure_function.arguments].concat();
+        let closure_function = Function::from_closure(&self.type_resolver, &closure).unwrap();
 
         self.closures.push(
             Self::new(
@@ -2138,7 +2171,7 @@ impl FunctionCompiler {
             self.instructions.push_alignment(PTR_SIZE);
         }
 
-        let exp = self.compile_expression(&declaration.expression)?;
+        let mut exp = self.compile_expression(&declaration.expression)?;
         if exp == *VOID {
             return Err(anyhow!("can't declare void variable"));
         }
@@ -2149,10 +2182,10 @@ impl FunctionCompiler {
 
         if escaped {
             self.instructions.instr_alloc(exp.size, exp.alignment);
+            exp = Type::create_escaped(exp);
         }
 
         self.instructions.var_mark(Variable {
-            escaped,
             identifier: declaration.variable.identifier.clone(),
             _type: exp,
         });
@@ -2261,29 +2294,17 @@ impl FunctionCompiler {
         };
         let (offset, variable) = self.resolve_variable(_type)?;
 
-        match &variable._type._type {
-            TypeType::Struct(type_struct) => {
-                if variable.escaped {
-                    Ok(DotAccessField::Heap(
-                        self.compile_dot_access_field_offset_base_heap(
-                            dot_access,
-                            type_struct,
-                            offset,
-                        )?,
-                    ))
-                } else {
-                    let (field_offset, field_type) =
-                        type_struct.get_field_offset_err(&dot_access.identifier)?;
-
-                    Ok(DotAccessField::Stack(
-                        offset + field_offset,
-                        field_type.clone(),
-                    ))
-                }
-            }
-            TypeType::Address(_type) => match &_type._type {
-                TypeType::Struct(type_struct) => {
-                    if variable.escaped {
+        if let TypeType::Escaped(_type) = variable._type._type {
+            match _type._type {
+                TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
+                    self.compile_dot_access_field_offset_base_heap(
+                        dot_access,
+                        &type_struct,
+                        offset,
+                    )?,
+                )),
+                TypeType::Address(_type) => match _type._type {
+                    TypeType::Struct(type_struct) => {
                         let alignment = self.instructions.push_alignment(PTR_SIZE);
                         self.instructions.instr_increment(PTR_SIZE);
                         self.instructions
@@ -2293,23 +2314,38 @@ impl FunctionCompiler {
                         Ok(DotAccessField::Heap(
                             self.compile_dot_access_field_offset_base_heap(
                                 dot_access,
-                                type_struct,
+                                &type_struct,
                                 0,
                             )?,
                         ))
-                    } else {
-                        Ok(DotAccessField::Heap(
-                            self.compile_dot_access_field_offset_base_heap(
-                                dot_access,
-                                type_struct,
-                                offset,
-                            )?,
-                        ))
                     }
+                    _type => Err(anyhow!("cant access non struct type: {_type:#?}")),
+                },
+                _type => Err(anyhow!("cant access non struct/address type: {_type:#?}")),
+            }
+        } else {
+            match variable._type._type {
+                TypeType::Struct(type_struct) => {
+                    let (field_offset, field_type) =
+                        type_struct.get_field_offset_err(&dot_access.identifier)?;
+
+                    Ok(DotAccessField::Stack(
+                        offset + field_offset,
+                        field_type.clone(),
+                    ))
                 }
-                _type => Err(anyhow!("cant dot access non struct address")),
-            },
-            _type => Err(anyhow!("cant dot access non struct type")),
+                TypeType::Address(_type) => match _type._type {
+                    TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
+                        self.compile_dot_access_field_offset_base_heap(
+                            dot_access,
+                            &type_struct,
+                            offset,
+                        )?,
+                    )),
+                    _type => Err(anyhow!("cant access non struct type: {_type:#?}")),
+                },
+                _type => Err(anyhow!("cant access non struct/address type: {_type:#?}")),
+            }
         }
     }
 
@@ -2320,7 +2356,7 @@ impl FunctionCompiler {
             ast::Expression::Type(_type) => {
                 let (offset, variable) = self.resolve_variable(_type)?;
 
-                if variable.escaped {
+                if let TypeType::Escaped(_type) = &variable._type._type {
                     let alignment = self.instructions.push_alignment(PTR_SIZE);
                     self.instructions.instr_increment(PTR_SIZE);
                     self.instructions
@@ -2328,7 +2364,7 @@ impl FunctionCompiler {
 
                     // no alignment because of PTR_SIZE align above
                     let exp = self.compile_expression(&assignment.expression)?;
-                    if variable._type != exp {
+                    if **_type != exp {
                         return Err(anyhow!("variable assignment type mismatch"));
                     }
 

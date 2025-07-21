@@ -663,6 +663,8 @@ impl Vm {
                         let var = self.stack.pop::<*mut u8>();
                         vars.push(var);
                     }
+                    // so the order is the same as you popped
+                    vars.reverse();
 
                     let (obj, ptr) = GcObject::new_closure(&vars, function_index);
                     self.gc.add_object(obj);
