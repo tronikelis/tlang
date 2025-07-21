@@ -991,18 +991,22 @@ impl Type {
         }
     }
 
-    fn eq(&self, other: &Self) -> bool {
+    fn equals(&self, other: &Self) -> Result<()> {
+        // todo: do this the other way around
         if let TypeType::Builtin(builtin) = &self._type {
             if let TypeBuiltin::Nil = builtin {
                 if let TypeType::Address(_) = &other._type {
-                    return true;
+                    return Ok(());
                 }
             }
         }
 
         match (&self.id, &other.id) {
             (Some(self_id), Some(other_id)) => {
-                return self_id == other_id;
+                return match self_id == other_id {
+                    true => Ok(()),
+                    false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+                }
             }
             _ => {}
         }
@@ -1013,7 +1017,10 @@ impl Type {
         self_clone.id = None;
         other_clone.id = None;
 
-        other == self
+        match other == self {
+            true => Ok(()),
+            false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+        }
     }
 
     fn extract_variadic(&self) -> Option<&Self> {
@@ -1949,10 +1956,7 @@ impl FunctionCompiler {
                     ))?;
 
                     let exp_type = self.compile_expression(exp)?;
-                    if !exp_type.eq(_type) {
-                        println!("exp_type: {exp_type:#?}, _type: {_type:#?}");
-                        return Err(anyhow!("compile_struct_init: incorrect field type"));
-                    }
+                    exp_type.equals(_type)?;
                 }
             }
         }
@@ -2176,9 +2180,8 @@ impl FunctionCompiler {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        if self.resolve_type(&declaration.variable._type)? != exp {
-            return Err(anyhow!("type mismatch"));
-        }
+        self.resolve_type(&declaration.variable._type)?
+            .equals(&exp)?;
 
         if escaped {
             self.instructions.instr_alloc(exp.size, exp.alignment);
@@ -2405,9 +2408,7 @@ impl FunctionCompiler {
                 let exp = self.compile_expression(&assignment.expression)?;
                 let exp_size = self.instructions.pop_stack_frame_size();
 
-                if !exp.eq(field._type()) {
-                    return Err(anyhow!("dot access assign type mismatch"));
-                }
+                exp.equals(field._type())?;
 
                 match field {
                     DotAccessField::Heap(_type) => {
