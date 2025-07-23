@@ -28,11 +28,11 @@ impl GcObject {
     fn new_closure(vars: &[*mut u8], function_index: usize) -> (Self, *mut u8) {
         // closure:
         //
+        // function index
         // vars count N
         // ...var1
         // ...var2
         // ...varN
-        // function index
 
         let size = vars.len() * size_of::<usize>() + size_of::<usize>() * 2;
         let layout = Layout::from_size_align(size, size_of::<usize>()).unwrap();
@@ -40,15 +40,15 @@ impl GcObject {
 
         unsafe {
             let mut alloced = alloced;
+            *alloced.cast() = function_index;
+
+            alloced = alloced.byte_offset(size_of::<usize>() as isize);
             *alloced.cast() = vars.len();
 
             for var in vars {
                 alloced = alloced.byte_offset(size_of::<usize>() as isize);
                 *alloced.cast::<*mut u8>() = *var;
             }
-
-            alloced = alloced.byte_offset(size_of::<usize>() as isize);
-            *alloced.cast() = function_index;
         }
 
         (Self::new(GcObjectData::Alloced(alloced, layout)), alloced)
@@ -259,6 +259,7 @@ pub enum Instruction {
     Debug,
 
     JumpAndLink(usize),
+    JumpAndLinkClosure,
     Jump(usize),
     Return,
     JumpIfTrue(usize),
@@ -669,6 +670,27 @@ impl Vm {
                     let (obj, ptr) = GcObject::new_closure(&vars, function_index);
                     self.gc.add_object(obj);
                     self.stack.push(ptr);
+                }
+                Instruction::JumpAndLinkClosure => {
+                    let mut closure = self.stack.pop::<*mut u8>();
+                    self.stack.push(pc + 1);
+
+                    let function_index: usize = unsafe { *closure.cast() };
+                    unsafe { closure = closure.byte_offset(size_of::<usize>() as isize) }
+                    pc = function_index;
+
+                    let var_count: usize = unsafe { *closure.cast() };
+                    unsafe { closure = closure.byte_offset(size_of::<usize>() as isize) }
+
+                    for _ in 0..var_count {
+                        self.stack.push::<*mut u8>(unsafe {
+                            let val = *closure.cast();
+                            closure = closure.byte_offset(size_of::<usize>() as isize);
+                            val
+                        })
+                    }
+
+                    continue;
                 }
             }
 

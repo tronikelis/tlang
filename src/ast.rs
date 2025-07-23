@@ -440,7 +440,7 @@ pub enum ArithmeticType {
 
 #[derive(Debug, Clone)]
 pub struct Call {
-    pub _type: Type,
+    pub expression: Expression,
     pub arguments: Vec<Expression>,
 }
 
@@ -527,7 +527,7 @@ pub enum Expression {
     Literal(Literal),
     Arithmetic(Box<Arithmetic>),
     Compare(Box<Compare>),
-    Call(Call),
+    Call(Box<Call>),
     Index(Index),
     Spread(Box<Expression>),
     Type(Type),
@@ -1096,7 +1096,7 @@ impl<'a> TokenParser<'a> {
         }
     }
 
-    fn parse_call(&mut self, _type: Type) -> Result<Call> {
+    fn parse_call(&mut self, expression: Expression) -> Result<Call> {
         self.iter.expect(lexer::Token::POpen)?;
         self.iter.next();
 
@@ -1117,7 +1117,10 @@ impl<'a> TokenParser<'a> {
             arguments.push(self.parse_expression()?);
         }
 
-        Ok(Call { _type, arguments })
+        Ok(Call {
+            expression,
+            arguments,
+        })
     }
 
     fn parse_expression_literal(&mut self) -> Result<Expression> {
@@ -1274,11 +1277,7 @@ impl<'a> TokenParser<'a> {
                     continue;
                 }
                 lexer::Token::POpen => {
-                    let Expression::Type(_type) = left else {
-                        return Err(anyhow!("parse_expression: wrong token on POpen"));
-                    };
-
-                    left = Expression::Call(self.parse_call(_type)?);
+                    left = Expression::Call(Box::new(self.parse_call(left)?));
                     continue;
                 }
                 lexer::Token::COpen => {

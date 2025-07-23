@@ -6,7 +6,7 @@ use crate::{
     lexer, vm,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct VarStack<T> {
     items: Vec<Vec<T>>,
 }
@@ -214,7 +214,7 @@ enum VarStackItem {
     Label,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CompilerVarStack {
     stack: VarStack<VarStackItem>,
     arg_size: Option<usize>,
@@ -286,12 +286,13 @@ impl CompilerVarStack {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StackLabel {
     identifier: String,
     index: usize,
 }
 
+#[derive(Debug, Clone)]
 struct StackInstructions {
     instructions: Vec<Vec<Instruction>>,
     index: Vec<usize>,
@@ -392,6 +393,7 @@ fn align(alignment: usize, stack_size: usize) -> usize {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Instructions {
     stack_instructions: StackInstructions,
     var_stack: CompilerVarStack,
@@ -674,6 +676,11 @@ impl Instructions {
             .push(Instruction::JumpAndLink(identifier));
     }
 
+    fn instr_jump_and_link_closure(&mut self) {
+        self.stack_instructions
+            .push(Instruction::Real(vm::Instruction::JumpAndLinkClosure));
+    }
+
     fn instr_shift(&mut self, size: usize, amount: usize) {
         self.stack_instructions
             .push(Instruction::Real(vm::Instruction::Shift(size, amount)));
@@ -779,6 +786,7 @@ impl Instructions {
 
         // already aligned because of return address
         for arg in &function.closure_arguments {
+            assert!(arg._type._type.is_escaped());
             self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
             self.var_mark(arg.clone());
         }
@@ -1051,7 +1059,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TypeResolver {
     type_declarations: HashMap<String, ast::Type>,
 }
@@ -1185,8 +1193,8 @@ impl TypeResolver {
 }
 
 struct FunctionCall {
+    declaration: Option<ast::FunctionDeclaration>,
     call: ast::Call,
-    callee: ast::FunctionDeclaration,
 }
 
 struct TypeCast {
@@ -1335,29 +1343,38 @@ impl FunctionCompiler {
         self.type_resolver.resolve(_type)
     }
 
-    fn resolve_function_call(&self, call: &ast::Call) -> Result<FunctionCall> {
-        let ast::Type::Alias(identifier) = &call._type else {
-            return Err(anyhow!("resolve_function_call: non alias"));
+    fn resolve_function_call(&self, call: &ast::Call) -> FunctionCall {
+        if let ast::Expression::Type(_type) = &call.expression {
+            if let ast::Type::Alias(identifier) = _type {
+                return FunctionCall {
+                    call: call.clone(),
+                    declaration: self
+                        .function_declarations
+                        .get(identifier)
+                        .map(|v| v.clone()),
+                };
+            }
         };
 
-        let callee = self
-            .function_declarations
-            .get(identifier)
-            .ok_or(anyhow!("resolve_function_call: function does not exist"))?;
-
-        Ok(FunctionCall {
-            callee: callee.clone(),
+        FunctionCall {
             call: call.clone(),
-        })
+            declaration: None,
+        }
     }
 
     fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
+        let ast::Expression::Type(_type) = &call.expression else {
+            return Err(anyhow!(
+                "resolve_type_cast: cant type cast non Type expression"
+            ));
+        };
+
         if call.arguments.len() != 1 {
             return Err(anyhow!("resolve_type_cast: 1 argument required"));
         }
 
         let exp = call.arguments[0].clone();
-        let _type = self.resolve_type(&call._type)?;
+        let _type = self.resolve_type(_type)?;
 
         Ok(TypeCast {
             expression: exp,
@@ -1475,24 +1492,39 @@ impl FunctionCompiler {
         Ok(VOID.clone())
     }
 
-    fn check_function_call_argument_count(&self, call: &FunctionCall) -> Result<()> {
+    fn check_function_call_argument_count(&mut self, call: &FunctionCall) -> Result<()> {
+        let arguments = match &call.declaration {
+            Some(declaration) => declaration
+                .arguments
+                .iter()
+                .map(|v| self.resolve_type(&v._type))
+                .collect::<Result<Vec<_>, anyhow::Error>>()?,
+            None => self
+                .resolve_expression(&call.call.expression)?
+                ._type
+                .closure_err()?
+                .arguments
+                .into_iter()
+                .map(|v| v.1)
+                .collect(),
+        };
+
         // todo: refactor this arguments check somehow
-        if let Some(last) = call.callee.arguments.last() {
-            let last_type = self.resolve_type(&last._type)?;
-            if let TypeType::Variadic(_type) = &last_type._type {
+        if let Some(last) = arguments.last() {
+            if let TypeType::Variadic(_type) = &last._type {
                 // -1 because variadic can be empty
-                if call.call.arguments.len() < call.callee.arguments.len() - 1 {
+                if call.call.arguments.len() < arguments.len() - 1 {
                     return Err(anyhow!(
                         "compile_function_call: variadic argument count mismatch"
                     ));
                 }
             } else {
-                if call.call.arguments.len() != call.callee.arguments.len() {
+                if call.call.arguments.len() != arguments.len() {
                     return Err(anyhow!("compile_function_call: argument count mismatch"));
                 }
             }
         } else {
-            if call.call.arguments.len() != call.callee.arguments.len() {
+            if call.call.arguments.len() != arguments.len() {
                 return Err(anyhow!("compile_function_call: argument count mismatch"));
             }
         }
@@ -1500,23 +1532,56 @@ impl FunctionCompiler {
         Ok(())
     }
 
+    fn resolve_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+        let instructions = self.instructions.clone();
+        let exp = self.compile_expression(expression);
+        self.instructions = instructions;
+
+        exp
+    }
+
     fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
         self.check_function_call_argument_count(call)?;
 
-        match call.callee.identifier.as_str() {
-            "append" => return self.compile_function_builtin_append(call),
-            "len" => return self.compile_function_builtin_len(call),
-            "new" => return self.compile_function_builtin_new(call),
-            _ => {}
+        if let Some(declaration) = &call.declaration {
+            match declaration.identifier.as_str() {
+                "append" => return self.compile_function_builtin_append(call),
+                "len" => return self.compile_function_builtin_len(call),
+                "new" => return self.compile_function_builtin_new(call),
+                _ => {}
+            }
         }
 
-        self.instructions
-            .push_alignment(self.resolve_type(&call.callee.return_type)?.alignment);
+        let (return_alignment, expected_arguments): (usize, Vec<Type>) = match &call.declaration {
+            Some(declaration) => (
+                self.resolve_type(&declaration.return_type)?.alignment,
+                declaration
+                    .arguments
+                    .iter()
+                    .map(|v| self.resolve_type(&v._type))
+                    .collect::<Result<_, anyhow::Error>>()?,
+            ),
+            None => (
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .return_type
+                    .alignment,
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .arguments
+                    .into_iter()
+                    .map(|v| v.1)
+                    .collect(),
+            ),
+        };
+
+        self.instructions.push_alignment(return_alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, expected_type) in call.callee.arguments.iter().enumerate() {
-                let expected_type = self.resolve_type(&expected_type._type)?;
+            for (i, expected_type) in expected_arguments.iter().enumerate() {
                 let arg = call.call.arguments.get(i);
 
                 let Some(arg) = arg else {
@@ -1529,7 +1594,7 @@ impl FunctionCompiler {
 
                 let Some(inner) = expected_type.extract_variadic() else {
                     let exp = self.compile_expression(arg)?;
-                    if exp != expected_type {
+                    if exp != *expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
                     continue;
@@ -1537,10 +1602,13 @@ impl FunctionCompiler {
 
                 if let ast::Expression::Spread(_) = arg {
                     let exp = self.compile_expression(arg)?;
-                    if exp != expected_type {
+                    if exp != *expected_type {
                         return Err(anyhow!("function call type mismatch"));
                     }
-                    if call.callee.arguments.len() != call.call.arguments.len() {
+                    // this check is weird, because ast actually does not allow creating
+                    // declarations where spread is not last, but this probably should be in
+                    // compiler
+                    if expected_arguments.len() != call.call.arguments.len() {
                         return Err(anyhow!("spread must be last argument"));
                     }
 
@@ -1563,18 +1631,28 @@ impl FunctionCompiler {
             self.instructions.pop_stack_frame_size()
         };
 
-        match call.callee.identifier.as_str() {
-            "libc_write" => {
-                self.instructions.instr_libc_write();
-                return Ok(INT.clone());
+        if let Some(declaration) = &call.declaration {
+            match declaration.identifier.as_str() {
+                "libc_write" => {
+                    self.instructions.instr_libc_write();
+                    return Ok(INT.clone());
+                }
+                _ => {}
             }
-            _ => {}
         }
 
-        let return_type = self.resolve_type(&call.callee.return_type)?;
+        let return_type = match &call.declaration {
+            Some(declaration) => self.resolve_type(&declaration.return_type)?,
+            None => {
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .return_type
+            }
+        };
         let return_size = return_type.size;
 
-        let reset_size: usize;
+        let mut reset_size: usize;
         if argument_size < return_size {
             // the whole argument section will be used for return value
             // do not need to reset
@@ -1586,8 +1664,20 @@ impl FunctionCompiler {
             reset_size = argument_size - return_size;
         }
 
-        self.instructions
-            .instr_jump_and_link(call.callee.identifier.clone());
+        // aligning for pushing of return address
+        reset_size += self.instructions.push_alignment(PTR_SIZE);
+
+        match &call.declaration {
+            Some(declaration) => {
+                self.instructions
+                    .instr_jump_and_link(declaration.identifier.clone());
+            }
+            None => {
+                self.compile_expression(&call.call.expression)?;
+                self.instructions.instr_jump_and_link_closure();
+            }
+        }
+
         self.instructions.instr_reset(reset_size);
 
         Ok(return_type)
@@ -2079,15 +2169,11 @@ impl FunctionCompiler {
     }
 
     fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
-        if let Ok(v) = self.resolve_function_call(call) {
-            return self.compile_function_call(&v);
-        }
-
         if let Ok(v) = self.resolve_type_cast(call) {
             return self.compile_type_cast(&v);
         }
 
-        Err(anyhow!("compile_call: can't resolve call {call:#?}"))
+        self.compile_function_call(&self.resolve_function_call(call))
     }
 
     fn compile_nil(&mut self) -> Result<Type> {
