@@ -1193,6 +1193,7 @@ impl TypeResolver {
 }
 
 struct FunctionCall {
+    // None means closure call
     declaration: Option<ast::FunctionDeclaration>,
     call: ast::Call,
 }
