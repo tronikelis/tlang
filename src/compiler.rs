@@ -197,13 +197,68 @@ impl CompilerBody {
 }
 
 #[derive(Debug, Clone)]
-pub enum Instruction {
+pub enum CompilerInstruction {
     Real(vm::Instruction),
     JumpAndLink(String),
     Jump((usize, usize)),
     JumpIfTrue((usize, usize)),
     JumpIfFalse((usize, usize)),
     PushClosure(usize, usize),
+}
+
+#[derive(Debug, Clone)]
+pub enum ScopedInstruction {
+    Real(vm::Instruction),
+    JumpAndLink(String),
+    // offset
+    Jump(usize),
+    JumpIfTrue(usize),
+    JumpIfFalse(usize),
+    // vars count, offset (instruction index)
+    PushClosure(usize, usize),
+}
+
+impl ScopedInstruction {
+    pub fn from_compiled_function(compiled_function: &CompiledFunction) -> Vec<Self> {
+        let mut instructions: Vec<Self> = Vec::new();
+        let mut index_to_jump = HashMap::<usize, usize>::new();
+        let mut index_to_closure = HashMap::<usize, usize>::new();
+        let mut folded: Vec<CompilerInstruction> = Vec::new();
+
+        for (i, v) in compiled_function.closures.iter().enumerate() {
+            index_to_closure.insert(i, instructions.len());
+            instructions.append(&mut Self::from_compiled_function(&v));
+        }
+
+        for (i, v) in compiled_function.instructions.iter().enumerate() {
+            index_to_jump.insert(i, folded.len() + instructions.len());
+            folded.append(&mut v.clone());
+        }
+
+        for v in folded {
+            instructions.push(match v {
+                CompilerInstruction::Real(v) => ScopedInstruction::Real(v),
+                CompilerInstruction::Jump((index, offset)) => {
+                    ScopedInstruction::Jump(index_to_jump.get(&index).unwrap() + offset)
+                }
+                CompilerInstruction::JumpIfTrue((index, offset)) => {
+                    ScopedInstruction::JumpIfTrue(index_to_jump.get(&index).unwrap() + offset)
+                }
+                CompilerInstruction::JumpIfFalse((index, offset)) => {
+                    ScopedInstruction::JumpIfFalse(index_to_jump.get(&index).unwrap() + offset)
+                }
+                CompilerInstruction::JumpAndLink(v) => ScopedInstruction::JumpAndLink(v),
+                CompilerInstruction::PushClosure(vars_count, index) => {
+                    ScopedInstruction::PushClosure(
+                        vars_count,
+                        *index_to_closure.get(&index).unwrap(),
+                    )
+                }
+            });
+        }
+
+        instructions
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -294,7 +349,7 @@ struct StackLabel {
 
 #[derive(Debug, Clone)]
 struct StackInstructions {
-    instructions: Vec<Vec<Instruction>>,
+    instructions: Vec<Vec<CompilerInstruction>>,
     index: Vec<usize>,
     labels: Vec<StackLabel>,
 }
@@ -310,13 +365,13 @@ impl StackInstructions {
         }
     }
 
-    fn push(&mut self, instruction: Instruction) {
+    fn push(&mut self, instruction: CompilerInstruction) {
         self.instructions[*self.index.last().unwrap()].push(instruction);
     }
 
     fn jump(&mut self) {
         let index = self.instructions.len();
-        self.push(Instruction::Jump((index, 0)));
+        self.push(CompilerInstruction::Jump((index, 0)));
         self.instructions.push(Vec::new());
         self.index.push(index);
     }
@@ -338,7 +393,7 @@ impl StackInstructions {
             .find(|v| &v.identifier == identifier)
             .ok_or(anyhow!("label_jump: {:#?} not found", identifier))?;
 
-        self.push(Instruction::Jump((
+        self.push(CompilerInstruction::Jump((
             label.index,
             self.instructions[label.index].len(),
         )));
@@ -348,7 +403,7 @@ impl StackInstructions {
 
     fn jump_if_true(&mut self) {
         let index = self.instructions.len();
-        self.push(Instruction::JumpIfTrue((index, 0)));
+        self.push(CompilerInstruction::JumpIfTrue((index, 0)));
         self.instructions.push(Vec::new());
         self.index.push(index);
     }
@@ -356,23 +411,23 @@ impl StackInstructions {
     fn back_if_true(&mut self, offset: usize) {
         let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
-        self.push(Instruction::JumpIfTrue((target, target_last)));
+        self.push(CompilerInstruction::JumpIfTrue((target, target_last)));
     }
 
     fn back_if_false(&mut self, offset: usize) {
         let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
-        self.push(Instruction::JumpIfFalse((target, target_last)));
+        self.push(CompilerInstruction::JumpIfFalse((target, target_last)));
     }
 
     fn again(&mut self) {
-        self.push(Instruction::Jump((*self.index.last().unwrap(), 0)));
+        self.push(CompilerInstruction::Jump((*self.index.last().unwrap(), 0)));
     }
 
     fn back(&mut self, offset: usize) {
         let target = self.index[self.index.len() - 1 - offset];
         let target_last = self.instructions[target].len();
-        self.push(Instruction::Jump((target, target_last)));
+        self.push(CompilerInstruction::Jump((target, target_last)));
     }
 
     fn pop_index(&mut self) {
@@ -421,33 +476,37 @@ impl Instructions {
 
     fn var_reset_label(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
+            .push(CompilerInstruction::Real(vm::Instruction::Reset(
                 self.var_stack.get_label_offset().unwrap(),
             )));
     }
 
     fn instr_offset(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Offset(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Offset(size)));
     }
 
     fn instr_alloc(&mut self, size: usize, alignment: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Alloc(size, alignment)));
+            .push(CompilerInstruction::Real(vm::Instruction::Alloc(
+                size, alignment,
+            )));
         self.var_stack.stack.push(VarStackItem::Reset(size));
         self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
     }
 
     fn instr_deref(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Deref(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Deref(size)));
         self.var_stack.stack.push(VarStackItem::Reset(PTR_SIZE));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_deref_assign(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::DerefAssign(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::DerefAssign(
+                size,
+            )));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(PTR_SIZE + size));
@@ -455,7 +514,9 @@ impl Instructions {
 
     fn instr_slice_index_set(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::SliceIndexSet(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::SliceIndexSet(
+                size,
+            )));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(size + SLICE_SIZE + INT.size));
@@ -463,7 +524,9 @@ impl Instructions {
 
     fn instr_slice_index_get(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::SliceIndexGet(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::SliceIndexGet(
+                size,
+            )));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
@@ -472,14 +535,16 @@ impl Instructions {
 
     fn instr_slice_len(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::SliceLen));
+            .push(CompilerInstruction::Real(vm::Instruction::SliceLen));
         self.var_stack.stack.push(VarStackItem::Reset(SLICE_SIZE));
         self.var_stack.stack.push(VarStackItem::Increment(INT.size));
     }
 
     fn instr_slice_append(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::SliceAppend(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::SliceAppend(
+                size,
+            )));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(SLICE_SIZE + size));
@@ -487,41 +552,44 @@ impl Instructions {
 
     fn instr_and(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::And));
+            .push(CompilerInstruction::Real(vm::Instruction::And));
         self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
     }
 
     fn instr_or(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Or));
+            .push(CompilerInstruction::Real(vm::Instruction::Or));
         self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
     }
 
     fn instr_negate_bool(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::NegateBool));
+            .push(CompilerInstruction::Real(vm::Instruction::NegateBool));
     }
 
     fn instr_increment(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Increment(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Increment(size)));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_reset_dangerous_not_synced(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Reset(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Reset(size)));
     }
 
     fn instr_reset(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Reset(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Reset(size)));
         self.var_stack.stack.push(VarStackItem::Reset(size));
     }
 
     fn instr_push_closure(&mut self, escaped_count: usize, function_index: usize) {
         self.stack_instructions
-            .push(Instruction::PushClosure(escaped_count, function_index));
+            .push(CompilerInstruction::PushClosure(
+                escaped_count,
+                function_index,
+            ));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(escaped_count * PTR_SIZE));
@@ -530,7 +598,9 @@ impl Instructions {
 
     fn instr_push_slice_new_len(&mut self, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::PushSliceNewLen(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::PushSliceNewLen(
+                size,
+            )));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(size + INT.size - SLICE_SIZE));
@@ -540,7 +610,7 @@ impl Instructions {
         self.push_alignment(SLICE_SIZE);
 
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::PushSlice));
+            .push(CompilerInstruction::Real(vm::Instruction::PushSlice));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(SLICE_SIZE));
@@ -551,7 +621,7 @@ impl Instructions {
         let uint8: u8 = int.try_into()?;
 
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::PushU8(uint8)));
+            .push(CompilerInstruction::Real(vm::Instruction::PushU8(uint8)));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(UINT8.size));
@@ -564,7 +634,7 @@ impl Instructions {
         let int: isize = int.try_into()?;
 
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::PushI(int)));
+            .push(CompilerInstruction::Real(vm::Instruction::PushI(int)));
         self.var_stack.stack.push(VarStackItem::Increment(INT.size));
 
         Ok(())
@@ -572,36 +642,36 @@ impl Instructions {
 
     fn instr_minus_int(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::MinusInt));
+            .push(CompilerInstruction::Real(vm::Instruction::MinusInt));
     }
 
     fn instr_add_i(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::AddI));
+            .push(CompilerInstruction::Real(vm::Instruction::AddI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_multiply_i(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::MultiplyI));
+            .push(CompilerInstruction::Real(vm::Instruction::MultiplyI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_divide_i(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::DivideI));
+            .push(CompilerInstruction::Real(vm::Instruction::DivideI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_modulo_i(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::ModuloI));
+            .push(CompilerInstruction::Real(vm::Instruction::ModuloI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
     }
 
     fn instr_to_bool(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::ToBoolI));
+            .push(CompilerInstruction::Real(vm::Instruction::ToBoolI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
         self.var_stack
             .stack
@@ -610,7 +680,7 @@ impl Instructions {
 
     fn instr_compare_i(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::CompareI));
+            .push(CompilerInstruction::Real(vm::Instruction::CompareI));
         self.var_stack.stack.push(VarStackItem::Reset(INT.size * 2));
         self.var_stack
             .stack
@@ -619,7 +689,7 @@ impl Instructions {
 
     fn instr_add_string(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::AddString));
+            .push(CompilerInstruction::Real(vm::Instruction::AddString));
         self.var_stack.stack.push(VarStackItem::Reset(STRING.size));
     }
 
@@ -627,19 +697,23 @@ impl Instructions {
         self.push_alignment(alignment);
 
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::PushStatic(index, size)));
+            .push(CompilerInstruction::Real(vm::Instruction::PushStatic(
+                index, size,
+            )));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_copy(&mut self, dst: usize, src: usize, size: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Copy(dst, src, size)));
+            .push(CompilerInstruction::Real(vm::Instruction::Copy(
+                dst, src, size,
+            )));
     }
 
     // align before calling this
     fn instr_cast_int_uint8(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::CastIntUint8));
+            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint8));
 
         self.var_stack.stack.push(VarStackItem::Reset(INT.size));
         self.var_stack
@@ -650,7 +724,7 @@ impl Instructions {
     // align before calling this
     fn instr_cast_uint8_int(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::CastUint8Int));
+            .push(CompilerInstruction::Real(vm::Instruction::CastUint8Int));
 
         self.var_stack.stack.push(VarStackItem::Reset(UINT8.size));
         self.var_stack.stack.push(VarStackItem::Increment(INT.size));
@@ -658,38 +732,41 @@ impl Instructions {
 
     fn instr_cast_slice_ptr(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::CastSlicePtr));
+            .push(CompilerInstruction::Real(vm::Instruction::CastSlicePtr));
     }
 
     fn instr_cast_int_uint(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::CastIntUint));
+            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint));
     }
 
     fn instr_debug(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Debug));
+            .push(CompilerInstruction::Real(vm::Instruction::Debug));
     }
 
     fn instr_jump_and_link(&mut self, identifier: String) {
         self.stack_instructions
-            .push(Instruction::JumpAndLink(identifier));
+            .push(CompilerInstruction::JumpAndLink(identifier));
     }
 
     fn instr_jump_and_link_closure(&mut self) {
-        self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::JumpAndLinkClosure));
+        self.stack_instructions.push(CompilerInstruction::Real(
+            vm::Instruction::JumpAndLinkClosure,
+        ));
     }
 
     fn instr_shift(&mut self, size: usize, amount: usize) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Shift(size, amount)));
+            .push(CompilerInstruction::Real(vm::Instruction::Shift(
+                size, amount,
+            )));
         self.var_stack.stack.push(VarStackItem::Reset(amount));
     }
 
     fn instr_libc_write(&mut self) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::LibcWrite));
+            .push(CompilerInstruction::Real(vm::Instruction::LibcWrite));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
@@ -715,7 +792,7 @@ impl Instructions {
     fn pop_stack_frame(&mut self) {
         let frame = self.var_stack.stack.pop_frame().unwrap();
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
+            .push(CompilerInstruction::Real(vm::Instruction::Reset(
                 CompilerVarStack::size_for(frame.iter()),
             )));
     }
@@ -808,20 +885,20 @@ impl Instructions {
 
     fn init_function_epilogue(&mut self, function: &Function) {
         self.stack_instructions
-            .push(Instruction::Real(vm::Instruction::Reset(
+            .push(CompilerInstruction::Real(vm::Instruction::Reset(
                 self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
             )));
 
         if function.identifier == "main" {
             self.stack_instructions
-                .push(Instruction::Real(vm::Instruction::Exit));
+                .push(CompilerInstruction::Real(vm::Instruction::Exit));
         } else {
             self.stack_instructions
-                .push(Instruction::Real(vm::Instruction::Return));
+                .push(CompilerInstruction::Real(vm::Instruction::Return));
         }
     }
 
-    fn get_instructions(self) -> Vec<Vec<Instruction>> {
+    fn get_instructions(self) -> Vec<Vec<CompilerInstruction>> {
         self.stack_instructions.instructions
     }
 }
@@ -1312,11 +1389,9 @@ pub struct FunctionCompiler {
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
-pub type CompiledInstructions = Vec<Vec<Instruction>>;
-
 #[derive(Debug)]
 pub struct CompiledFunction {
-    pub instructions: CompiledInstructions,
+    pub instructions: Vec<Vec<CompilerInstruction>>,
     pub closures: Vec<CompiledFunction>,
 }
 

@@ -149,12 +149,12 @@ fn main() {
                 fn main() void {
                     let foo1 int = 0
 
-                    let nice fn() void = fn() void {
-                        let ok fn() void = fn() void {
-                            foo1 = 20
-                        }
-                        // ok()
-                    }
+                    // let nice fn() void = fn() void {
+                    //     let ok fn() void = fn() void {
+                    //         foo1 = 20
+                    //     }
+                    //     // ok()
+                    // }
 
                     // nice()
                     create_lists()
@@ -225,7 +225,7 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, compiler::CompiledInstructions>::new();
+    let mut functions = HashMap::<String, Vec<compiler::ScopedInstruction>>::new();
     let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
     let type_resolver = Rc::new(compiler::TypeResolver::new(ast.type_declarations));
@@ -241,11 +241,14 @@ fn main() {
         .compile()
         .unwrap();
         println!("{:#?}", compiled);
-        functions.insert(identifier.clone(), compiled.instructions);
+
+        functions.insert(
+            identifier.clone(),
+            compiler::ScopedInstruction::from_compiled_function(&compiled),
+        );
     }
 
-    let instructions = linker::link(&functions).unwrap();
-
+    let instructions = linker::link(functions).unwrap();
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
     vm::Vm::new(instructions, static_memory.borrow().clone()).run();
