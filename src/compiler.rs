@@ -1266,16 +1266,32 @@ impl TypeResolver {
             ast::Type::Closure(type_closure) => {
                 let mut arguments = Vec::new();
 
+                let mut id = String::from("fn (");
                 for var in &type_closure.arguments {
                     let resolved = self.resolve_with_alias(&var._type, alias)?;
+                    id.push_str(
+                        resolved
+                            .id
+                            .as_ref()
+                            .ok_or(anyhow!("resolve_closure: type without id"))?,
+                    );
+                    id.push(',');
                     arguments.push((var.identifier.clone(), resolved));
                 }
+                id.push(')');
 
                 let resolved_return_type =
                     self.resolve_with_alias(&type_closure.return_type, alias)?;
 
+                id.push_str(
+                    resolved_return_type
+                        .id
+                        .as_ref()
+                        .ok_or(anyhow!("resolve_closure: return type without id"))?,
+                );
+
                 Ok(Type {
-                    id: None,
+                    id: Some(id),
                     size: PTR_SIZE,
                     alignment: PTR_SIZE,
                     _type: TypeType::Closure(Box::new(TypeClosure {
