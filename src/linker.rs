@@ -8,6 +8,7 @@ pub fn link(
 ) -> Result<Vec<vm::Instruction>> {
     let mut functions: Vec<(String, Vec<compiler::ScopedInstruction>)> =
         functions.into_iter().collect();
+    functions.sort_by(|a, b| a.0.cmp(&b.0));
 
     let main_index = functions
         .iter()
