@@ -268,6 +268,9 @@ impl ScopedInstruction {
                 ScopedInstruction::JumpIfFalse(v) => {
                     ScopedInstruction::JumpIfFalse(*v + new_instructions.len())
                 }
+                ScopedInstruction::PushClosure(vars_count, v) => {
+                    ScopedInstruction::PushClosure(*vars_count, *v + new_instructions.len())
+                }
                 v => (*v).clone(),
             };
         }
