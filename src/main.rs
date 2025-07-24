@@ -149,14 +149,14 @@ fn main() {
                 fn main() void {
                     let foo1 int = 0
 
-                    // let nice fn() void = fn() void {
-                    //     let ok fn() void = fn() void {
-                    //         foo1 = 20
-                    //     }
-                    //     // ok()
-                    // }
+                    let nice fn() void = fn() void {
+                        let ok fn() void = fn() void {
+                            foo1 = 20
+                        }
+                        ok()
+                    }
 
-                    // nice()
+                    nice()
                     create_lists()
 
                     let one_two_three string = itoa(69420)
