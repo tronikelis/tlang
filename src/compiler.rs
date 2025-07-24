@@ -769,6 +769,7 @@ impl Instructions {
         self.stack_instructions.push(CompilerInstruction::Real(
             vm::Instruction::JumpAndLinkClosure,
         ));
+        self.var_stack.stack.push(VarStackItem::Reset(PTR_SIZE));
     }
 
     fn instr_shift(&mut self, size: usize, amount: usize) {
