@@ -2213,17 +2213,16 @@ impl FunctionCompiler {
             ast::Expression::Type(_type) => {
                 let (offset, var) = self.resolve_variable(_type)?;
 
-                assert!(
-                    var._type._type.is_escaped(),
-                    "compile_address: rn all variables escaped"
-                );
+                let TypeType::Escaped(_type) = var._type._type else {
+                    return Err(anyhow!("compile_address: rn all variables are escaped"));
+                };
 
                 let alignment = self.instructions.push_alignment(PTR_SIZE);
                 self.instructions.instr_increment(PTR_SIZE);
                 self.instructions
                     .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
 
-                Ok(Type::create_address(var._type))
+                Ok(Type::create_address(*_type))
             }
             ast::Expression::DotAccess(dot_access) => {
                 let field = self.compile_dot_access_field_offset(dot_access)?;
