@@ -1819,8 +1819,6 @@ impl FunctionCompiler {
     }
 
     fn compile_variable(&mut self, mut offset: usize, variable: &Variable) -> Result<Type> {
-        offset += self.instructions.push_alignment(variable._type.alignment);
-
         if let TypeType::Escaped(_type) = &variable._type._type {
             // this will leak alignment
             let alignment = self.instructions.push_alignment(PTR_SIZE);
@@ -1828,11 +1826,14 @@ impl FunctionCompiler {
             self.instructions
                 .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
             self.instructions.instr_deref(_type.size);
-        } else {
-            self.instructions.instr_increment(variable._type.size);
-            self.instructions
-                .instr_copy(0, offset + variable._type.size, variable._type.size);
+
+            return Ok(*_type.clone());
         }
+
+        offset += self.instructions.push_alignment(variable._type.alignment);
+        self.instructions.instr_increment(variable._type.size);
+        self.instructions
+            .instr_copy(0, offset + variable._type.size, variable._type.size);
 
         Ok(variable._type.clone())
     }
