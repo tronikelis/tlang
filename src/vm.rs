@@ -25,6 +25,35 @@ impl GcObject {
         }
     }
 
+    fn new_closure(vars: &[*mut u8], function_index: usize) -> (Self, *mut u8) {
+        // closure:
+        //
+        // function index
+        // vars count N
+        // ...var1
+        // ...var2
+        // ...varN
+
+        let size = vars.len() * size_of::<usize>() + size_of::<usize>() * 2;
+        let layout = Layout::from_size_align(size, size_of::<usize>()).unwrap();
+        let alloced = unsafe { alloc(layout) };
+
+        unsafe {
+            let mut alloced = alloced;
+            *alloced.cast() = function_index;
+
+            alloced = alloced.byte_offset(size_of::<usize>() as isize);
+            *alloced.cast() = vars.len();
+
+            for var in vars {
+                alloced = alloced.byte_offset(size_of::<usize>() as isize);
+                *alloced.cast::<*mut u8>() = *var;
+            }
+        }
+
+        (Self::new(GcObjectData::Alloced(alloced, layout)), alloced)
+    }
+
     fn from_slice_val(slice: &[u8], alignment: usize) -> (Self, *mut u8) {
         let layout = Layout::from_size_align(slice.len(), alignment).unwrap();
         let ptr = unsafe { alloc(layout) };
@@ -216,6 +245,8 @@ pub enum Instruction {
     PushSliceNewLen(usize),
     // index, len
     PushStatic(usize, usize),
+    // var count, function index
+    PushClosure(usize, usize),
 
     MinusInt,
     AddI,
@@ -228,6 +259,7 @@ pub enum Instruction {
     Debug,
 
     JumpAndLink(usize),
+    JumpAndLinkClosure,
     Jump(usize),
     Return,
     JumpIfTrue(usize),
@@ -366,6 +398,7 @@ impl Stack {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct StaticMemory {
     data: Vec<u8>,
 }
@@ -624,6 +657,40 @@ impl Vm {
                     unsafe {
                         self.stack.push(ptr.byte_offset(size as isize));
                     };
+                }
+                Instruction::PushClosure(var_count, function_index) => {
+                    let mut vars = Vec::with_capacity(var_count);
+                    for _ in 0..var_count {
+                        let var = self.stack.pop::<*mut u8>();
+                        vars.push(var);
+                    }
+                    // so the order is the same as you popped
+                    vars.reverse();
+
+                    let (obj, ptr) = GcObject::new_closure(&vars, function_index);
+                    self.gc.add_object(obj);
+                    self.stack.push(ptr);
+                }
+                Instruction::JumpAndLinkClosure => {
+                    let mut closure = self.stack.pop::<*mut u8>();
+                    self.stack.push(pc + 1);
+
+                    let function_index: usize = unsafe { *closure.cast() };
+                    unsafe { closure = closure.byte_offset(size_of::<usize>() as isize) }
+                    pc = function_index;
+
+                    let var_count: usize = unsafe { *closure.cast() };
+                    unsafe { closure = closure.byte_offset(size_of::<usize>() as isize) }
+
+                    for _ in 0..var_count {
+                        self.stack.push::<*mut u8>(unsafe {
+                            let val = *closure.cast();
+                            closure = closure.byte_offset(size_of::<usize>() as isize);
+                            val
+                        })
+                    }
+
+                    continue;
                 }
             }
 

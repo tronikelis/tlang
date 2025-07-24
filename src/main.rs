@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 mod vm;
 
@@ -94,6 +94,24 @@ fn main() {
                     value int
                 }
 
+                // type Incrementer struct {
+                //     get fn() int
+                //     set fn(value int) void
+                // }
+                //
+                // fn create_incrementer() Incrementer {
+                //     let value int = 0
+                //
+                //     return Incrementer {
+                //         get: fn() int {
+                //             return value
+                //         },
+                //         set: fn(v int) void {
+                //             value = v
+                //         }
+                //     }
+                // }
+
                 fn create_lists() void {
                     let ll *LinkedList = &LinkedList{
                         next: &LinkedList{
@@ -129,6 +147,16 @@ fn main() {
                 }
 
                 fn main() void {
+                    let foo1 int = 0
+
+                    let nice fn() void = fn() void {
+                        let ok fn() void = fn() void {
+                            foo1 = 20
+                        }
+                        ok()
+                    }
+
+                    nice()
                     create_lists()
 
                     let one_two_three string = itoa(69420)
@@ -197,25 +225,31 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<Vec<compiler::Instruction>>>::new();
-    let mut static_memory = vm::StaticMemory::new();
+    let mut functions = HashMap::<String, Vec<compiler::ScopedInstruction>>::new();
+    let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
-    for (identifier, function) in &ast.function_declarations {
+    let type_resolver = Rc::new(compiler::TypeResolver::new(ast.type_declarations));
+    let function_declarations = Rc::new(ast.function_declarations);
+
+    for (identifier, declaration) in function_declarations.iter() {
         let compiled = compiler::FunctionCompiler::new(
-            function,
-            &mut static_memory,
-            &ast.type_declarations,
-            &ast.function_declarations,
+            compiler::Function::from_declaration(&type_resolver, declaration).unwrap(),
+            static_memory.clone(),
+            type_resolver.clone(),
+            function_declarations.clone(),
         )
         .compile()
         .unwrap();
         println!("{:#?}", compiled);
-        functions.insert(identifier.clone(), compiled);
+
+        functions.insert(
+            identifier.clone(),
+            compiler::ScopedInstruction::from_compiled_function(&compiled),
+        );
     }
 
-    let instructions = linker::link(&functions).unwrap();
-
+    let instructions = linker::link(functions).unwrap();
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
-    vm::Vm::new(instructions, static_memory).run();
+    vm::Vm::new(instructions, static_memory.borrow().clone()).run();
 }
