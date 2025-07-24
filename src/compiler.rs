@@ -227,16 +227,18 @@ impl ScopedInstruction {
 
         for (i, v) in compiled_function.closures.iter().enumerate() {
             index_to_closure.insert(i, instructions.len());
-            instructions.append(&mut Self::from_compiled_function(&v));
+            instructions.append(&mut Self::from_compiled_function(v));
         }
 
         for (i, v) in compiled_function.instructions.iter().enumerate() {
-            index_to_jump.insert(i, folded.len() + instructions.len());
+            index_to_jump.insert(i, folded.len());
             folded.append(&mut v.clone());
         }
 
+        let mut new_instructions: Vec<Self> = Vec::new();
+        let folded_len = folded.len();
         for v in folded {
-            instructions.push(match v {
+            new_instructions.push(match v {
                 CompilerInstruction::Real(v) => ScopedInstruction::Real(v),
                 CompilerInstruction::Jump((index, offset)) => {
                     ScopedInstruction::Jump(index_to_jump.get(&index).unwrap() + offset)
@@ -251,13 +253,26 @@ impl ScopedInstruction {
                 CompilerInstruction::PushClosure(vars_count, index) => {
                     ScopedInstruction::PushClosure(
                         vars_count,
-                        *index_to_closure.get(&index).unwrap(),
+                        *index_to_closure.get(&index).unwrap() + folded_len,
                     )
                 }
             });
         }
 
-        instructions
+        for v in instructions.iter_mut() {
+            *v = match &v {
+                ScopedInstruction::Jump(v) => ScopedInstruction::Jump(*v + new_instructions.len()),
+                ScopedInstruction::JumpIfTrue(v) => {
+                    ScopedInstruction::JumpIfTrue(*v + new_instructions.len())
+                }
+                ScopedInstruction::JumpIfFalse(v) => {
+                    ScopedInstruction::JumpIfFalse(*v + new_instructions.len())
+                }
+                v => (*v).clone(),
+            };
+        }
+
+        [new_instructions, instructions].concat()
     }
 }
 
