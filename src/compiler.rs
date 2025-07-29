@@ -219,18 +219,31 @@ pub enum ScopedInstruction {
 }
 
 impl ScopedInstruction {
-    pub fn from_compiled_function(compiled_function: &CompiledFunction) -> Vec<Self> {
+    pub fn add_jump_offset(&mut self, offset: usize) {
+        match self {
+            Self::Real(_) => {}
+            Self::JumpAndLink(_) => {}
+            Self::Jump(v) => *v = *v + offset,
+            Self::JumpIfTrue(v) => *v = *v + offset,
+            Self::JumpIfFalse(v) => *v = *v + offset,
+            Self::PushClosure(_, v) => *v = *v + offset,
+        }
+    }
+}
+
+impl ScopedInstruction {
+    pub fn from_compiled_instructions(compiled_instructions: &CompiledInstructions) -> Vec<Self> {
         let mut instructions: Vec<Self> = Vec::new();
         let mut index_to_jump = HashMap::<usize, usize>::new();
         let mut index_to_closure = HashMap::<usize, usize>::new();
         let mut folded: Vec<CompilerInstruction> = Vec::new();
 
-        for (i, v) in compiled_function.closures.iter().enumerate() {
+        for (i, v) in compiled_instructions.closures.iter().enumerate() {
             index_to_closure.insert(i, instructions.len());
-            instructions.append(&mut Self::from_compiled_function(v));
+            instructions.append(&mut Self::from_compiled_instructions(v));
         }
 
-        for (i, v) in compiled_function.instructions.iter().enumerate() {
+        for (i, v) in compiled_instructions.instructions.iter().enumerate() {
             index_to_jump.insert(i, folded.len());
             folded.append(&mut v.clone());
         }
@@ -259,21 +272,9 @@ impl ScopedInstruction {
             });
         }
 
-        for v in instructions.iter_mut() {
-            *v = match &v {
-                ScopedInstruction::Jump(v) => ScopedInstruction::Jump(*v + new_instructions.len()),
-                ScopedInstruction::JumpIfTrue(v) => {
-                    ScopedInstruction::JumpIfTrue(*v + new_instructions.len())
-                }
-                ScopedInstruction::JumpIfFalse(v) => {
-                    ScopedInstruction::JumpIfFalse(*v + new_instructions.len())
-                }
-                ScopedInstruction::PushClosure(vars_count, v) => {
-                    ScopedInstruction::PushClosure(*vars_count, *v + new_instructions.len())
-                }
-                v => (*v).clone(),
-            };
-        }
+        instructions
+            .iter_mut()
+            .for_each(|v| v.add_jump_offset(new_instructions.len()));
 
         [new_instructions, instructions].concat()
     }
@@ -1416,7 +1417,7 @@ impl Function {
 
 struct ExpressionCompiler<'a> {
     instructions: &'a mut Instructions,
-    closures: &'a mut Vec<CompiledFunction>,
+    closures: &'a mut Vec<CompiledInstructions>,
     type_resolver: Rc<TypeResolver>,
     function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
@@ -1425,7 +1426,7 @@ struct ExpressionCompiler<'a> {
 impl<'a> ExpressionCompiler<'a> {
     fn new(
         instructions: &'a mut Instructions,
-        closures: &'a mut Vec<CompiledFunction>,
+        closures: &'a mut Vec<CompiledInstructions>,
         type_resolver: Rc<TypeResolver>,
         function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
@@ -2527,12 +2528,19 @@ impl<'a> ExpressionCompiler<'a> {
 
         Ok(exp)
     }
+
+    fn to_compiled_instructions(self) -> CompiledInstructions {
+        CompiledInstructions {
+            closures: self.closures.to_vec(),
+            instructions: self.instructions.clone().get_instructions(),
+        }
+    }
 }
 
 pub struct FunctionCompiler {
     instructions: Instructions,
     function: Function,
-    closures: Vec<CompiledFunction>,
+    closures: Vec<CompiledInstructions>,
     current_body: Vec<CompilerBody>,
     type_resolver: Rc<TypeResolver>,
     function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
@@ -2540,9 +2548,9 @@ pub struct FunctionCompiler {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompiledFunction {
+pub struct CompiledInstructions {
     pub instructions: Vec<Vec<CompilerInstruction>>,
-    pub closures: Vec<CompiledFunction>,
+    pub closures: Vec<CompiledInstructions>,
 }
 
 impl FunctionCompiler {
@@ -2925,14 +2933,14 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    pub fn compile(mut self) -> Result<CompiledFunction> {
+    pub fn compile(mut self) -> Result<CompiledInstructions> {
         self.instructions.init_function_prologue(&self.function)?;
 
         self.compile_body(&self.function.body.clone())?;
 
         self.compile_return(None)?;
 
-        Ok(CompiledFunction {
+        Ok(CompiledInstructions {
             instructions: self.instructions.get_instructions(),
             closures: self.closures,
         })

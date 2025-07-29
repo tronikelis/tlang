@@ -3,7 +3,17 @@ use std::collections::HashMap;
 
 use crate::{compiler, vm};
 
-pub fn link(
+pub fn link_prefix(
+    prefix: Vec<vm::Instruction>,
+    mut current: Vec<vm::Instruction>,
+) -> Vec<vm::Instruction> {
+    current
+        .iter_mut()
+        .for_each(|v| v.add_jump_offset(prefix.len()));
+    [prefix, current].concat()
+}
+
+pub fn link_functions(
     functions: HashMap<String, Vec<compiler::ScopedInstruction>>,
 ) -> Result<Vec<vm::Instruction>> {
     let mut functions: Vec<(String, Vec<compiler::ScopedInstruction>)> =
@@ -28,23 +38,16 @@ pub fn link(
         let index = folded.len();
         function_to_index.insert(&k, index);
 
-        for v in v.clone() {
-            folded.push(match v {
-                compiler::ScopedInstruction::Jump(offset) => {
-                    compiler::ScopedInstruction::Jump(offset + index)
-                }
-                compiler::ScopedInstruction::JumpIfTrue(offset) => {
-                    compiler::ScopedInstruction::JumpIfTrue(offset + index)
-                }
-                compiler::ScopedInstruction::JumpIfFalse(offset) => {
-                    compiler::ScopedInstruction::JumpIfFalse(offset + index)
-                }
-                compiler::ScopedInstruction::PushClosure(vars_count, offset) => {
-                    compiler::ScopedInstruction::PushClosure(vars_count, offset + index)
-                }
-                v => v,
-            })
-        }
+        folded.append(
+            &mut v
+                .clone()
+                .into_iter()
+                .map(|mut v| {
+                    v.add_jump_offset(index);
+                    v
+                })
+                .collect(),
+        );
     }
 
     let instructions = folded

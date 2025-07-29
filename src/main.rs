@@ -244,11 +244,11 @@ fn main() {
 
         functions.insert(
             identifier.clone(),
-            compiler::ScopedInstruction::from_compiled_function(&compiled),
+            compiler::ScopedInstruction::from_compiled_instructions(&compiled),
         );
     }
 
-    let instructions = linker::link(functions).unwrap();
+    let instructions = linker::link_functions(functions).unwrap();
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
     vm::Vm::new(instructions, static_memory.borrow().clone()).run();

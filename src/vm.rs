@@ -243,10 +243,13 @@ pub enum Instruction {
     PushU8(u8),
     PushSlice,
     PushSliceNewLen(usize),
-    // index, len
-    PushStatic(usize, usize),
     // var count, function index
     PushClosure(usize, usize),
+
+    // index, len
+    PushStatic(usize, usize),
+    // size, alignment, index
+    StaticAllocAssign(usize, usize, usize),
 
     MinusInt,
     AddI,
@@ -282,6 +285,18 @@ pub enum Instruction {
     Alloc(usize, usize),
     Deref(usize),
     DerefAssign(usize),
+}
+
+impl Instruction {
+    pub fn add_jump_offset(&mut self, offset: usize) {
+        match self {
+            Self::JumpAndLink(v) => *v = *v + offset,
+            Self::Jump(v) => *v = *v + offset,
+            Self::JumpIfTrue(v) => *v = *v + offset,
+            Self::JumpIfFalse(v) => *v = *v + offset,
+            _ => {}
+        }
+    }
 }
 
 pub struct Stack {
@@ -691,6 +706,22 @@ impl Vm {
                     }
 
                     continue;
+                }
+                Instruction::StaticAllocAssign(size, alignment, index) => {
+                    let data = self.stack.pop_size(size);
+                    let ptr = unsafe { alloc(Layout::from_size_align(size, alignment).unwrap()) };
+                    unsafe {
+                        ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                    }
+
+                    unsafe {
+                        *self
+                            .static_memory
+                            .data
+                            .as_mut_ptr()
+                            .byte_offset(index as isize)
+                            .cast() = ptr;
+                    }
                 }
             }
 
