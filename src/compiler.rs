@@ -1414,83 +1414,34 @@ impl Function {
     }
 }
 
-pub struct FunctionCompiler {
-    instructions: Instructions,
-    function: Function,
-    closures: Vec<CompiledFunction>,
-    current_body: Vec<CompilerBody>,
+struct ExpressionCompiler<'a> {
+    instructions: &'a mut Instructions,
+    closures: &'a mut Vec<CompiledFunction>,
     type_resolver: Rc<TypeResolver>,
     function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
-#[derive(Debug)]
-pub struct CompiledFunction {
-    pub instructions: Vec<Vec<CompilerInstruction>>,
-    pub closures: Vec<CompiledFunction>,
-}
-
-impl FunctionCompiler {
-    pub fn new(
-        function: Function,
-        static_memory: Rc<RefCell<vm::StaticMemory>>,
+impl<'a> ExpressionCompiler<'a> {
+    fn new(
+        instructions: &'a mut Instructions,
+        closures: &'a mut Vec<CompiledFunction>,
         type_resolver: Rc<TypeResolver>,
         function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+        static_memory: Rc<RefCell<vm::StaticMemory>>,
     ) -> Self {
-        let mut current_body = Vec::new();
-        current_body.push(CompilerBody::new(function.body.clone()));
         Self {
+            instructions,
+            closures,
+            type_resolver,
             function_declarations,
             static_memory,
-            function,
-            closures: Vec::new(),
-            instructions: Instructions::new(),
-            type_resolver,
-            current_body,
         }
     }
 
-    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        self.type_resolver.resolve(_type)
-    }
-
-    fn resolve_function_call(&self, call: &ast::Call) -> FunctionCall {
-        if let ast::Expression::Type(_type) = &call.expression {
-            if let ast::Type::Alias(identifier) = _type {
-                return FunctionCall {
-                    call: call.clone(),
-                    declaration: self
-                        .function_declarations
-                        .get(identifier)
-                        .map(|v| v.clone()),
-                };
-            }
-        };
-
-        FunctionCall {
-            call: call.clone(),
-            declaration: None,
-        }
-    }
-
-    fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
-        let ast::Expression::Type(_type) = &call.expression else {
-            return Err(anyhow!(
-                "resolve_type_cast: cant type cast non Type expression"
-            ));
-        };
-
-        if call.arguments.len() != 1 {
-            return Err(anyhow!("resolve_type_cast: 1 argument required"));
-        }
-
-        let exp = call.arguments[0].clone();
-        let _type = self.resolve_type(_type)?;
-
-        Ok(TypeCast {
-            expression: exp,
-            _type,
-        })
+    fn compile_nil(&mut self) -> Result<Type> {
+        self.instructions.instr_push_i(0)?;
+        Ok(NIL.clone())
     }
 
     fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
@@ -1506,790 +1457,8 @@ impl FunctionCompiler {
         Ok((variable.0, variable.1.clone()))
     }
 
-    // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<Type> {
-        let type_arg = call
-            .call
-            .arguments
-            .get(0)
-            .ok_or(anyhow!("new: expected first argument"))?;
-
-        let ast::Expression::Type(_type) = type_arg else {
-            return Err(anyhow!("new: expected first argument to be type"));
-        };
-        let _type = self.resolve_type(_type)?;
-
-        match &_type._type {
-            TypeType::Slice(slice_item) => {
-                let def_val = call
-                    .call
-                    .arguments
-                    .get(1)
-                    .ok_or(anyhow!("new: second argument expected"))?;
-
-                let len_val = call
-                    .call
-                    .arguments
-                    .get(2)
-                    .ok_or(anyhow!("new: third argument expected"))?;
-
-                let len_exp = self.compile_expression(len_val)?;
-                if len_exp != *INT {
-                    return Err(anyhow!("new: length should be of type int"));
-                }
-
-                let def_exp = self.compile_expression(def_val)?;
-                if def_exp != **slice_item {
-                    return Err(anyhow!("new: expression does not match slice type"));
-                }
-
-                self.instructions.instr_push_slice_new_len(def_exp.size);
-
-                Ok(_type.clone())
-            }
-            _type => return Err(anyhow!("new: {_type:#?} not supported")),
-        }
-    }
-
-    // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<Type> {
-        let slice_arg = call
-            .call
-            .arguments
-            .get(0)
-            .ok_or(anyhow!("len: expected first argument"))?;
-
-        // cleanup align here?
-        let slice_exp = self.compile_expression(slice_arg)?;
-        let TypeType::Slice(_) = &slice_exp._type else {
-            return Err(anyhow!(
-                "len: expected slice as the argument, got {:#?}",
-                slice_exp._type
-            ));
-        };
-
-        self.instructions.instr_slice_len();
-
-        Ok(INT.clone())
-    }
-
-    // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<Type> {
-        let slice_arg = call
-            .call
-            .arguments
-            .get(0)
-            .ok_or(anyhow!("append: expected first argument"))?;
-        let value_arg = call
-            .call
-            .arguments
-            .get(1)
-            .ok_or(anyhow!("append: expected second argument"))?;
-
-        // cleanup align here?
-        let slice_exp = self.compile_expression(slice_arg)?;
-        let value_exp = self.compile_expression(value_arg)?;
-
-        let TypeType::Slice(slice_item) = &slice_exp._type else {
-            return Err(anyhow!("append: provide a slice as the first argument"));
-        };
-
-        if **slice_item != value_exp {
-            return Err(anyhow!("append: value type does not match slice type"));
-        }
-
-        self.instructions.instr_slice_append(value_exp.size);
-
-        Ok(VOID.clone())
-    }
-
-    fn check_function_call_argument_count(&mut self, call: &FunctionCall) -> Result<()> {
-        let arguments = match &call.declaration {
-            Some(declaration) => declaration
-                .arguments
-                .iter()
-                .map(|v| self.resolve_type(&v._type))
-                .collect::<Result<Vec<_>, anyhow::Error>>()?,
-            None => self
-                .resolve_expression(&call.call.expression)?
-                ._type
-                .closure_err()?
-                .arguments
-                .into_iter()
-                .map(|v| v.1)
-                .collect(),
-        };
-
-        // todo: refactor this arguments check somehow
-        if let Some(last) = arguments.last() {
-            if let TypeType::Variadic(_type) = &last._type {
-                // -1 because variadic can be empty
-                if call.call.arguments.len() < arguments.len() - 1 {
-                    return Err(anyhow!(
-                        "compile_function_call: variadic argument count mismatch"
-                    ));
-                }
-            } else {
-                if call.call.arguments.len() != arguments.len() {
-                    return Err(anyhow!("compile_function_call: argument count mismatch"));
-                }
-            }
-        } else {
-            if call.call.arguments.len() != arguments.len() {
-                return Err(anyhow!("compile_function_call: argument count mismatch"));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn resolve_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
-        let instructions = self.instructions.clone();
-        let exp = self.compile_expression(expression);
-        self.instructions = instructions;
-
-        exp
-    }
-
-    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
-        self.check_function_call_argument_count(call)?;
-
-        if let Some(declaration) = &call.declaration {
-            match declaration.identifier.as_str() {
-                "append" => return self.compile_function_builtin_append(call),
-                "len" => return self.compile_function_builtin_len(call),
-                "new" => return self.compile_function_builtin_new(call),
-                _ => {}
-            }
-        }
-
-        let (return_alignment, expected_arguments): (usize, Vec<Type>) = match &call.declaration {
-            Some(declaration) => (
-                self.resolve_type(&declaration.return_type)?.alignment,
-                declaration
-                    .arguments
-                    .iter()
-                    .map(|v| self.resolve_type(&v._type))
-                    .collect::<Result<_, anyhow::Error>>()?,
-            ),
-            None => (
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .return_type
-                    .alignment,
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .arguments
-                    .into_iter()
-                    .map(|v| v.1)
-                    .collect(),
-            ),
-        };
-
-        self.instructions.push_alignment(return_alignment);
-
-        let argument_size = {
-            self.instructions.push_stack_frame();
-            for (i, expected_type) in expected_arguments.iter().enumerate() {
-                let arg = call.call.arguments.get(i);
-
-                let Some(arg) = arg else {
-                    if expected_type.extract_variadic().is_some() {
-                        self.instructions.instr_push_slice();
-                        continue;
-                    }
-                    return Err(anyhow!("compile_function_call: argument missing"));
-                };
-
-                let Some(inner) = expected_type.extract_variadic() else {
-                    let exp = self.compile_expression(arg)?;
-                    if exp != *expected_type {
-                        return Err(anyhow!("function call type mismatch"));
-                    }
-                    continue;
-                };
-
-                if let ast::Expression::Spread(_) = arg {
-                    let exp = self.compile_expression(arg)?;
-                    if exp != *expected_type {
-                        return Err(anyhow!("function call type mismatch"));
-                    }
-                    // this check is weird, because ast actually does not allow creating
-                    // declarations where spread is not last, but this probably should be in
-                    // compiler
-                    if expected_arguments.len() != call.call.arguments.len() {
-                        return Err(anyhow!("spread must be last argument"));
-                    }
-
-                    continue;
-                }
-
-                self.instructions.instr_push_slice();
-                for arg in call.call.arguments.iter().skip(i) {
-                    self.instructions.instr_increment(SLICE_SIZE);
-                    self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
-
-                    let value_exp = self.compile_expression(arg)?;
-                    if value_exp != *inner {
-                        return Err(anyhow!("variadic argument type mismatch"));
-                    }
-
-                    self.instructions.instr_slice_append(value_exp.size);
-                }
-            }
-            self.instructions.pop_stack_frame_size()
-        };
-
-        if let Some(declaration) = &call.declaration {
-            match declaration.identifier.as_str() {
-                "libc_write" => {
-                    self.instructions.instr_libc_write();
-                    return Ok(INT.clone());
-                }
-                _ => {}
-            }
-        }
-
-        let return_type = match &call.declaration {
-            Some(declaration) => self.resolve_type(&declaration.return_type)?,
-            None => {
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .return_type
-            }
-        };
-        let return_size = return_type.size;
-
-        let mut reset_size: usize;
-        if argument_size < return_size {
-            // the whole argument section will be used for return value
-            // do not need to reset
-            reset_size = 0;
-            self.instructions
-                .instr_increment(return_size - argument_size);
-        } else {
-            // reset the argument section to the return size
-            reset_size = argument_size - return_size;
-        }
-
-        // aligning for pushing of return address
-        reset_size += self.instructions.push_alignment(PTR_SIZE);
-
-        match &call.declaration {
-            Some(declaration) => {
-                self.instructions
-                    .instr_jump_and_link(declaration.identifier.clone());
-            }
-            None => {
-                self.compile_expression(&call.call.expression)?;
-                self.instructions.instr_jump_and_link_closure();
-            }
-        }
-
-        self.instructions.instr_reset(reset_size);
-
-        Ok(return_type)
-    }
-
-    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
-        let literal_type = match literal.literal {
-            lexer::Literal::Int(_) => INT.clone(),
-            lexer::Literal::Bool(_) => BOOL.clone(),
-            lexer::Literal::String(_) => STRING.clone(),
-        };
-
-        match &literal.literal {
-            lexer::Literal::Int(int) => {
-                if literal_type == *UINT8 {
-                    self.instructions.instr_push_u8(*int)?;
-                } else if literal_type == *INT {
-                    self.instructions.instr_push_i(*int)?;
-                } else {
-                    return Err(anyhow!("can't cast int to {literal_type:#?}"));
-                }
-            }
-            lexer::Literal::Bool(bool) => {
-                if literal_type == *BOOL {
-                    self.instructions.instr_push_i({
-                        if *bool {
-                            1
-                        } else {
-                            0
-                        }
-                    })?;
-                } else {
-                    return Err(anyhow!("can't cast bool to {literal_type:#?}"));
-                }
-            }
-            lexer::Literal::String(string) => {
-                let index = self.static_memory.borrow_mut().push_string_slice(&string);
-                self.instructions
-                    .instr_push_static(index, SLICE_SIZE, SLICE_SIZE);
-            }
-        }
-
-        Ok(literal_type)
-    }
-
-    fn compile_variable(&mut self, mut offset: usize, variable: &Variable) -> Result<Type> {
-        if let TypeType::Escaped(_type) = &variable._type._type {
-            // this will leak alignment
-            let alignment = self.instructions.push_alignment(PTR_SIZE);
-            self.instructions.instr_increment(PTR_SIZE);
-            self.instructions
-                .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
-            self.instructions.instr_deref(_type.size);
-
-            return Ok(*_type.clone());
-        }
-
-        offset += self.instructions.push_alignment(variable._type.alignment);
-        self.instructions.instr_increment(variable._type.size);
-        self.instructions
-            .instr_copy(0, offset + variable._type.size, variable._type.size);
-
-        Ok(variable._type.clone())
-    }
-
-    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
-        let a = self.compile_expression(&arithmetic.left)?;
-        let b = self.compile_expression(&arithmetic.right)?;
-
-        if a != b {
-            return Err(anyhow!("can't add different types"));
-        }
-        if a == *VOID {
-            return Err(anyhow!("can't add void type"));
-        }
-
-        match arithmetic._type {
-            ast::ArithmeticType::Minus => {
-                if *INT == a {
-                    self.instructions.instr_minus_int();
-                    self.instructions.instr_add_i();
-                } else {
-                    return Err(anyhow!("can only minus int"));
-                }
-            }
-            ast::ArithmeticType::Plus => {
-                if *INT == a {
-                    self.instructions.instr_add_i();
-                } else if a == *STRING {
-                    self.instructions.instr_add_string();
-                } else {
-                    return Err(anyhow!("can only plus int and string"));
-                }
-            }
-            ast::ArithmeticType::Multiply => {
-                if *INT == a {
-                    self.instructions.instr_multiply_i();
-                } else {
-                    return Err(anyhow!("can only multiply int"));
-                }
-            }
-            ast::ArithmeticType::Divide => {
-                if *INT == a {
-                    self.instructions.instr_divide_i();
-                } else {
-                    return Err(anyhow!("can only divide int"));
-                }
-            }
-            ast::ArithmeticType::Modulo => {
-                if *INT == a {
-                    self.instructions.instr_modulo_i();
-                } else {
-                    return Err(anyhow!("can only modulo int"));
-                }
-            }
-        }
-
-        Ok(a)
-    }
-
-    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<Type> {
-        let a: Type;
-        let b: Type;
-
-        match compare.compare_type {
-            // last item on the stack is smaller
-            ast::CompareType::Gt => {
-                b = self.compile_expression(&compare.left)?;
-                a = self.compile_expression(&compare.right)?;
-            }
-            // last item on the stack is bigger
-            ast::CompareType::Lt => {
-                b = self.compile_expression(&compare.right)?;
-                a = self.compile_expression(&compare.left)?;
-            }
-            // dont matter
-            ast::CompareType::Equals | ast::CompareType::NotEquals => {
-                a = self.compile_expression(&compare.right)?;
-                b = self.compile_expression(&compare.left)?;
-            }
-        };
-
-        if a._type != b._type {
-            return Err(anyhow!("can't compare different types"));
-        }
-        if a != *BOOL && a != *INT {
-            return Err(anyhow!("can only compare int/bool"));
-        }
-
-        match compare.compare_type {
-            ast::CompareType::Gt | ast::CompareType::Lt => {
-                // a = -a
-                self.instructions.instr_minus_int();
-
-                // a + b
-                self.instructions.instr_add_i();
-
-                // >0:1 <0:0
-                self.instructions.instr_to_bool();
-            }
-            ast::CompareType::Equals => {
-                self.instructions.instr_compare_i();
-            }
-            ast::CompareType::NotEquals => {
-                self.instructions.instr_compare_i();
-                self.instructions.instr_negate_bool();
-            }
-        }
-
-        Ok(BOOL.clone())
-    }
-
-    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
-        let exp = self.compile_expression(&infix.expression)?;
-        match infix._type {
-            ast::InfixType::Plus => {}
-            ast::InfixType::Minus => {
-                self.instructions.instr_minus_int();
-            }
-        }
-        Ok(exp)
-    }
-
-    fn compile_slice_init(&mut self, slice_init: &ast::SliceInit) -> Result<Type> {
-        let resolved_type = self.resolve_type(&slice_init._type)?;
-
-        let TypeType::Slice(slice_item) = &resolved_type._type else {
-            panic!("compile_slice_init: incorrect type, wrong ast parser");
-        };
-
-        self.instructions.instr_push_slice();
-
-        for v in &slice_init.expressions {
-            self.instructions.push_stack_frame();
-
-            self.instructions.instr_increment(SLICE_SIZE);
-            self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
-
-            let exp = self.compile_expression(v)?;
-            if exp != **slice_item {
-                return Err(anyhow!("compile_slice_init: slice item type mismatch"));
-            }
-
-            self.instructions.instr_slice_append(exp.size);
-
-            self.instructions.pop_stack_frame();
-        }
-
-        Ok(resolved_type)
-    }
-
-    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
-        let exp_var = self.compile_expression(&index.var)?;
-
-        let TypeType::Slice(expected_type) = exp_var._type else {
-            return Err(anyhow!("can't index this type"));
-        };
-
-        let exp_index = self.compile_expression(&index.expression)?;
-        if exp_index != *INT {
-            return Err(anyhow!("cant index with {exp_index:#?}"));
-        }
-
-        self.instructions.instr_slice_index_get(expected_type.size);
-
-        Ok(*expected_type)
-    }
-
-    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<Type> {
-        self.instructions.stack_instructions.jump();
-
-        let left = self.compile_expression(&andor.left)?;
-        if left != *BOOL {
-            return Err(anyhow!("compile_andor: expected bool expression"));
-        }
-
-        match andor._type {
-            ast::AndOrType::Or => {
-                self.instructions.stack_instructions.back_if_true(1);
-
-                let right = self.compile_expression(&andor.right)?;
-                if right != *BOOL {
-                    return Err(anyhow!("compile_andor: expected bool expression"));
-                }
-
-                self.instructions.instr_or();
-            }
-            ast::AndOrType::And => {
-                self.instructions.stack_instructions.back_if_false(1);
-
-                let right = self.compile_expression(&andor.right)?;
-                if right != *BOOL {
-                    return Err(anyhow!("compile_andor: expected bool expression"));
-                }
-
-                self.instructions.instr_and();
-            }
-        }
-
-        self.instructions.stack_instructions.back(1);
-        self.instructions.stack_instructions.pop_index();
-
-        Ok(BOOL.clone())
-    }
-
-    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
-        self.instructions.push_alignment(type_cast._type.alignment);
-
-        let target = self.compile_expression(&type_cast.expression)?;
-
-        match target._type {
-            TypeType::Builtin(builtin) => match builtin {
-                TypeBuiltin::Int => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Uint8 => {
-                            self.instructions.instr_cast_int_uint8();
-                        }
-                        TypeBuiltin::Uint => {
-                            self.instructions.instr_cast_int_uint();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
-                TypeBuiltin::Uint8 => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Int => {
-                            self.instructions.instr_cast_uint8_int();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
-                TypeBuiltin::Ptr => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Uint => {}
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
-                TypeBuiltin::String => match &type_cast._type._type {
-                    TypeType::Slice(item) => {
-                        if **item != *UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
-            },
-            TypeType::Slice(item_target) => match &type_cast._type._type {
-                TypeType::Builtin(builtin_dest) => match builtin_dest {
-                    TypeBuiltin::String => {
-                        if *item_target != *UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
-                    TypeBuiltin::Ptr => {
-                        self.instructions.instr_cast_slice_ptr();
-                    }
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
-            },
-            TypeType::Variadic(item_target) => match &type_cast._type._type {
-                TypeType::Slice(item_dest) => {
-                    if item_target != *item_dest {
-                        return Err(anyhow!(
-                            "compile_type_cast: cant cast variadic into slice different types"
-                        ));
-                    }
-                }
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
-            },
-            _ => return Err(anyhow!("compile_type_cast: cant cast")),
-        }
-
-        Ok(type_cast._type.clone())
-    }
-
-    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
-        let exp_bool = self.compile_expression(negate)?;
-        if exp_bool != *BOOL {
-            return Err(anyhow!("can only negate bools"));
-        }
-
-        self.instructions.instr_negate_bool();
-
-        Ok(BOOL.clone())
-    }
-
-    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
-        let exp = self.compile_expression(expression)?;
-
-        let TypeType::Slice(slice_item) = exp._type else {
-            return Err(anyhow!("compile_spread: can only spread slice types"));
-        };
-
-        Ok(Type::create_variadic(*slice_item))
-    }
-
-    fn compile_struct_init(&mut self, struct_init: &ast::StructInit) -> Result<Type> {
-        let resolved_type = self.resolve_type(&struct_init._type)?;
-
-        let TypeType::Struct(type_struct) = &resolved_type._type else {
-            panic!("compile_struct_init: incorrect type wrong ast parser");
-        };
-
-        if type_struct.identifier_field_count() != struct_init.fields.len() {
-            return Err(anyhow!(
-                "compile_struct_init: field initialization count mismatch"
-            ));
-        }
-
-        for field in &type_struct.fields {
-            match field {
-                TypeStructField::Padding(padding) => {
-                    self.instructions.instr_increment(*padding);
-                }
-                TypeStructField::Type(identifier, _type) => {
-                    let exp = struct_init.fields.get(identifier).ok_or(anyhow!(
-                        "compile_struct_init: initialization field not found"
-                    ))?;
-
-                    let exp_type = self.compile_expression(exp)?;
-                    exp_type.equals(_type)?;
-                }
-            }
-        }
-
-        Ok(resolved_type)
-    }
-
-    fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
-        let field = self.compile_dot_access_field_offset(dot_access)?;
-
-        match field {
-            DotAccessField::Heap(_type) => {
-                // already aligned on 8 because of address
-                self.instructions.instr_deref(_type.size);
-
-                Ok(_type)
-            }
-            DotAccessField::Stack(offset, _type) => {
-                let alignment = self.instructions.push_alignment(_type.alignment);
-
-                self.instructions.instr_increment(_type.size);
-                self.instructions
-                    .instr_copy(0, offset + _type.size + alignment, _type.size);
-
-                Ok(_type)
-            }
-        }
-    }
-
-    fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {
-        match expression {
-            ast::Expression::Type(_type) => {
-                let (offset, var) = self.resolve_variable(_type)?;
-
-                let TypeType::Escaped(_type) = var._type._type else {
-                    return Err(anyhow!("compile_address: rn all variables are escaped"));
-                };
-
-                let alignment = self.instructions.push_alignment(PTR_SIZE);
-                self.instructions.instr_increment(PTR_SIZE);
-                self.instructions
-                    .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
-
-                Ok(Type::create_address(*_type))
-            }
-            ast::Expression::DotAccess(dot_access) => {
-                let field = self.compile_dot_access_field_offset(dot_access)?;
-                let DotAccessField::Heap(_type) = field else {
-                    return Err(anyhow!(
-                        "compile_address: cant take non heap address dot access"
-                    ));
-                };
-
-                Ok(Type::create_address(_type))
-            }
-            ast::Expression::Address(_) => {
-                Err(anyhow!("compile_address: cant take address of this"))
-            }
-            expression => {
-                self.instructions.push_alignment(PTR_SIZE);
-                let exp = self.compile_expression(expression)?;
-                self.instructions.instr_alloc(exp.size, exp.alignment);
-
-                Ok(Type::create_address(exp))
-            }
-        }
-    }
-
-    fn compile_deref(&mut self, expression: &ast::Expression) -> Result<Type> {
-        let exp = self.compile_expression(expression)?;
-        let TypeType::Address(_type) = exp._type else {
-            return Err(anyhow!(
-                "compile_deref: can't dereference non address types"
-            ));
-        };
-
-        self.instructions.instr_deref(exp.size);
-
-        Ok(*_type)
-    }
-
-    fn compile_type_init(&mut self, type_init: &ast::TypeInit) -> Result<Type> {
-        match self.resolve_type(&type_init._type)?._type {
-            TypeType::Slice(_) => self.compile_slice_init(&ast::SliceInit {
-                _type: type_init._type.clone(),
-                expressions: Vec::new(),
-            }),
-            TypeType::Struct(_) => self.compile_struct_init(&ast::StructInit {
-                _type: type_init._type.clone(),
-                fields: HashMap::new(),
-            }),
-            _ => Err(anyhow!("compile_type_init: cant compile this type")),
-        }
-    }
-
-    fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
-        let (offset, variable) = self.resolve_variable(_type)?;
-        self.compile_variable(offset, &variable)
-    }
-
-    fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
-        if let Ok(v) = self.resolve_type_cast(call) {
-            return self.compile_type_cast(&v);
-        }
-
-        self.compile_function_call(&self.resolve_function_call(call))
-    }
-
-    fn compile_nil(&mut self) -> Result<Type> {
-        self.instructions.instr_push_i(0)?;
-        Ok(NIL.clone())
+    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
+        self.type_resolver.resolve(_type)
     }
 
     fn compile_closure(&mut self, closure: &ast::Closure) -> Result<Type> {
@@ -2331,7 +1500,7 @@ impl FunctionCompiler {
             Function::from_closure(&self.type_resolver, &closure, escaped_variables).unwrap();
 
         self.closures.push(
-            Self::new(
+            FunctionCompiler::new(
                 closure_function,
                 self.static_memory.clone(),
                 self.type_resolver.clone(),
@@ -2343,75 +1512,24 @@ impl FunctionCompiler {
         Ok(self.resolve_type(&closure._type)?)
     }
 
-    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
-        let old_stack_size = self.instructions.stack_total_size();
+    fn compile_variable(&mut self, mut offset: usize, variable: &Variable) -> Result<Type> {
+        if let TypeType::Escaped(_type) = &variable._type._type {
+            // this will leak alignment
+            let alignment = self.instructions.push_alignment(PTR_SIZE);
+            self.instructions.instr_increment(PTR_SIZE);
+            self.instructions
+                .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
+            self.instructions.instr_deref(_type.size);
 
-        let exp = match expression {
-            ast::Expression::AndOr(v) => self.compile_andor(v),
-            ast::Expression::Literal(v) => self.compile_literal(v),
-            ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Call(v) => self.compile_call(v),
-            ast::Expression::TypeInit(v) => self.compile_type_init(v),
-            ast::Expression::Compare(v) => self.compile_compare(v),
-            ast::Expression::Infix(v) => self.compile_infix(v),
-            ast::Expression::SliceInit(v) => self.compile_slice_init(v),
-            ast::Expression::Index(v) => self.compile_expression_index(v),
-            ast::Expression::Negate(v) => self.compile_negate(v),
-            ast::Expression::Spread(v) => self.compile_spread(v),
-            ast::Expression::StructInit(v) => self.compile_struct_init(v),
-            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
-            ast::Expression::Deref(v) => self.compile_deref(v),
-            ast::Expression::Address(v) => self.compile_address(v),
-            ast::Expression::Type(v) => self.compile_type(v),
-            ast::Expression::Closure(v) => self.compile_closure(v),
-            ast::Expression::Nil => self.compile_nil(),
-        }?;
-
-        if exp.alignment != 0 {
-            let new_stack_size = self.instructions.stack_total_size();
-            let delta_stack_size = new_stack_size - old_stack_size;
-
-            if old_stack_size % exp.alignment == 0 && delta_stack_size > exp.size {
-                self.instructions
-                    .instr_shift(exp.size, delta_stack_size - exp.size);
-            }
+            return Ok(*_type.clone());
         }
 
-        Ok(exp)
-    }
+        offset += self.instructions.push_alignment(variable._type.alignment);
+        self.instructions.instr_increment(variable._type.size);
+        self.instructions
+            .instr_copy(0, offset + variable._type.size, variable._type.size);
 
-    fn compile_variable_declaration(
-        &mut self,
-        declaration: &ast::VariableDeclaration,
-    ) -> Result<()> {
-        let escaped = self
-            .current_body
-            .last()
-            .unwrap()
-            .does_variable_escape(&declaration.variable.identifier, 1);
-        if escaped {
-            self.instructions.push_alignment(PTR_SIZE);
-        }
-
-        let mut exp = self.compile_expression(&declaration.expression)?;
-        if exp == *VOID {
-            return Err(anyhow!("can't declare void variable"));
-        }
-
-        self.resolve_type(&declaration.variable._type)?
-            .equals(&exp)?;
-
-        if escaped {
-            self.instructions.instr_alloc(exp.size, exp.alignment);
-            exp = Type::create_escaped(exp);
-        }
-
-        self.instructions.var_mark(Variable {
-            identifier: declaration.variable.identifier.clone(),
-            _type: exp,
-        });
-
-        Ok(())
+        Ok(variable._type.clone())
     }
 
     fn compile_dot_access_field_offset_base_heap(
@@ -2568,6 +1686,956 @@ impl FunctionCompiler {
                 _type => Err(anyhow!("cant access non struct/address type: {_type:#?}")),
             }
         }
+    }
+
+    fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
+        let (offset, variable) = self.resolve_variable(_type)?;
+        self.compile_variable(offset, &variable)
+    }
+
+    fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {
+        match expression {
+            ast::Expression::Type(_type) => {
+                let (offset, var) = self.resolve_variable(_type)?;
+
+                let TypeType::Escaped(_type) = var._type._type else {
+                    return Err(anyhow!("compile_address: rn all variables are escaped"));
+                };
+
+                let alignment = self.instructions.push_alignment(PTR_SIZE);
+                self.instructions.instr_increment(PTR_SIZE);
+                self.instructions
+                    .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
+
+                Ok(Type::create_address(*_type))
+            }
+            ast::Expression::DotAccess(dot_access) => {
+                let field = self.compile_dot_access_field_offset(dot_access)?;
+                let DotAccessField::Heap(_type) = field else {
+                    return Err(anyhow!(
+                        "compile_address: cant take non heap address dot access"
+                    ));
+                };
+
+                Ok(Type::create_address(_type))
+            }
+            ast::Expression::Address(_) => {
+                Err(anyhow!("compile_address: cant take address of this"))
+            }
+            expression => {
+                self.instructions.push_alignment(PTR_SIZE);
+                let exp = self.compile_expression(expression)?;
+                self.instructions.instr_alloc(exp.size, exp.alignment);
+
+                Ok(Type::create_address(exp))
+            }
+        }
+    }
+
+    fn compile_deref(&mut self, expression: &ast::Expression) -> Result<Type> {
+        let exp = self.compile_expression(expression)?;
+        let TypeType::Address(_type) = exp._type else {
+            return Err(anyhow!(
+                "compile_deref: can't dereference non address types"
+            ));
+        };
+
+        self.instructions.instr_deref(exp.size);
+
+        Ok(*_type)
+    }
+
+    fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
+        let field = self.compile_dot_access_field_offset(dot_access)?;
+
+        match field {
+            DotAccessField::Heap(_type) => {
+                // already aligned on 8 because of address
+                self.instructions.instr_deref(_type.size);
+
+                Ok(_type)
+            }
+            DotAccessField::Stack(offset, _type) => {
+                let alignment = self.instructions.push_alignment(_type.alignment);
+
+                self.instructions.instr_increment(_type.size);
+                self.instructions
+                    .instr_copy(0, offset + _type.size + alignment, _type.size);
+
+                Ok(_type)
+            }
+        }
+    }
+
+    fn compile_struct_init(&mut self, struct_init: &ast::StructInit) -> Result<Type> {
+        let resolved_type = self.resolve_type(&struct_init._type)?;
+
+        let TypeType::Struct(type_struct) = &resolved_type._type else {
+            panic!("compile_struct_init: incorrect type wrong ast parser");
+        };
+
+        if type_struct.identifier_field_count() != struct_init.fields.len() {
+            return Err(anyhow!(
+                "compile_struct_init: field initialization count mismatch"
+            ));
+        }
+
+        for field in &type_struct.fields {
+            match field {
+                TypeStructField::Padding(padding) => {
+                    self.instructions.instr_increment(*padding);
+                }
+                TypeStructField::Type(identifier, _type) => {
+                    let exp = struct_init.fields.get(identifier).ok_or(anyhow!(
+                        "compile_struct_init: initialization field not found"
+                    ))?;
+
+                    let exp_type = self.compile_expression(exp)?;
+                    exp_type.equals(_type)?;
+                }
+            }
+        }
+
+        Ok(resolved_type)
+    }
+
+    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
+        let exp = self.compile_expression(expression)?;
+
+        let TypeType::Slice(slice_item) = exp._type else {
+            return Err(anyhow!("compile_spread: can only spread slice types"));
+        };
+
+        Ok(Type::create_variadic(*slice_item))
+    }
+
+    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
+        let exp_bool = self.compile_expression(negate)?;
+        if exp_bool != *BOOL {
+            return Err(anyhow!("can only negate bools"));
+        }
+
+        self.instructions.instr_negate_bool();
+
+        Ok(BOOL.clone())
+    }
+
+    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
+        let exp_var = self.compile_expression(&index.var)?;
+
+        let TypeType::Slice(expected_type) = exp_var._type else {
+            return Err(anyhow!("can't index this type"));
+        };
+
+        let exp_index = self.compile_expression(&index.expression)?;
+        if exp_index != *INT {
+            return Err(anyhow!("cant index with {exp_index:#?}"));
+        }
+
+        self.instructions.instr_slice_index_get(expected_type.size);
+
+        Ok(*expected_type)
+    }
+
+    fn compile_slice_init(&mut self, slice_init: &ast::SliceInit) -> Result<Type> {
+        let resolved_type = self.resolve_type(&slice_init._type)?;
+
+        let TypeType::Slice(slice_item) = &resolved_type._type else {
+            panic!("compile_slice_init: incorrect type, wrong ast parser");
+        };
+
+        self.instructions.instr_push_slice();
+
+        for v in &slice_init.expressions {
+            self.instructions.push_stack_frame();
+
+            self.instructions.instr_increment(SLICE_SIZE);
+            self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
+
+            let exp = self.compile_expression(v)?;
+            if exp != **slice_item {
+                return Err(anyhow!("compile_slice_init: slice item type mismatch"));
+            }
+
+            self.instructions.instr_slice_append(exp.size);
+
+            self.instructions.pop_stack_frame();
+        }
+
+        Ok(resolved_type)
+    }
+
+    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
+        let exp = self.compile_expression(&infix.expression)?;
+        match infix._type {
+            ast::InfixType::Plus => {}
+            ast::InfixType::Minus => {
+                self.instructions.instr_minus_int();
+            }
+        }
+        Ok(exp)
+    }
+
+    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<Type> {
+        let a: Type;
+        let b: Type;
+
+        match compare.compare_type {
+            // last item on the stack is smaller
+            ast::CompareType::Gt => {
+                b = self.compile_expression(&compare.left)?;
+                a = self.compile_expression(&compare.right)?;
+            }
+            // last item on the stack is bigger
+            ast::CompareType::Lt => {
+                b = self.compile_expression(&compare.right)?;
+                a = self.compile_expression(&compare.left)?;
+            }
+            // dont matter
+            ast::CompareType::Equals | ast::CompareType::NotEquals => {
+                a = self.compile_expression(&compare.right)?;
+                b = self.compile_expression(&compare.left)?;
+            }
+        };
+
+        if a._type != b._type {
+            return Err(anyhow!("can't compare different types"));
+        }
+        if a != *BOOL && a != *INT {
+            return Err(anyhow!("can only compare int/bool"));
+        }
+
+        match compare.compare_type {
+            ast::CompareType::Gt | ast::CompareType::Lt => {
+                // a = -a
+                self.instructions.instr_minus_int();
+
+                // a + b
+                self.instructions.instr_add_i();
+
+                // >0:1 <0:0
+                self.instructions.instr_to_bool();
+            }
+            ast::CompareType::Equals => {
+                self.instructions.instr_compare_i();
+            }
+            ast::CompareType::NotEquals => {
+                self.instructions.instr_compare_i();
+                self.instructions.instr_negate_bool();
+            }
+        }
+
+        Ok(BOOL.clone())
+    }
+
+    fn compile_type_init(&mut self, type_init: &ast::TypeInit) -> Result<Type> {
+        match self.resolve_type(&type_init._type)?._type {
+            TypeType::Slice(_) => self.compile_slice_init(&ast::SliceInit {
+                _type: type_init._type.clone(),
+                expressions: Vec::new(),
+            }),
+            TypeType::Struct(_) => self.compile_struct_init(&ast::StructInit {
+                _type: type_init._type.clone(),
+                fields: HashMap::new(),
+            }),
+            _ => Err(anyhow!("compile_type_init: cant compile this type")),
+        }
+    }
+
+    fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
+        let ast::Expression::Type(_type) = &call.expression else {
+            return Err(anyhow!(
+                "resolve_type_cast: cant type cast non Type expression"
+            ));
+        };
+
+        if call.arguments.len() != 1 {
+            return Err(anyhow!("resolve_type_cast: 1 argument required"));
+        }
+
+        let exp = call.arguments[0].clone();
+        let _type = self.resolve_type(_type)?;
+
+        Ok(TypeCast {
+            expression: exp,
+            _type,
+        })
+    }
+
+    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
+        self.instructions.push_alignment(type_cast._type.alignment);
+
+        let target = self.compile_expression(&type_cast.expression)?;
+
+        match target._type {
+            TypeType::Builtin(builtin) => match builtin {
+                TypeBuiltin::Int => match &type_cast._type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Uint8 => {
+                            self.instructions.instr_cast_int_uint8();
+                        }
+                        TypeBuiltin::Uint => {
+                            self.instructions.instr_cast_int_uint();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                TypeBuiltin::Uint8 => match &type_cast._type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Int => {
+                            self.instructions.instr_cast_uint8_int();
+                        }
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                TypeBuiltin::Ptr => match &type_cast._type._type {
+                    TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        TypeBuiltin::Uint => {}
+                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                TypeBuiltin::String => match &type_cast._type._type {
+                    TypeType::Slice(item) => {
+                        if **item != *UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
+                    }
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            TypeType::Slice(item_target) => match &type_cast._type._type {
+                TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    TypeBuiltin::String => {
+                        if *item_target != *UINT8 {
+                            return Err(anyhow!(
+                                "compile_type_cast: can only cast string to uint8[]"
+                            ));
+                        }
+                    }
+                    TypeBuiltin::Ptr => {
+                        self.instructions.instr_cast_slice_ptr();
+                    }
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            TypeType::Variadic(item_target) => match &type_cast._type._type {
+                TypeType::Slice(item_dest) => {
+                    if item_target != *item_dest {
+                        return Err(anyhow!(
+                            "compile_type_cast: cant cast variadic into slice different types"
+                        ));
+                    }
+                }
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            _ => return Err(anyhow!("compile_type_cast: cant cast")),
+        }
+
+        Ok(type_cast._type.clone())
+    }
+
+    fn resolve_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+        ExpressionCompiler::new(
+            &mut self.instructions.clone(),
+            &mut self.closures.clone(),
+            self.type_resolver.clone(),
+            self.function_declarations.clone(),
+            self.static_memory.clone(),
+        )
+        .compile_expression(expression)
+    }
+
+    fn check_function_call_argument_count(&mut self, call: &FunctionCall) -> Result<()> {
+        let arguments = match &call.declaration {
+            Some(declaration) => declaration
+                .arguments
+                .iter()
+                .map(|v| self.resolve_type(&v._type))
+                .collect::<Result<Vec<_>, anyhow::Error>>()?,
+            None => self
+                .resolve_expression(&call.call.expression)?
+                ._type
+                .closure_err()?
+                .arguments
+                .into_iter()
+                .map(|v| v.1)
+                .collect(),
+        };
+
+        // todo: refactor this arguments check somehow
+        if let Some(last) = arguments.last() {
+            if let TypeType::Variadic(_type) = &last._type {
+                // -1 because variadic can be empty
+                if call.call.arguments.len() < arguments.len() - 1 {
+                    return Err(anyhow!(
+                        "compile_function_call: variadic argument count mismatch"
+                    ));
+                }
+            } else {
+                if call.call.arguments.len() != arguments.len() {
+                    return Err(anyhow!("compile_function_call: argument count mismatch"));
+                }
+            }
+        } else {
+            if call.call.arguments.len() != arguments.len() {
+                return Err(anyhow!("compile_function_call: argument count mismatch"));
+            }
+        }
+
+        Ok(())
+    }
+
+    // append(slice Type, value Type) void
+    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<Type> {
+        let slice_arg = call
+            .call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("append: expected first argument"))?;
+        let value_arg = call
+            .call
+            .arguments
+            .get(1)
+            .ok_or(anyhow!("append: expected second argument"))?;
+
+        // cleanup align here?
+        let slice_exp = self.compile_expression(slice_arg)?;
+        let value_exp = self.compile_expression(value_arg)?;
+
+        let TypeType::Slice(slice_item) = &slice_exp._type else {
+            return Err(anyhow!("append: provide a slice as the first argument"));
+        };
+
+        if **slice_item != value_exp {
+            return Err(anyhow!("append: value type does not match slice type"));
+        }
+
+        self.instructions.instr_slice_append(value_exp.size);
+
+        Ok(VOID.clone())
+    }
+
+    // len(slice Type) int
+    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<Type> {
+        let slice_arg = call
+            .call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("len: expected first argument"))?;
+
+        // cleanup align here?
+        let slice_exp = self.compile_expression(slice_arg)?;
+        let TypeType::Slice(_) = &slice_exp._type else {
+            return Err(anyhow!(
+                "len: expected slice as the argument, got {:#?}",
+                slice_exp._type
+            ));
+        };
+
+        self.instructions.instr_slice_len();
+
+        Ok(INT.clone())
+    }
+
+    // new(_ Type, args Type...) Type
+    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<Type> {
+        let type_arg = call
+            .call
+            .arguments
+            .get(0)
+            .ok_or(anyhow!("new: expected first argument"))?;
+
+        let ast::Expression::Type(_type) = type_arg else {
+            return Err(anyhow!("new: expected first argument to be type"));
+        };
+        let _type = self.resolve_type(_type)?;
+
+        match &_type._type {
+            TypeType::Slice(slice_item) => {
+                let def_val = call
+                    .call
+                    .arguments
+                    .get(1)
+                    .ok_or(anyhow!("new: second argument expected"))?;
+
+                let len_val = call
+                    .call
+                    .arguments
+                    .get(2)
+                    .ok_or(anyhow!("new: third argument expected"))?;
+
+                let len_exp = self.compile_expression(len_val)?;
+                if len_exp != *INT {
+                    return Err(anyhow!("new: length should be of type int"));
+                }
+
+                let def_exp = self.compile_expression(def_val)?;
+                if def_exp != **slice_item {
+                    return Err(anyhow!("new: expression does not match slice type"));
+                }
+
+                self.instructions.instr_push_slice_new_len(def_exp.size);
+
+                Ok(_type.clone())
+            }
+            _type => return Err(anyhow!("new: {_type:#?} not supported")),
+        }
+    }
+
+    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
+        self.check_function_call_argument_count(call)?;
+
+        if let Some(declaration) = &call.declaration {
+            match declaration.identifier.as_str() {
+                "append" => return self.compile_function_builtin_append(call),
+                "len" => return self.compile_function_builtin_len(call),
+                "new" => return self.compile_function_builtin_new(call),
+                _ => {}
+            }
+        }
+
+        let (return_alignment, expected_arguments): (usize, Vec<Type>) = match &call.declaration {
+            Some(declaration) => (
+                self.resolve_type(&declaration.return_type)?.alignment,
+                declaration
+                    .arguments
+                    .iter()
+                    .map(|v| self.resolve_type(&v._type))
+                    .collect::<Result<_, anyhow::Error>>()?,
+            ),
+            None => (
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .return_type
+                    .alignment,
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .arguments
+                    .into_iter()
+                    .map(|v| v.1)
+                    .collect(),
+            ),
+        };
+
+        self.instructions.push_alignment(return_alignment);
+
+        let argument_size = {
+            self.instructions.push_stack_frame();
+            for (i, expected_type) in expected_arguments.iter().enumerate() {
+                let arg = call.call.arguments.get(i);
+
+                let Some(arg) = arg else {
+                    if expected_type.extract_variadic().is_some() {
+                        self.instructions.instr_push_slice();
+                        continue;
+                    }
+                    return Err(anyhow!("compile_function_call: argument missing"));
+                };
+
+                let Some(inner) = expected_type.extract_variadic() else {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != *expected_type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    continue;
+                };
+
+                if let ast::Expression::Spread(_) = arg {
+                    let exp = self.compile_expression(arg)?;
+                    if exp != *expected_type {
+                        return Err(anyhow!("function call type mismatch"));
+                    }
+                    // this check is weird, because ast actually does not allow creating
+                    // declarations where spread is not last, but this probably should be in
+                    // compiler
+                    if expected_arguments.len() != call.call.arguments.len() {
+                        return Err(anyhow!("spread must be last argument"));
+                    }
+
+                    continue;
+                }
+
+                self.instructions.instr_push_slice();
+                for arg in call.call.arguments.iter().skip(i) {
+                    self.instructions.instr_increment(SLICE_SIZE);
+                    self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
+
+                    let value_exp = self.compile_expression(arg)?;
+                    if value_exp != *inner {
+                        return Err(anyhow!("variadic argument type mismatch"));
+                    }
+
+                    self.instructions.instr_slice_append(value_exp.size);
+                }
+            }
+            self.instructions.pop_stack_frame_size()
+        };
+
+        if let Some(declaration) = &call.declaration {
+            match declaration.identifier.as_str() {
+                "libc_write" => {
+                    self.instructions.instr_libc_write();
+                    return Ok(INT.clone());
+                }
+                _ => {}
+            }
+        }
+
+        let return_type = match &call.declaration {
+            Some(declaration) => self.resolve_type(&declaration.return_type)?,
+            None => {
+                self.resolve_expression(&call.call.expression)?
+                    ._type
+                    .closure_err()?
+                    .return_type
+            }
+        };
+        let return_size = return_type.size;
+
+        let mut reset_size: usize;
+        if argument_size < return_size {
+            // the whole argument section will be used for return value
+            // do not need to reset
+            reset_size = 0;
+            self.instructions
+                .instr_increment(return_size - argument_size);
+        } else {
+            // reset the argument section to the return size
+            reset_size = argument_size - return_size;
+        }
+
+        // aligning for pushing of return address
+        reset_size += self.instructions.push_alignment(PTR_SIZE);
+
+        match &call.declaration {
+            Some(declaration) => {
+                self.instructions
+                    .instr_jump_and_link(declaration.identifier.clone());
+            }
+            None => {
+                self.compile_expression(&call.call.expression)?;
+                self.instructions.instr_jump_and_link_closure();
+            }
+        }
+
+        self.instructions.instr_reset(reset_size);
+
+        Ok(return_type)
+    }
+
+    fn resolve_function_call(&self, call: &ast::Call) -> FunctionCall {
+        if let ast::Expression::Type(_type) = &call.expression {
+            if let ast::Type::Alias(identifier) = _type {
+                return FunctionCall {
+                    call: call.clone(),
+                    declaration: self
+                        .function_declarations
+                        .get(identifier)
+                        .map(|v| v.clone()),
+                };
+            }
+        };
+
+        FunctionCall {
+            call: call.clone(),
+            declaration: None,
+        }
+    }
+
+    fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
+        if let Ok(v) = self.resolve_type_cast(call) {
+            return self.compile_type_cast(&v);
+        }
+
+        self.compile_function_call(&self.resolve_function_call(call))
+    }
+
+    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
+        let a = self.compile_expression(&arithmetic.left)?;
+        let b = self.compile_expression(&arithmetic.right)?;
+
+        if a != b {
+            return Err(anyhow!("can't add different types"));
+        }
+        if a == *VOID {
+            return Err(anyhow!("can't add void type"));
+        }
+
+        match arithmetic._type {
+            ast::ArithmeticType::Minus => {
+                if *INT == a {
+                    self.instructions.instr_minus_int();
+                    self.instructions.instr_add_i();
+                } else {
+                    return Err(anyhow!("can only minus int"));
+                }
+            }
+            ast::ArithmeticType::Plus => {
+                if *INT == a {
+                    self.instructions.instr_add_i();
+                } else if a == *STRING {
+                    self.instructions.instr_add_string();
+                } else {
+                    return Err(anyhow!("can only plus int and string"));
+                }
+            }
+            ast::ArithmeticType::Multiply => {
+                if *INT == a {
+                    self.instructions.instr_multiply_i();
+                } else {
+                    return Err(anyhow!("can only multiply int"));
+                }
+            }
+            ast::ArithmeticType::Divide => {
+                if *INT == a {
+                    self.instructions.instr_divide_i();
+                } else {
+                    return Err(anyhow!("can only divide int"));
+                }
+            }
+            ast::ArithmeticType::Modulo => {
+                if *INT == a {
+                    self.instructions.instr_modulo_i();
+                } else {
+                    return Err(anyhow!("can only modulo int"));
+                }
+            }
+        }
+
+        Ok(a)
+    }
+
+    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
+        let literal_type = match literal.literal {
+            lexer::Literal::Int(_) => INT.clone(),
+            lexer::Literal::Bool(_) => BOOL.clone(),
+            lexer::Literal::String(_) => STRING.clone(),
+        };
+
+        match &literal.literal {
+            lexer::Literal::Int(int) => {
+                if literal_type == *UINT8 {
+                    self.instructions.instr_push_u8(*int)?;
+                } else if literal_type == *INT {
+                    self.instructions.instr_push_i(*int)?;
+                } else {
+                    return Err(anyhow!("can't cast int to {literal_type:#?}"));
+                }
+            }
+            lexer::Literal::Bool(bool) => {
+                if literal_type == *BOOL {
+                    self.instructions.instr_push_i({
+                        if *bool {
+                            1
+                        } else {
+                            0
+                        }
+                    })?;
+                } else {
+                    return Err(anyhow!("can't cast bool to {literal_type:#?}"));
+                }
+            }
+            lexer::Literal::String(string) => {
+                let index = self.static_memory.borrow_mut().push_string_slice(&string);
+                self.instructions
+                    .instr_push_static(index, SLICE_SIZE, SLICE_SIZE);
+            }
+        }
+
+        Ok(literal_type)
+    }
+
+    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<Type> {
+        self.instructions.stack_instructions.jump();
+
+        let left = self.compile_expression(&andor.left)?;
+        if left != *BOOL {
+            return Err(anyhow!("compile_andor: expected bool expression"));
+        }
+
+        match andor._type {
+            ast::AndOrType::Or => {
+                self.instructions.stack_instructions.back_if_true(1);
+
+                let right = self.compile_expression(&andor.right)?;
+                if right != *BOOL {
+                    return Err(anyhow!("compile_andor: expected bool expression"));
+                }
+
+                self.instructions.instr_or();
+            }
+            ast::AndOrType::And => {
+                self.instructions.stack_instructions.back_if_false(1);
+
+                let right = self.compile_expression(&andor.right)?;
+                if right != *BOOL {
+                    return Err(anyhow!("compile_andor: expected bool expression"));
+                }
+
+                self.instructions.instr_and();
+            }
+        }
+
+        self.instructions.stack_instructions.back(1);
+        self.instructions.stack_instructions.pop_index();
+
+        Ok(BOOL.clone())
+    }
+
+    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+        let old_stack_size = self.instructions.stack_total_size();
+
+        let exp = match expression {
+            ast::Expression::AndOr(v) => self.compile_andor(v),
+            ast::Expression::Literal(v) => self.compile_literal(v),
+            ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
+            ast::Expression::Call(v) => self.compile_call(v),
+            ast::Expression::TypeInit(v) => self.compile_type_init(v),
+            ast::Expression::Compare(v) => self.compile_compare(v),
+            ast::Expression::Infix(v) => self.compile_infix(v),
+            ast::Expression::SliceInit(v) => self.compile_slice_init(v),
+            ast::Expression::Index(v) => self.compile_expression_index(v),
+            ast::Expression::Negate(v) => self.compile_negate(v),
+            ast::Expression::Spread(v) => self.compile_spread(v),
+            ast::Expression::StructInit(v) => self.compile_struct_init(v),
+            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
+            ast::Expression::Deref(v) => self.compile_deref(v),
+            ast::Expression::Address(v) => self.compile_address(v),
+            ast::Expression::Type(v) => self.compile_type(v),
+            ast::Expression::Closure(v) => self.compile_closure(v),
+            ast::Expression::Nil => self.compile_nil(),
+        }?;
+
+        if exp.alignment != 0 {
+            let new_stack_size = self.instructions.stack_total_size();
+            let delta_stack_size = new_stack_size - old_stack_size;
+
+            if old_stack_size % exp.alignment == 0 && delta_stack_size > exp.size {
+                self.instructions
+                    .instr_shift(exp.size, delta_stack_size - exp.size);
+            }
+        }
+
+        Ok(exp)
+    }
+}
+
+pub struct FunctionCompiler {
+    instructions: Instructions,
+    function: Function,
+    closures: Vec<CompiledFunction>,
+    current_body: Vec<CompilerBody>,
+    type_resolver: Rc<TypeResolver>,
+    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    static_memory: Rc<RefCell<vm::StaticMemory>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledFunction {
+    pub instructions: Vec<Vec<CompilerInstruction>>,
+    pub closures: Vec<CompiledFunction>,
+}
+
+impl FunctionCompiler {
+    pub fn new(
+        function: Function,
+        static_memory: Rc<RefCell<vm::StaticMemory>>,
+        type_resolver: Rc<TypeResolver>,
+        function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    ) -> Self {
+        let mut current_body = Vec::new();
+        current_body.push(CompilerBody::new(function.body.clone()));
+        Self {
+            function_declarations,
+            static_memory,
+            function,
+            closures: Vec::new(),
+            instructions: Instructions::new(),
+            type_resolver,
+            current_body,
+        }
+    }
+
+    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
+        self.type_resolver.resolve(_type)
+    }
+
+    fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
+        let ast::Type::Alias(identifier) = _type else {
+            return Err(anyhow!("resolve_variable: cant resolve non alias"));
+        };
+
+        let variable = self
+            .instructions
+            .var_get_offset(identifier)
+            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
+
+        Ok((variable.0, variable.1.clone()))
+    }
+
+    fn expression_compiler(&mut self) -> ExpressionCompiler {
+        ExpressionCompiler::new(
+            &mut self.instructions,
+            &mut self.closures,
+            self.type_resolver.clone(),
+            self.function_declarations.clone(),
+            self.static_memory.clone(),
+        )
+    }
+
+    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+        self.expression_compiler().compile_expression(expression)
+    }
+
+    fn compile_dot_access_field_offset(
+        &mut self,
+        dot_access: &ast::DotAccess,
+    ) -> Result<DotAccessField> {
+        self.expression_compiler()
+            .compile_dot_access_field_offset(dot_access)
+    }
+
+    fn compile_variable_declaration(
+        &mut self,
+        declaration: &ast::VariableDeclaration,
+    ) -> Result<()> {
+        let escaped = self
+            .current_body
+            .last()
+            .unwrap()
+            .does_variable_escape(&declaration.variable.identifier, 1);
+        if escaped {
+            self.instructions.push_alignment(PTR_SIZE);
+        }
+
+        let mut exp = self.compile_expression(&declaration.expression)?;
+        if exp == *VOID {
+            return Err(anyhow!("can't declare void variable"));
+        }
+
+        self.resolve_type(&declaration.variable._type)?
+            .equals(&exp)?;
+
+        if escaped {
+            self.instructions.instr_alloc(exp.size, exp.alignment);
+            exp = Type::create_escaped(exp);
+        }
+
+        self.instructions.var_mark(Variable {
+            identifier: declaration.variable.identifier.clone(),
+            _type: exp,
+        });
+
+        Ok(())
     }
 
     fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
