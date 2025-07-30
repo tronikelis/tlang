@@ -2568,7 +2568,6 @@ pub fn compile(ast: ast::Ast) -> Result<Compiled> {
         )
         .compile()
         .unwrap();
-        println!("{:#?}", compiled);
 
         functions.insert(
             identifier.clone(),
@@ -2594,6 +2593,8 @@ fn compile_static_vars(
     let mut closures = Vec::new();
 
     for v in vars {
+        instructions.push_alignment(PTR_SIZE);
+
         let exp = ExpressionCompiler::new(
             &mut instructions,
             &mut closures,
@@ -2603,13 +2604,13 @@ fn compile_static_vars(
         )
         .compile_expression(&v.expression)?;
         type_resolver.resolve(&v._type)?.equals(&exp)?;
+
+        instructions.instr_alloc(exp.size, exp.alignment);
         instructions.var_mark(Variable {
-            _type: exp,
+            _type: Type::create_escaped(exp),
             identifier: v.identifier.clone(),
         });
     }
-    // normal stack will have 0 size, so max alignment is assumed
-    instructions.push_alignment(PTR_SIZE);
 
     Ok((
         instructions.var_stack.stack.clone(),
