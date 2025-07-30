@@ -243,10 +243,11 @@ pub enum Instruction {
     PushU8(u8),
     PushSlice,
     PushSliceNewLen(usize),
-    // index, len
-    PushStatic(usize, usize),
     // var count, function index
     PushClosure(usize, usize),
+
+    // index, len
+    PushStatic(usize, usize),
 
     MinusInt,
     AddI,
@@ -282,6 +283,19 @@ pub enum Instruction {
     Alloc(usize, usize),
     Deref(usize),
     DerefAssign(usize),
+}
+
+impl Instruction {
+    pub fn add_jump_offset(&mut self, offset: usize) {
+        match self {
+            Self::JumpAndLink(v) => *v = *v + offset,
+            Self::Jump(v) => *v = *v + offset,
+            Self::JumpIfTrue(v) => *v = *v + offset,
+            Self::JumpIfFalse(v) => *v = *v + offset,
+            Self::PushClosure(_, v) => *v = *v + offset,
+            _ => {}
+        }
+    }
 }
 
 pub struct Stack {

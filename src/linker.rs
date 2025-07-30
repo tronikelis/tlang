@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::{compiler, vm};
 
 pub fn link(
+    static_instructions: Vec<compiler::ScopedInstruction>,
     functions: HashMap<String, Vec<compiler::ScopedInstruction>>,
 ) -> Result<Vec<vm::Instruction>> {
     let mut functions: Vec<(String, Vec<compiler::ScopedInstruction>)> =
@@ -28,26 +29,41 @@ pub fn link(
         let index = folded.len();
         function_to_index.insert(&k, index);
 
-        for v in v.clone() {
-            folded.push(match v {
-                compiler::ScopedInstruction::Jump(offset) => {
-                    compiler::ScopedInstruction::Jump(offset + index)
-                }
-                compiler::ScopedInstruction::JumpIfTrue(offset) => {
-                    compiler::ScopedInstruction::JumpIfTrue(offset + index)
-                }
-                compiler::ScopedInstruction::JumpIfFalse(offset) => {
-                    compiler::ScopedInstruction::JumpIfFalse(offset + index)
-                }
-                compiler::ScopedInstruction::PushClosure(vars_count, offset) => {
-                    compiler::ScopedInstruction::PushClosure(vars_count, offset + index)
-                }
-                v => v,
-            })
-        }
+        folded.append(
+            &mut v
+                .clone()
+                .into_iter()
+                .map(|mut v| {
+                    v.add_jump_offset(index);
+                    v
+                })
+                .collect(),
+        );
     }
 
-    let instructions = folded
+    let static_instructions_len = static_instructions.len();
+    let static_instructions = static_instructions
+        .into_iter()
+        .map(|v| {
+            Ok(match v {
+                compiler::ScopedInstruction::Real(v) => v,
+                compiler::ScopedInstruction::Jump(v) => vm::Instruction::Jump(v),
+                compiler::ScopedInstruction::JumpIfTrue(v) => vm::Instruction::JumpIfTrue(v),
+                compiler::ScopedInstruction::JumpIfFalse(v) => vm::Instruction::JumpIfFalse(v),
+                compiler::ScopedInstruction::JumpAndLink(to) => {
+                    let index = function_to_index
+                        .get(to.as_str())
+                        .ok_or(anyhow!("link: jump to non existant function {to}"))?;
+                    vm::Instruction::JumpAndLink(*index + static_instructions_len)
+                }
+                compiler::ScopedInstruction::PushClosure(vars_count, offset) => {
+                    vm::Instruction::PushClosure(vars_count, offset)
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+    let mut instructions = folded
         .into_iter()
         .map(|v| {
             Ok(match v {
@@ -68,5 +84,9 @@ pub fn link(
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    Ok(instructions)
+    instructions
+        .iter_mut()
+        .for_each(|v| v.add_jump_offset(static_instructions.len()));
+
+    Ok([static_instructions, instructions].concat())
 }

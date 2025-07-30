@@ -633,21 +633,31 @@ impl Type {
 }
 
 #[derive(Debug)]
+pub struct StaticVarDeclaration {
+    pub expression: Expression,
+    pub _type: Type,
+    pub identifier: String,
+}
+
+#[derive(Debug)]
 enum Declaration {
     Function(FunctionDeclaration),
     Type(TypeDeclaration),
+    StaticVar(StaticVarDeclaration),
 }
 
 #[derive(Debug)]
 pub struct Ast {
     pub type_declarations: HashMap<String, Type>,
     pub function_declarations: HashMap<String, FunctionDeclaration>,
+    pub static_var_declarations: Vec<StaticVarDeclaration>,
 }
 
 impl Ast {
     pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
         let mut type_declarations = HashMap::new();
         let mut function_declarations = HashMap::new();
+        let mut static_var_declarations = Vec::new();
 
         let declarations = TokenParser::new(tokens).parse()?;
         for v in declarations {
@@ -661,12 +671,16 @@ impl Ast {
                         function_declaration,
                     );
                 }
+                Declaration::StaticVar(static_var_declaration) => {
+                    static_var_declarations.push(static_var_declaration);
+                }
             }
         }
 
         Ok(Self {
             type_declarations,
             function_declarations,
+            static_var_declarations,
         })
     }
 }
@@ -761,11 +775,31 @@ impl<'a> TokenParser<'a> {
             declarations.push(match token {
                 lexer::Token::Type => Declaration::Type(self.parse_type_declaration()?),
                 lexer::Token::Function => Declaration::Function(self.parse_function_declaration()?),
+                lexer::Token::Let => Declaration::StaticVar(self.parse_static_var_declaration()?),
                 token => return Err(anyhow!("parse: unknown token {token:#?}")),
             });
         }
 
         Ok(declarations)
+    }
+
+    fn parse_static_var_declaration(&mut self) -> Result<StaticVarDeclaration> {
+        self.iter.expect(lexer::Token::Let)?;
+        self.iter.next();
+
+        let identifier = self.parse_identifier()?;
+        let _type = self.parse_type()?;
+
+        self.iter.expect(lexer::Token::Equals)?;
+        self.iter.next();
+
+        let expression = self.parse_expression()?;
+
+        Ok(StaticVarDeclaration {
+            identifier,
+            _type,
+            expression,
+        })
     }
 
     fn parse_type_struct(&mut self) -> Result<TypeStruct> {

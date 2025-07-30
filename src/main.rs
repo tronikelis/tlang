@@ -1,5 +1,3 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
-
 mod vm;
 
 mod ast;
@@ -146,8 +144,10 @@ fn main() {
                     libc_write(1, uint8[](itoa(x)))
                 }
 
+                let nice_static int = 20
+
                 fn main() void {
-                    let foo1 int = 0
+                    let foo1 int = nice_static + 25
 
                     let nice fn() void = fn() void {
                         let ok fn() void = fn() void {
@@ -225,31 +225,9 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    let mut functions = HashMap::<String, Vec<compiler::ScopedInstruction>>::new();
-    let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
-
-    let type_resolver = Rc::new(compiler::TypeResolver::new(ast.type_declarations));
-    let function_declarations = Rc::new(ast.function_declarations);
-
-    for (identifier, declaration) in function_declarations.iter() {
-        let compiled = compiler::FunctionCompiler::new(
-            compiler::Function::from_declaration(&type_resolver, declaration).unwrap(),
-            static_memory.clone(),
-            type_resolver.clone(),
-            function_declarations.clone(),
-        )
-        .compile()
-        .unwrap();
-        println!("{:#?}", compiled);
-
-        functions.insert(
-            identifier.clone(),
-            compiler::ScopedInstruction::from_compiled_function(&compiled),
-        );
-    }
-
-    let instructions = linker::link(functions).unwrap();
+    let compiled = compiler::compile(ast).unwrap();
+    let instructions = linker::link(compiled.static_instructions, compiled.functions).unwrap();
     println!("{:#?}", instructions.iter().enumerate().collect::<Vec<_>>());
 
-    vm::Vm::new(instructions, static_memory.borrow().clone()).run();
+    vm::Vm::new(instructions, compiled.static_memory).run();
 }
