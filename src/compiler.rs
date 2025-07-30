@@ -291,13 +291,15 @@ enum VarStackItem {
 #[derive(Debug, Clone)]
 struct CompilerVarStack {
     stack: VarStack<VarStackItem>,
+    static_stack: VarStack<VarStackItem>,
     arg_size: Option<usize>,
 }
 
 impl CompilerVarStack {
-    fn new() -> Self {
+    fn new(static_stack: VarStack<VarStackItem>) -> Self {
         Self {
             stack: VarStack::new(),
+            static_stack,
             arg_size: None,
         }
     }
@@ -319,7 +321,12 @@ impl CompilerVarStack {
     }
 
     fn iter_rev(&self) -> impl Iterator<Item = &VarStackItem> {
-        self.stack.items.iter().flatten().rev()
+        self.static_stack
+            .items
+            .iter()
+            .chain(self.stack.items.iter())
+            .flatten()
+            .rev()
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -471,15 +478,13 @@ fn align(alignment: usize, stack_size: usize) -> usize {
 struct Instructions {
     stack_instructions: StackInstructions,
     var_stack: CompilerVarStack,
-    static_var_stack: CompilerVarStack,
 }
 
 impl Instructions {
-    fn new(static_var_stack: CompilerVarStack) -> Self {
+    fn new(static_var_stack: VarStack<VarStackItem>) -> Self {
         Self {
             stack_instructions: StackInstructions::new(),
-            var_stack: static_var_stack.clone(),
-            static_var_stack,
+            var_stack: CompilerVarStack::new(static_var_stack),
         }
     }
 
@@ -1505,7 +1510,7 @@ impl<'a> ExpressionCompiler<'a> {
         self.closures.push(
             FunctionCompiler::new(
                 closure_function,
-                self.instructions.static_var_stack.clone(),
+                self.instructions.var_stack.static_stack.clone(),
                 self.static_memory.clone(),
                 self.type_resolver.clone(),
                 self.function_declarations.clone(),
@@ -2584,8 +2589,8 @@ fn compile_static_vars(
     type_resolver: Rc<TypeResolver>,
     function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
-) -> Result<(CompilerVarStack, Vec<ScopedInstruction>)> {
-    let mut instructions = Instructions::new(CompilerVarStack::new());
+) -> Result<(VarStack<VarStackItem>, Vec<ScopedInstruction>)> {
+    let mut instructions = Instructions::new(VarStack::new());
     let mut closures = Vec::new();
 
     for v in vars {
@@ -2603,9 +2608,11 @@ fn compile_static_vars(
             identifier: v.identifier.clone(),
         });
     }
+    // normal stack will have 0 size, so max alignment is assumed
+    instructions.push_alignment(PTR_SIZE);
 
     Ok((
-        instructions.var_stack.clone(),
+        instructions.var_stack.stack.clone(),
         ScopedInstruction::from_compiled_instructions(&CompiledInstructions {
             instructions: instructions.get_instructions(),
             closures,
@@ -2632,7 +2639,7 @@ pub struct CompiledInstructions {
 impl FunctionCompiler {
     fn new(
         function: Function,
-        static_var_stack: CompilerVarStack,
+        static_var_stack: VarStack<VarStackItem>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
         type_resolver: Rc<TypeResolver>,
         function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,

@@ -292,6 +292,7 @@ impl Instruction {
             Self::Jump(v) => *v = *v + offset,
             Self::JumpIfTrue(v) => *v = *v + offset,
             Self::JumpIfFalse(v) => *v = *v + offset,
+            Self::PushClosure(_, v) => *v = *v + offset,
             _ => {}
         }
     }

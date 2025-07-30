@@ -144,8 +144,10 @@ fn main() {
                     libc_write(1, uint8[](itoa(x)))
                 }
 
+                let nice_static int = 20
+
                 fn main() void {
-                    let foo1 int = 0
+                    let foo1 int = nice_static + 25
 
                     let nice fn() void = fn() void {
                         let ok fn() void = fn() void {
