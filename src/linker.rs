@@ -3,17 +3,8 @@ use std::collections::HashMap;
 
 use crate::{compiler, vm};
 
-pub fn link_prefix(
-    prefix: Vec<vm::Instruction>,
-    mut current: Vec<vm::Instruction>,
-) -> Vec<vm::Instruction> {
-    current
-        .iter_mut()
-        .for_each(|v| v.add_jump_offset(prefix.len()));
-    [prefix, current].concat()
-}
-
-pub fn link_functions(
+pub fn link(
+    static_instructions: Vec<compiler::ScopedInstruction>,
     functions: HashMap<String, Vec<compiler::ScopedInstruction>>,
 ) -> Result<Vec<vm::Instruction>> {
     let mut functions: Vec<(String, Vec<compiler::ScopedInstruction>)> =
@@ -50,7 +41,29 @@ pub fn link_functions(
         );
     }
 
-    let instructions = folded
+    let static_instructions_len = static_instructions.len();
+    let static_instructions = static_instructions
+        .into_iter()
+        .map(|v| {
+            Ok(match v {
+                compiler::ScopedInstruction::Real(v) => v,
+                compiler::ScopedInstruction::Jump(v) => vm::Instruction::Jump(v),
+                compiler::ScopedInstruction::JumpIfTrue(v) => vm::Instruction::JumpIfTrue(v),
+                compiler::ScopedInstruction::JumpIfFalse(v) => vm::Instruction::JumpIfFalse(v),
+                compiler::ScopedInstruction::JumpAndLink(to) => {
+                    let index = function_to_index
+                        .get(to.as_str())
+                        .ok_or(anyhow!("link: jump to non existant function {to}"))?;
+                    vm::Instruction::JumpAndLink(*index + static_instructions_len)
+                }
+                compiler::ScopedInstruction::PushClosure(vars_count, offset) => {
+                    vm::Instruction::PushClosure(vars_count, offset)
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+    let mut instructions = folded
         .into_iter()
         .map(|v| {
             Ok(match v {
@@ -71,5 +84,9 @@ pub fn link_functions(
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    Ok(instructions)
+    instructions
+        .iter_mut()
+        .for_each(|v| v.add_jump_offset(static_instructions.len()));
+
+    Ok([static_instructions, instructions].concat())
 }

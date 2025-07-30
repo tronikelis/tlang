@@ -248,8 +248,6 @@ pub enum Instruction {
 
     // index, len
     PushStatic(usize, usize),
-    // size, alignment, index
-    StaticAllocAssign(usize, usize, usize),
 
     MinusInt,
     AddI,
@@ -706,22 +704,6 @@ impl Vm {
                     }
 
                     continue;
-                }
-                Instruction::StaticAllocAssign(size, alignment, index) => {
-                    let data = self.stack.pop_size(size);
-                    let ptr = unsafe { alloc(Layout::from_size_align(size, alignment).unwrap()) };
-                    unsafe {
-                        ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-                    }
-
-                    unsafe {
-                        *self
-                            .static_memory
-                            .data
-                            .as_mut_ptr()
-                            .byte_offset(index as isize)
-                            .cast() = ptr;
-                    }
                 }
             }
 

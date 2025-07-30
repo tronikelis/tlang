@@ -650,14 +650,14 @@ enum Declaration {
 pub struct Ast {
     pub type_declarations: HashMap<String, Type>,
     pub function_declarations: HashMap<String, FunctionDeclaration>,
-    pub static_var_declarations: HashMap<String, StaticVarDeclaration>,
+    pub static_var_declarations: Vec<StaticVarDeclaration>,
 }
 
 impl Ast {
     pub fn new(tokens: &[lexer::Token]) -> Result<Self> {
         let mut type_declarations = HashMap::new();
         let mut function_declarations = HashMap::new();
-        let mut static_var_declarations = HashMap::new();
+        let mut static_var_declarations = Vec::new();
 
         let declarations = TokenParser::new(tokens).parse()?;
         for v in declarations {
@@ -672,10 +672,7 @@ impl Ast {
                     );
                 }
                 Declaration::StaticVar(static_var_declaration) => {
-                    static_var_declarations.insert(
-                        static_var_declaration.identifier.clone(),
-                        static_var_declaration,
-                    );
+                    static_var_declarations.push(static_var_declaration);
                 }
             }
         }

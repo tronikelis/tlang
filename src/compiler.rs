@@ -471,13 +471,15 @@ fn align(alignment: usize, stack_size: usize) -> usize {
 struct Instructions {
     stack_instructions: StackInstructions,
     var_stack: CompilerVarStack,
+    static_var_stack: CompilerVarStack,
 }
 
 impl Instructions {
-    fn new() -> Self {
+    fn new(static_var_stack: CompilerVarStack) -> Self {
         Self {
             stack_instructions: StackInstructions::new(),
-            var_stack: CompilerVarStack::new(),
+            var_stack: static_var_stack.clone(),
+            static_var_stack,
         }
     }
 
@@ -1503,6 +1505,7 @@ impl<'a> ExpressionCompiler<'a> {
         self.closures.push(
             FunctionCompiler::new(
                 closure_function,
+                self.instructions.static_var_stack.clone(),
                 self.static_memory.clone(),
                 self.type_resolver.clone(),
                 self.function_declarations.clone(),
@@ -2528,13 +2531,86 @@ impl<'a> ExpressionCompiler<'a> {
 
         Ok(exp)
     }
+}
 
-    fn to_compiled_instructions(self) -> CompiledInstructions {
-        CompiledInstructions {
-            closures: self.closures.to_vec(),
-            instructions: self.instructions.clone().get_instructions(),
-        }
+pub struct Compiled {
+    pub functions: HashMap<String, Vec<ScopedInstruction>>,
+    pub static_instructions: Vec<ScopedInstruction>,
+    pub static_memory: vm::StaticMemory,
+}
+
+pub fn compile(ast: ast::Ast) -> Result<Compiled> {
+    let mut functions = HashMap::<String, Vec<ScopedInstruction>>::new();
+    let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
+
+    let type_resolver = Rc::new(TypeResolver::new(ast.type_declarations));
+    let function_declarations = Rc::new(ast.function_declarations);
+
+    let (static_var_stack, static_instructions) = compile_static_vars(
+        ast.static_var_declarations,
+        type_resolver.clone(),
+        function_declarations.clone(),
+        static_memory.clone(),
+    )?;
+
+    for (identifier, declaration) in function_declarations.iter() {
+        let compiled = FunctionCompiler::new(
+            Function::from_declaration(&type_resolver, declaration).unwrap(),
+            static_var_stack.clone(),
+            static_memory.clone(),
+            type_resolver.clone(),
+            function_declarations.clone(),
+        )
+        .compile()
+        .unwrap();
+        println!("{:#?}", compiled);
+
+        functions.insert(
+            identifier.clone(),
+            ScopedInstruction::from_compiled_instructions(&compiled),
+        );
     }
+
+    let static_memory = static_memory.borrow().clone();
+    Ok(Compiled {
+        static_memory,
+        functions,
+        static_instructions,
+    })
+}
+
+fn compile_static_vars(
+    vars: Vec<ast::StaticVarDeclaration>,
+    type_resolver: Rc<TypeResolver>,
+    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    static_memory: Rc<RefCell<vm::StaticMemory>>,
+) -> Result<(CompilerVarStack, Vec<ScopedInstruction>)> {
+    let mut instructions = Instructions::new(CompilerVarStack::new());
+    let mut closures = Vec::new();
+
+    for v in vars {
+        let exp = ExpressionCompiler::new(
+            &mut instructions,
+            &mut closures,
+            type_resolver.clone(),
+            function_declarations.clone(),
+            static_memory.clone(),
+        )
+        .compile_expression(&v.expression)?;
+        type_resolver.resolve(&v._type)?.equals(&exp)?;
+        instructions.var_mark(Variable {
+            _type: exp,
+            identifier: v.identifier.clone(),
+        });
+    }
+
+    Ok((
+        instructions.var_stack.clone(),
+        ScopedInstruction::from_compiled_instructions(&CompiledInstructions {
+            instructions: instructions.get_instructions(),
+            closures,
+        }),
+    ))
 }
 
 pub struct FunctionCompiler {
@@ -2554,8 +2630,9 @@ pub struct CompiledInstructions {
 }
 
 impl FunctionCompiler {
-    pub fn new(
+    fn new(
         function: Function,
+        static_var_stack: CompilerVarStack,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
         type_resolver: Rc<TypeResolver>,
         function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
@@ -2567,7 +2644,7 @@ impl FunctionCompiler {
             static_memory,
             function,
             closures: Vec::new(),
-            instructions: Instructions::new(),
+            instructions: Instructions::new(static_var_stack),
             type_resolver,
             current_body,
         }
