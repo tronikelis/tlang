@@ -149,6 +149,11 @@ fn main() {
                 fn main() void {
                     let foo1 int = nice_static + 25
 
+                    let dll Dll = libffi.open(\"libc.so.6\")
+                    let cif Cif = libffi.create(dll, \"write\", \"c_int\", \"struct { foo, bar }\", \"c_uint\")
+
+                    cif.call(20, ptr(\"foo\"), 3)
+
                     let nice fn() void = fn() void {
                         let ok fn() void = fn() void {
                             foo1 = 20
