@@ -9,6 +9,7 @@ use std::{
 enum GcObjectData {
     Slice(*mut Slice),
     Alloced(*mut u8, Layout),
+    Cif(*mut libffi::middle::Cif),
 }
 
 #[derive(Debug)]
@@ -82,6 +83,7 @@ impl Gc {
         let addr: *const u8 = match object.data {
             GcObjectData::Slice(slice) => slice.cast(),
             GcObjectData::Alloced(ptr, _) => ptr,
+            GcObjectData::Cif(v) => v.cast(),
         };
         self.objects.insert(addr, RefCell::new(object));
     }
@@ -118,6 +120,9 @@ impl Gc {
             GcObjectData::Alloced(ptr, layout) => {
                 self.mark_ptr(ptr, layout.size());
             }
+            GcObjectData::Cif(_) => {
+                // Cifs cant contain nested pointers
+            }
         }
     }
 
@@ -146,8 +151,11 @@ impl Gc {
         for (addr, obj) in &self.objects {
             if !obj.borrow().marked {
                 match obj.borrow().data {
-                    GcObjectData::Slice(slice) => {
-                        let _ = unsafe { Box::from_raw(slice) };
+                    GcObjectData::Slice(v) => {
+                        let _ = unsafe { Box::from_raw(v) };
+                    }
+                    GcObjectData::Cif(v) => {
+                        let _ = unsafe { Box::from_raw(v) };
                     }
                     GcObjectData::Alloced(ptr, layout) => unsafe { dealloc(ptr, layout) },
                 }
@@ -228,6 +236,9 @@ impl Slice {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    // argument type count
+    FfiCreate(usize),
+
     SliceLen,
     SliceAppend(usize),
     SliceIndexGet(usize),
@@ -705,6 +716,33 @@ impl Vm {
                     }
 
                     continue;
+                }
+                Instruction::FfiCreate(argument_count) => {
+                    let return_type = unsafe { Type::from_u8(self.stack.pop()) };
+
+                    let mut args: Vec<Type> = Vec::with_capacity(argument_count);
+                    for _ in 0..argument_count {
+                        args.push(unsafe { Type::from_u8(self.stack.pop()) });
+                    }
+                    args.reverse();
+
+                    let mut builder = libffi::middle::Builder::new();
+
+                    for v in args {
+                        if let Type::Void = v {
+                            panic!("ffi: void argument");
+                        }
+                        let arg = v.to_ffi_type();
+                        builder = builder.arg(arg);
+                    }
+
+                    builder = builder.res(return_type.to_ffi_type());
+                    let cif = builder.into_cif();
+                    let raw_cif = Box::into_raw(Box::new(cif));
+
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Cif(raw_cif)));
+                    self.stack.push(raw_cif);
                 }
             }
 
