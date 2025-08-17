@@ -51,6 +51,7 @@ pub enum Token {
     Dot,
     Struct,
     Colon,
+    Impl,
     NL,
 }
 
@@ -83,6 +84,11 @@ impl Lexer {
             }
 
             match self.peek_next_word().as_str() {
+                "impl" => {
+                    tokens.push(Token::Impl);
+                    self.read_next_word();
+                    continue;
+                }
                 "struct" => {
                     tokens.push(Token::Struct);
                     self.read_next_word();

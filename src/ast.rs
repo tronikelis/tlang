@@ -640,10 +640,17 @@ pub struct StaticVarDeclaration {
 }
 
 #[derive(Debug)]
+pub struct ImplBlockDeclaration {
+    pub functions: HashMap<String, FunctionDeclaration>,
+    pub _type: Type,
+}
+
+#[derive(Debug)]
 enum Declaration {
     Function(FunctionDeclaration),
     Type(TypeDeclaration),
     StaticVar(StaticVarDeclaration),
+    ImplBlock(ImplBlockDeclaration),
 }
 
 #[derive(Debug)]
@@ -651,6 +658,7 @@ pub struct Ast {
     pub type_declarations: HashMap<String, Type>,
     pub function_declarations: HashMap<String, FunctionDeclaration>,
     pub static_var_declarations: Vec<StaticVarDeclaration>,
+    pub impl_block_declarations: Vec<ImplBlockDeclaration>,
 }
 
 impl Ast {
@@ -658,6 +666,7 @@ impl Ast {
         let mut type_declarations = HashMap::new();
         let mut function_declarations = HashMap::new();
         let mut static_var_declarations = Vec::new();
+        let mut impl_block_declarations = Vec::new();
 
         let declarations = TokenParser::new(tokens).parse()?;
         for v in declarations {
@@ -674,6 +683,9 @@ impl Ast {
                 Declaration::StaticVar(static_var_declaration) => {
                     static_var_declarations.push(static_var_declaration);
                 }
+                Declaration::ImplBlock(impl_block_declaration) => {
+                    impl_block_declarations.push(impl_block_declaration)
+                }
             }
         }
 
@@ -681,6 +693,7 @@ impl Ast {
             type_declarations,
             function_declarations,
             static_var_declarations,
+            impl_block_declarations,
         })
     }
 }
@@ -774,13 +787,39 @@ impl<'a> TokenParser<'a> {
         while let Some(token) = self.iter.peek(0) {
             declarations.push(match token {
                 lexer::Token::Type => Declaration::Type(self.parse_type_declaration()?),
-                lexer::Token::Function => Declaration::Function(self.parse_function_declaration()?),
+                lexer::Token::Function => {
+                    Declaration::Function(self.parse_function_declaration(None)?)
+                }
                 lexer::Token::Let => Declaration::StaticVar(self.parse_static_var_declaration()?),
+                lexer::Token::Impl => Declaration::ImplBlock(self.parse_impl_block_declaration()?),
                 token => return Err(anyhow!("parse: unknown token {token:#?}")),
             });
         }
 
         Ok(declarations)
+    }
+
+    fn parse_impl_block_declaration(&mut self) -> Result<ImplBlockDeclaration> {
+        self.iter.expect(lexer::Token::Impl)?;
+        self.iter.next();
+
+        let _type = self.parse_type()?;
+
+        self.iter.expect(lexer::Token::COpen)?;
+        self.iter.next();
+
+        let mut functions = HashMap::new();
+
+        while let Some(token) = self.iter.peek(0) {
+            if *token != lexer::Token::Function {
+                break;
+            }
+
+            let declaration = self.parse_function_declaration(Some(&_type))?;
+            functions.insert(declaration.identifier.clone(), declaration);
+        }
+
+        Ok(ImplBlockDeclaration { _type, functions })
     }
 
     fn parse_static_var_declaration(&mut self) -> Result<StaticVarDeclaration> {
@@ -903,7 +942,10 @@ impl<'a> TokenParser<'a> {
         Ok(TypeDeclaration { _type, identifier })
     }
 
-    fn parse_function_declaration(&mut self) -> Result<FunctionDeclaration> {
+    fn parse_function_declaration(
+        &mut self,
+        method_type: Option<&Type>,
+    ) -> Result<FunctionDeclaration> {
         self.iter.expect(lexer::Token::Function)?;
         self.iter.next();
 
@@ -927,7 +969,14 @@ impl<'a> TokenParser<'a> {
             }
 
             let identifier = self.parse_identifier()?;
-            let mut _type = self.parse_type()?;
+            let mut _type: Type;
+            if identifier == "self" {
+                _type = Type::Address(Box::new(method_type.cloned().ok_or(anyhow!(
+                    "parse_function_declaration: self usage in non method function"
+                ))?));
+            } else {
+                _type = self.parse_type()?;
+            }
 
             if let lexer::Token::Dot3 = self.iter.peek_err(0)? {
                 self.iter.next();

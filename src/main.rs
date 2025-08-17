@@ -146,7 +146,27 @@ fn main() {
 
                 let nice_static int = 20
 
+                type User {
+                    id int
+                    name string
+                }
+
+                impl User {
+                    fn update(self, id int, name string) void {
+                        *self = &User{
+                            id: 
+                        }
+                    }
+                }
+
                 fn main() void {
+                    let u User = User{
+                        id: 25,
+                        name: \"foo\",
+                    }
+
+                    u.update(69, \"foobar\")
+
                     let foo1 int = nice_static + 25
 
                     let nice fn() void = fn() void {
