@@ -2,6 +2,7 @@ mod vm;
 
 mod ast;
 mod compiler;
+mod ir;
 mod lexer;
 mod linker;
 
