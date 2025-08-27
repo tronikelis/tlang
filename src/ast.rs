@@ -534,6 +534,8 @@ pub enum Expression {
     DotAccess(Box<DotAccess>),
     SliceInit(SliceInit),
     StructInit(StructInit),
+    // either struct or slice,
+    // not enough info to parse correctly
     TypeInit(TypeInit),
     Address(Box<Expression>),
     Deref(Box<Expression>),

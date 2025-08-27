@@ -24,6 +24,39 @@ pub struct TypeResolver {
     type_declarations: HashMap<String, ast::Type>,
 }
 
+struct ResolvedTypeFunction {
+    type_function: TypeFunction,
+    size: usize,
+    alignment: usize,
+    id: String,
+}
+
+impl ResolvedTypeFunction {
+    fn to_function(self) -> Type {
+        Type {
+            id: Some(self.id),
+            size: self.size,
+            alignment: self.alignment,
+            _type: TypeType::Function(Box::new(TypeFunction {
+                arguments: self.type_function.arguments,
+                return_type: self.type_function.return_type,
+            })),
+        }
+    }
+
+    fn to_closure(self) -> Type {
+        Type {
+            id: Some(self.id),
+            size: self.size,
+            alignment: self.alignment,
+            _type: TypeType::Closure(Box::new(TypeFunction {
+                arguments: self.type_function.arguments,
+                return_type: self.type_function.return_type,
+            })),
+        }
+    }
+}
+
 impl TypeResolver {
     pub fn new(type_declarations: HashMap<String, ast::Type>) -> Self {
         Self { type_declarations }
@@ -33,8 +66,48 @@ impl TypeResolver {
         self.resolve_with_alias(_type, None)
     }
 
-    fn resolve_function_declaration(&self, declaration: &ast::FunctionDeclaration) -> Result<Type> {
-        todo!();
+    fn resolve_type_function(
+        &self,
+        args: &[ast::Variable],
+        return_type: &ast::Type,
+    ) -> Result<ResolvedTypeFunction> {
+        let mut arguments = Vec::new();
+
+        let mut id = String::from("fn (");
+        for var in args {
+            let resolved = self.resolve(&var._type)?;
+            id.push_str(
+                resolved
+                    .id
+                    .as_ref()
+                    .ok_or(anyhow!("resolve_closure: type without id"))?,
+            );
+            id.push(',');
+            arguments.push(Variable {
+                identifier: var.identifier.clone(),
+                _type: resolved,
+            });
+        }
+        id.push(')');
+
+        let resolved_return_type = self.resolve(return_type)?;
+
+        id.push_str(
+            resolved_return_type
+                .id
+                .as_ref()
+                .ok_or(anyhow!("resolve_closure: return type without id"))?,
+        );
+
+        Ok(ResolvedTypeFunction {
+            id,
+            size: PTR_SIZE,
+            alignment: PTR_SIZE,
+            type_function: TypeFunction {
+                arguments,
+                return_type: resolved_return_type,
+            },
+        })
     }
 
     fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
@@ -131,46 +204,9 @@ impl TypeResolver {
                     _type: TypeType::Address(Box::new(nested)),
                 })
             }
-            ast::Type::Closure(type_closure) => {
-                let mut arguments = Vec::new();
-
-                let mut id = String::from("fn (");
-                for var in &type_closure.arguments {
-                    let resolved = self.resolve_with_alias(&var._type, alias)?;
-                    id.push_str(
-                        resolved
-                            .id
-                            .as_ref()
-                            .ok_or(anyhow!("resolve_closure: type without id"))?,
-                    );
-                    id.push(',');
-                    arguments.push(Variable {
-                        identifier: var.identifier.clone(),
-                        _type: resolved,
-                    });
-                }
-                id.push(')');
-
-                let resolved_return_type =
-                    self.resolve_with_alias(&type_closure.return_type, alias)?;
-
-                id.push_str(
-                    resolved_return_type
-                        .id
-                        .as_ref()
-                        .ok_or(anyhow!("resolve_closure: return type without id"))?,
-                );
-
-                Ok(Type {
-                    id: Some(id),
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Closure(Box::new(TypeFunction {
-                        arguments,
-                        return_type: resolved_return_type,
-                    })),
-                })
-            }
+            ast::Type::Closure(type_closure) => Ok(self
+                .resolve_type_function(&type_closure.arguments, &type_closure.return_type)?
+                .to_closure()),
         }
     }
 }
@@ -336,6 +372,13 @@ struct Variable {
 }
 
 impl Variable {
+    fn escape(&mut self) {
+        match &self._type._type {
+            TypeType::Escaped(_) => {}
+            _ => self._type = Type::create_escaped(self._type.clone()),
+        }
+    }
+
     fn from_ast(var: &ast::Variable, type_resolver: &TypeResolver) -> Result<Self> {
         Ok(Self {
             identifier: var.identifier.clone(),
@@ -500,13 +543,12 @@ pub struct Compare {
 
 #[derive(Debug, Clone)]
 enum CallType {
-    Function(String),
+    Function(ExpFunction),
     Closure(Expression),
 }
 
 #[derive(Debug, Clone)]
 struct Call {
-    _type: Type,
     arguments: Vec<Expression>,
     call_type: CallType,
 }
@@ -536,6 +578,24 @@ pub struct StructInit {
 }
 
 #[derive(Debug, Clone)]
+struct ExpFunction {
+    identifier: String,
+    _type: Type,
+}
+
+#[derive(Debug, Clone)]
+struct Closure {
+    _type: Type,
+    actions: Vec<Action>,
+}
+
+#[derive(Debug, Clone)]
+struct Method {
+    _self: Expression,
+    function: ExpFunction,
+}
+
+#[derive(Debug, Clone)]
 enum Expression {
     Spread(Box<Expression>),
     Index(Box<Index>),
@@ -549,8 +609,10 @@ enum Expression {
     AndOr(Box<AndOr>),
     Infix(Infix),
     Negate(Box<Expression>),
-    Function(String),
     ToClosure(Box<Expression>),
+    Function(ExpFunction),
+    Method(Box<Method>),
+    Closure(Closure),
     Call(Box<Call>),
     DotAccess(Box<DotAccess>),
     SliceInit(SliceInit),
@@ -562,26 +624,26 @@ impl Expression {
     pub fn _type(&self) -> Result<Type> {
         match self {
             Self::Literal(literal) => Ok(literal._type.clone()),
-            Expression::Spread(expression) => Ok(Type::create_variadic(expression._type()?)),
-            Expression::Index(index) => match index.var._type()?._type {
+            Self::Spread(expression) => Ok(Type::create_variadic(expression._type()?)),
+            Self::Index(index) => match index.var._type()?._type {
                 TypeType::Slice(v) => Ok(*v),
                 _ => Err(anyhow!("index non slice type")),
             },
-            Expression::Compare(_compare) => Ok(BOOL.clone()),
-            Expression::Variable(var) => Ok(var.borrow()._type.clone()),
-            Expression::Type(v) => Ok(v.clone()),
-            Expression::Deref(expression) => match expression._type()?._type {
+            Self::Compare(_compare) => Ok(BOOL.clone()),
+            Self::Variable(var) => Ok(var.borrow()._type.clone()),
+            Self::Type(v) => Ok(v.clone()),
+            Self::Deref(expression) => match expression._type()?._type {
                 TypeType::Address(_type) => Ok(*_type),
                 _ => Err(anyhow!("deref non address type")),
             },
-            Expression::Address(expression) => Ok(Type::create_address(expression._type()?)),
+            Self::Address(expression) => Ok(Type::create_address(expression._type()?)),
             // only INT can add for now
-            Expression::Arithmetic(_arithmetic) => Ok(INT.clone()),
-            Expression::AndOr(_and_or) => Ok(BOOL.clone()),
-            Expression::Infix(_infix) => Ok(INT.clone()),
-            Expression::Negate(_expression) => Ok(BOOL.clone()),
-            Expression::Function(identifier) => todo!("Expression::Function.type()"),
-            Expression::ToClosure(expression) => {
+            Self::Arithmetic(_arithmetic) => Ok(INT.clone()),
+            Self::AndOr(_and_or) => Ok(BOOL.clone()),
+            Self::Infix(_infix) => Ok(INT.clone()),
+            Self::Negate(_expression) => Ok(BOOL.clone()),
+            Self::Function(exp_function) => Ok(exp_function._type.clone()),
+            Self::ToClosure(expression) => {
                 let _type = expression._type()?;
                 match _type._type {
                     TypeType::Function(type_function) => Ok(Type {
@@ -593,7 +655,7 @@ impl Expression {
                     _ => Err(anyhow!("to closure from non function")),
                 }
             }
-            Expression::Call(call) => {
+            Self::Call(call) => {
                 let type_function = match &call._type._type {
                     TypeType::Closure(type_function) | TypeType::Function(type_function) => {
                         *type_function.clone()
@@ -603,7 +665,7 @@ impl Expression {
 
                 Ok(type_function.return_type)
             }
-            Expression::DotAccess(dot_access) => match dot_access.expression._type()?._type {
+            Self::DotAccess(dot_access) => match dot_access.expression._type()?._type {
                 TypeType::Struct(type_struct) => {
                     let mut _type: Option<Type> = None;
 
@@ -623,9 +685,19 @@ impl Expression {
                 }
                 _ => Err(anyhow!("dot accessing non struct")),
             },
-            Expression::SliceInit(slice_init) => Ok(slice_init._type.clone()),
-            Expression::StructInit(struct_init) => Ok(struct_init._type.clone()),
-            Expression::Nil => Ok(NIL.clone()),
+            Self::SliceInit(slice_init) => Ok(slice_init._type.clone()),
+            Self::StructInit(struct_init) => Ok(struct_init._type.clone()),
+            Self::Nil => Ok(NIL.clone()),
+            Self::Closure(closure) => Ok(closure._type.clone()),
+            Self::Method(method) => Ok(method.function._type.clone()),
+        }
+    }
+
+    fn ensure_address(self) -> Result<Self> {
+        let _type = self._type()?;
+        match _type._type {
+            TypeType::Address(_) | TypeType::Escaped(_) => Ok(self),
+            _ => Ok(Expression::Address(Box::new(self))),
         }
     }
 }
@@ -655,11 +727,13 @@ pub enum AndOrType {
     Or,
 }
 
+#[derive(Debug, Clone)]
 struct VariableDeclaration {
     variable: Rc<RefCell<Variable>>,
     expression: Expression,
 }
 
+#[derive(Debug, Clone)]
 enum Action {
     VariableDeclaration(VariableDeclaration),
     Expression(Expression),
@@ -682,6 +756,7 @@ struct Ir {
     expected_type: Stack<Type>,
     type_resolver: TypeResolver,
     function_declarations: HashMap<String, ast::FunctionDeclaration>,
+    impl_block_declarations: Vec<ast::ImplBlockDeclaration>,
 }
 
 impl Ir {
@@ -691,6 +766,7 @@ impl Ir {
             variables: VariableStack::new(),
             type_resolver: TypeResolver::new(ast.type_declarations),
             expected_type: Stack::new(),
+            impl_block_declarations: ast.impl_block_declarations,
         }
     }
 
@@ -703,11 +779,7 @@ impl Ir {
             ast::Expression::Address(exp) => {
                 let inner = self.get_expression(&exp, expected_type)?;
                 if let Expression::Variable(var) = &inner {
-                    let var_clone = var.borrow().clone();
-                    match &var_clone._type._type {
-                        TypeType::Escaped(_) => {}
-                        _ => var.borrow_mut()._type = Type::create_escaped(var_clone._type),
-                    }
+                    var.borrow_mut().escape();
                 }
 
                 return Ok(Expression::Address(Box::new(inner)));
@@ -737,7 +809,20 @@ impl Ir {
                     .get(identifier)
                     .ok_or(anyhow!("function not found: {identifier}"))?;
 
-                return Ok(Expression::Function(identifier.clone()));
+                let resolved_type_function = self.type_resolver.resolve_type_function(
+                    &function_declaration.arguments,
+                    &function_declaration.return_type,
+                )?;
+
+                let result_expression = Expression::Function(ExpFunction {
+                    identifier: identifier.clone(),
+                    _type: resolved_type_function.to_function(),
+                });
+
+                return match expected_type {
+                    None => Ok(result_expression),
+                    Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
+                };
             }
             ast::Expression::Arithmetic(arithmetic) => {
                 let left_exp = self.get_expression(&arithmetic.left, expected_type)?;
@@ -850,20 +935,25 @@ impl Ir {
                 };
 
                 let mut arguments: Vec<Expression> = Vec::new();
+
+                if let Expression::Method(method) = &exp {
+                    arguments.push(method._self.clone());
+                }
+
                 for (i, arg) in call.arguments.iter().enumerate() {
-                    let variable = type_function
+                    let fn_arg = type_function
                         .arguments
                         .get(i)
                         .ok_or(anyhow!("type_function argument not found"))?;
 
-                    arguments.push(self.get_expression(&arg, Some(&variable._type))?);
+                    arguments.push(self.get_expression(&arg, Some(&fn_arg._type))?);
                 }
 
                 return Ok(Expression::Call(Box::new(Call {
-                    _type: exp._type()?,
                     arguments,
                     call_type: match exp {
-                        Expression::Function(identifier) => CallType::Function(identifier.clone()),
+                        Expression::Function(exp_function) => CallType::Function(exp_function),
+                        Expression::Method(method) => CallType::Function(method.function),
                         exp => CallType::Closure(exp),
                     },
                 })));
@@ -883,8 +973,46 @@ impl Ir {
                 )));
             }
             ast::Expression::DotAccess(dot_access) => {
+                let exp = self.get_expression(&dot_access.expression, expected_type)?;
+                let _type = exp._type()?;
+
+                for block in &self.impl_block_declarations {
+                    let Some(function_declaration) = block.functions.get(&dot_access.identifier)
+                    else {
+                        continue;
+                    };
+
+                    let block_type = self.type_resolver.resolve(&block._type)?;
+                    match (&block_type.id, &_type.id) {
+                        (Some(block_id), Some(_type_id)) if block_id == _type_id => {
+                            if let Expression::Variable(var) = &exp {
+                                var.borrow_mut().escape();
+                            }
+
+                            let resolved_type_function = self.type_resolver.resolve_type_function(
+                                &function_declaration.arguments,
+                                &function_declaration.return_type,
+                            )?;
+
+                            let result_expression = Expression::Method(Box::new(Method {
+                                _self: exp.ensure_address()?,
+                                function: ExpFunction {
+                                    identifier: function_declaration.identifier.clone(),
+                                    _type: resolved_type_function.to_function(),
+                                },
+                            }));
+
+                            return match expected_type {
+                                None => Ok(result_expression),
+                                Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+
                 return Ok(Expression::DotAccess(Box::new(DotAccess {
-                    expression: self.get_expression(&dot_access.expression, expected_type)?,
+                    expression: exp,
                     identifier: dot_access.identifier.clone(),
                 })));
             }
@@ -913,8 +1041,29 @@ impl Ir {
 
                 return Ok(Expression::StructInit(StructInit { fields, _type }));
             }
-            ast::Expression::TypeInit(type_init) => todo!(),
-            ast::Expression::Closure(closure) => todo!(),
+            ast::Expression::TypeInit(type_init) => {
+                let _type = self.type_resolver.resolve(&type_init._type)?;
+
+                return match &_type._type {
+                    TypeType::Slice(_) => Ok(Expression::SliceInit(SliceInit {
+                        _type,
+                        expressions: Vec::new(),
+                    })),
+                    TypeType::Struct(_) => Ok(Expression::StructInit(StructInit {
+                        _type,
+                        fields: HashMap::new(),
+                    })),
+                    _ => Err(anyhow!("type init non slice/struct")),
+                };
+            }
+            ast::Expression::Closure(closure) => {
+                let _type = self.type_resolver.resolve(&closure._type)?;
+
+                return Ok(Expression::Closure(Closure {
+                    _type,
+                    actions: self.get_actions(&closure.body)?,
+                }));
+            }
         }
     }
 
