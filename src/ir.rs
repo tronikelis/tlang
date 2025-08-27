@@ -656,9 +656,14 @@ impl Expression {
                 }
             }
             Self::Call(call) => {
-                let type_function = match &call._type._type {
+                let _type = match &call.call_type {
+                    CallType::Closure(exp) => exp._type()?,
+                    CallType::Function(exp_function) => exp_function._type.clone(),
+                };
+
+                let type_function = match _type._type {
                     TypeType::Closure(type_function) | TypeType::Function(type_function) => {
-                        *type_function.clone()
+                        type_function
                     }
                     _ => return Err(anyhow!("cant call non function type")),
                 };
@@ -743,7 +748,7 @@ struct Function {
     identifier: String,
     arguments: Vec<Variable>,
     return_type: Type,
-    actions: Vec<Vec<Action>>,
+    actions: Vec<Action>,
 }
 
 struct ActionLabel {
@@ -1071,12 +1076,16 @@ impl Ir {
         &mut self,
         declaration: &ast::VariableDeclaration,
     ) -> Result<VariableDeclaration> {
+        let variable = Rc::new(RefCell::new(Variable::from_ast(
+            &declaration.variable,
+            &self.type_resolver,
+        )?));
+
+        let expected_type = variable.borrow()._type.clone();
+
         Ok(VariableDeclaration {
-            variable: Rc::new(RefCell::new(Variable::from_ast(
-                &declaration.variable,
-                &self.type_resolver,
-            )?)),
-            expression: self.get_expression(&declaration.expression)?,
+            variable,
+            expression: self.get_expression(&declaration.expression, Some(&expected_type))?,
         })
     }
 
@@ -1114,7 +1123,7 @@ impl Ir {
 
         let return_type = self.type_resolver.resolve(&declaration.return_type)?;
 
-        self.set_body(declaration.body)?;
+        // todo: add arguments to var stack
 
         Ok(Function {
             identifier: declaration.identifier,
