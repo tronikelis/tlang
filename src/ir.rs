@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{
     cell::{RefCell, RefMut},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
@@ -20,8 +20,8 @@ fn align(alignment: usize, stack_size: usize) -> usize {
     }
 }
 
-pub struct TypeResolver {
-    type_declarations: HashMap<String, ast::Type>,
+pub struct TypeResolver<'a> {
+    type_declarations: &'a HashMap<String, ast::Type>,
 }
 
 struct ResolvedTypeFunction {
@@ -57,8 +57,8 @@ impl ResolvedTypeFunction {
     }
 }
 
-impl TypeResolver {
-    pub fn new(type_declarations: HashMap<String, ast::Type>) -> Self {
+impl<'a> TypeResolver<'a> {
+    pub fn new(type_declarations: &'a HashMap<String, ast::Type>) -> Self {
         Self { type_declarations }
     }
 
@@ -314,6 +314,11 @@ impl VariableStack {
         }
 
         None
+    }
+
+    fn get_err(&self, identifier: &str) -> Result<Rc<RefCell<Variable>>> {
+        self.get(identifier)
+            .ok_or(anyhow!("VariableStack.get({identifier}) not found"))
     }
 }
 
@@ -601,7 +606,7 @@ enum Expression {
     Index(Box<Index>),
     Compare(Box<Compare>),
     Literal(Literal),
-    Variable(Rc<RefCell<Variable>>),
+    Variable(String),
     Type(Type),
     Deref(Box<Expression>),
     Address(Box<Expression>),
@@ -621,22 +626,22 @@ enum Expression {
 }
 
 impl Expression {
-    pub fn _type(&self) -> Result<Type> {
+    pub fn _type(&self, variables: &VariableStack) -> Result<Type> {
         match self {
             Self::Literal(literal) => Ok(literal._type.clone()),
-            Self::Spread(expression) => Ok(Type::create_variadic(expression._type()?)),
-            Self::Index(index) => match index.var._type()?._type {
+            Self::Spread(expression) => Ok(Type::create_variadic(expression._type(variables)?)),
+            Self::Index(index) => match index.var._type(variables)?._type {
                 TypeType::Slice(v) => Ok(*v),
                 _ => Err(anyhow!("index non slice type")),
             },
             Self::Compare(_compare) => Ok(BOOL.clone()),
-            Self::Variable(var) => Ok(var.borrow()._type.clone()),
+            Self::Variable(identifier) => Ok(variables.get_err(identifier)?.borrow()._type.clone()),
             Self::Type(v) => Ok(v.clone()),
-            Self::Deref(expression) => match expression._type()?._type {
+            Self::Deref(expression) => match expression._type(variables)?._type {
                 TypeType::Address(_type) => Ok(*_type),
                 _ => Err(anyhow!("deref non address type")),
             },
-            Self::Address(expression) => Ok(Type::create_address(expression._type()?)),
+            Self::Address(expression) => Ok(Type::create_address(expression._type(variables)?)),
             // only INT can add for now
             Self::Arithmetic(_arithmetic) => Ok(INT.clone()),
             Self::AndOr(_and_or) => Ok(BOOL.clone()),
@@ -644,7 +649,7 @@ impl Expression {
             Self::Negate(_expression) => Ok(BOOL.clone()),
             Self::Function(exp_function) => Ok(exp_function._type.clone()),
             Self::ToClosure(expression) => {
-                let _type = expression._type()?;
+                let _type = expression._type(variables)?;
                 match _type._type {
                     TypeType::Function(type_function) => Ok(Type {
                         size: PTR_SIZE,
@@ -657,7 +662,7 @@ impl Expression {
             }
             Self::Call(call) => {
                 let _type = match &call.call_type {
-                    CallType::Closure(exp) => exp._type()?,
+                    CallType::Closure(exp) => exp._type(variables)?,
                     CallType::Function(exp_function) => exp_function._type.clone(),
                 };
 
@@ -670,7 +675,7 @@ impl Expression {
 
                 Ok(type_function.return_type)
             }
-            Self::DotAccess(dot_access) => match dot_access.expression._type()?._type {
+            Self::DotAccess(dot_access) => match dot_access.expression._type(variables)?._type {
                 TypeType::Struct(type_struct) => {
                     let mut _type: Option<Type> = None;
 
@@ -698,8 +703,8 @@ impl Expression {
         }
     }
 
-    fn ensure_address(self) -> Result<Self> {
-        let _type = self._type()?;
+    fn ensure_address(self, variables: &VariableStack) -> Result<Self> {
+        let _type = self._type(variables)?;
         match _type._type {
             TypeType::Address(_) | TypeType::Escaped(_) => Ok(self),
             _ => Ok(Expression::Address(Box::new(self))),
@@ -739,14 +744,54 @@ struct VariableDeclaration {
 }
 
 #[derive(Debug, Clone)]
+pub struct ElseIf {
+    pub expression: Expression,
+    pub actions: Vec<Action>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Else {
+    pub actions: Vec<Action>,
+}
+
+#[derive(Debug, Clone)]
+pub struct If {
+    pub expression: Expression,
+    pub actions: Vec<Action>,
+    pub elseif: Vec<ElseIf>,
+    pub _else: Option<Else>,
+}
+
+#[derive(Debug, Clone)]
+pub struct For {
+    pub initializer: Option<Action>,
+    pub expression: Option<Expression>,
+    pub after_each: Option<Action>,
+    pub actions: Vec<Action>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariableAssignment {
+    pub var: Expression,
+    pub expression: Expression,
+}
+
+#[derive(Debug, Clone)]
 enum Action {
     VariableDeclaration(VariableDeclaration),
+    VariableAssignment(VariableAssignment),
     Expression(Expression),
+    Return(Option<Expression>),
+    Debug,
+    Break,
+    If(If),
+    For(Box<For>),
+    Continue,
 }
 
 struct Function {
     identifier: String,
-    arguments: Vec<Variable>,
+    arguments: Vec<Rc<RefCell<Variable>>>,
     return_type: Type,
     actions: Vec<Action>,
 }
@@ -756,22 +801,20 @@ struct ActionLabel {
     index: usize,
 }
 
-struct Ir {
+struct Ir<'a> {
     variables: VariableStack,
-    expected_type: Stack<Type>,
-    type_resolver: TypeResolver,
-    function_declarations: HashMap<String, ast::FunctionDeclaration>,
-    impl_block_declarations: Vec<ast::ImplBlockDeclaration>,
+    type_resolver: TypeResolver<'a>,
+    undefined_variables: HashSet<String>,
+    ast: &'a ast::Ast,
 }
 
-impl Ir {
-    pub fn new(ast: ast::Ast) -> Self {
+impl<'a> Ir<'a> {
+    pub fn new(ast: &'a ast::Ast) -> Self {
         Self {
-            function_declarations: ast.function_declarations,
             variables: VariableStack::new(),
-            type_resolver: TypeResolver::new(ast.type_declarations),
-            expected_type: Stack::new(),
-            impl_block_declarations: ast.impl_block_declarations,
+            type_resolver: TypeResolver::new(&ast.type_declarations),
+            undefined_variables: HashSet::new(),
+            ast,
         }
     }
 
@@ -784,14 +827,14 @@ impl Ir {
             ast::Expression::Address(exp) => {
                 let inner = self.get_expression(&exp, expected_type)?;
                 if let Expression::Variable(var) = &inner {
-                    var.borrow_mut().escape();
+                    self.variables.get_err(var)?.borrow_mut().escape();
                 }
 
                 return Ok(Expression::Address(Box::new(inner)));
             }
             ast::Expression::Deref(exp) => {
                 let exp = self.get_expression(exp, expected_type)?;
-                let TypeType::Address(_type) = exp._type()?._type else {
+                let TypeType::Address(_type) = exp._type(&self.variables)?._type else {
                     return Err(anyhow!("get_expression: deref non address {exp:#?}"));
                 };
                 return Ok(Expression::Deref(Box::new(exp)));
@@ -806,13 +849,17 @@ impl Ir {
                 };
 
                 if let Some(var) = self.variables.get(&identifier) {
-                    return Ok(Expression::Variable(var.clone()));
+                    return Ok(Expression::Variable(var.borrow().identifier.clone()));
                 }
 
-                let function_declaration = self
-                    .function_declarations
-                    .get(identifier)
-                    .ok_or(anyhow!("function not found: {identifier}"))?;
+                let Some(function_declaration) = self.ast.function_declarations.get(identifier)
+                else {
+                    // not a variable
+                    // not a function declaration
+                    // assume its a variable thats defined outside the function scope (closure)
+                    self.undefined_variables.insert(identifier.clone());
+                    return Ok(Expression::Variable(identifier.clone()));
+                };
 
                 let resolved_type_function = self.type_resolver.resolve_type_function(
                     &function_declaration.arguments,
@@ -831,7 +878,8 @@ impl Ir {
             }
             ast::Expression::Arithmetic(arithmetic) => {
                 let left_exp = self.get_expression(&arithmetic.left, expected_type)?;
-                let right_exp = self.get_expression(&arithmetic.right, Some(&left_exp._type()?))?;
+                let right_exp = self
+                    .get_expression(&arithmetic.right, Some(&left_exp._type(&self.variables)?))?;
 
                 return Ok(Expression::Arithmetic(Box::new(Arithmetic {
                     left: left_exp,
@@ -850,7 +898,8 @@ impl Ir {
             }
             ast::Expression::AndOr(and_or) => {
                 let left_exp = self.get_expression(&and_or.left, expected_type)?;
-                let right_exp = self.get_expression(&and_or.right, Some(&left_exp._type()?))?;
+                let right_exp =
+                    self.get_expression(&and_or.right, Some(&left_exp._type(&self.variables)?))?;
 
                 return Ok(Expression::AndOr(Box::new(AndOr {
                     left: left_exp,
@@ -916,7 +965,8 @@ impl Ir {
             },
             ast::Expression::Compare(compare) => {
                 let left_exp = self.get_expression(&compare.left, expected_type)?;
-                let right_exp = self.get_expression(&compare.right, Some(&left_exp._type()?))?;
+                let right_exp =
+                    self.get_expression(&compare.right, Some(&left_exp._type(&self.variables)?))?;
 
                 return Ok(Expression::Compare(Box::new(Compare {
                     left: left_exp,
@@ -932,7 +982,7 @@ impl Ir {
             ast::Expression::Call(call) => {
                 let exp = self.get_expression(&call.expression, expected_type)?;
 
-                let type_function = match &exp._type()?._type {
+                let type_function = match &exp._type(&self.variables)?._type {
                     TypeType::Closure(type_function) | TypeType::Function(type_function) => {
                         *type_function.clone()
                     }
@@ -979,9 +1029,9 @@ impl Ir {
             }
             ast::Expression::DotAccess(dot_access) => {
                 let exp = self.get_expression(&dot_access.expression, expected_type)?;
-                let _type = exp._type()?;
+                let _type = exp._type(&self.variables)?;
 
-                for block in &self.impl_block_declarations {
+                for block in &self.ast.impl_block_declarations {
                     let Some(function_declaration) = block.functions.get(&dot_access.identifier)
                     else {
                         continue;
@@ -991,7 +1041,7 @@ impl Ir {
                     match (&block_type.id, &_type.id) {
                         (Some(block_id), Some(_type_id)) if block_id == _type_id => {
                             if let Expression::Variable(var) = &exp {
-                                var.borrow_mut().escape();
+                                self.variables.get_err(var)?.borrow_mut().escape();
                             }
 
                             let resolved_type_function = self.type_resolver.resolve_type_function(
@@ -1000,7 +1050,7 @@ impl Ir {
                             )?;
 
                             let result_expression = Expression::Method(Box::new(Method {
-                                _self: exp.ensure_address()?,
+                                _self: exp.ensure_address(&self.variables)?,
                                 function: ExpFunction {
                                     identifier: function_declaration.identifier.clone(),
                                     _type: resolved_type_function.to_function(),
@@ -1064,10 +1114,15 @@ impl Ir {
             ast::Expression::Closure(closure) => {
                 let _type = self.type_resolver.resolve(&closure._type)?;
 
-                return Ok(Expression::Closure(Closure {
-                    _type,
-                    actions: self.get_actions(&closure.body)?,
-                }));
+                let mut closure_ir = Self::new(self.ast);
+                let actions = closure_ir.get_actions(&closure.body)?;
+
+                for undefined in &closure_ir.undefined_variables {
+                    self.variables.get_err(undefined)?.borrow_mut().escape();
+                    self.undefined_variables.insert(undefined.clone());
+                }
+
+                return Ok(Expression::Closure(Closure { _type, actions }));
             }
         }
     }
@@ -1080,6 +1135,7 @@ impl Ir {
             &declaration.variable,
             &self.type_resolver,
         )?));
+        self.variables.stack.push(variable.clone());
 
         let expected_type = variable.borrow()._type.clone();
 
@@ -1089,6 +1145,21 @@ impl Ir {
         })
     }
 
+    fn get_if(&mut self, _if: &ast::If) -> Result<If> {
+        todo!();
+    }
+
+    fn get_for(&mut self, _for: &ast::For) -> Result<For> {
+        todo!();
+    }
+
+    fn get_variable_assignment(
+        &mut self,
+        assignment: &ast::VariableAssignment,
+    ) -> Result<VariableAssignment> {
+        todo!();
+    }
+
     fn get_actions(&mut self, body: &[ast::Node]) -> Result<Vec<Action>> {
         self.variables.stack.push_frame();
 
@@ -1096,12 +1167,21 @@ impl Ir {
         for node in body {
             actions.push(match node {
                 ast::Node::VariableDeclaration(v) => {
-                    let variable_declaration = self.get_variable_declaration(&v)?;
-
-                    self.variables
-                        .stack
-                        .push(variable_declaration.variable.clone());
-                    Action::VariableDeclaration(variable_declaration)
+                    Action::VariableDeclaration(self.get_variable_declaration(v)?)
+                }
+                ast::Node::Debug => Action::Debug,
+                ast::Node::Break => Action::Break,
+                ast::Node::Continue => Action::Continue,
+                ast::Node::Expression(exp) => Action::Expression(self.get_expression(exp, None)?),
+                ast::Node::Return(exp) => Action::Return(
+                    exp.as_ref()
+                        .map(|v| self.get_expression(v, None))
+                        .transpose()?,
+                ),
+                ast::Node::If(v) => Action::If(self.get_if(v)?),
+                ast::Node::For(v) => Action::For(Box::new(self.get_for(v)?)),
+                ast::Node::VariableAssignment(v) => {
+                    Action::VariableAssignment(self.get_variable_assignment(v)?)
                 }
             });
         }
@@ -1118,18 +1198,34 @@ impl Ir {
         let arguments = declaration
             .arguments
             .iter()
-            .map(|var| Variable::from_ast(var, &self.type_resolver))
+            .map(|var| {
+                Ok(Rc::new(RefCell::new(Variable::from_ast(
+                    var,
+                    &self.type_resolver,
+                )?)))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let return_type = self.type_resolver.resolve(&declaration.return_type)?;
 
-        // todo: add arguments to var stack
+        for arg in &arguments {
+            self.variables.stack.push(arg.clone());
+        }
+
+        let actions = self.get_actions(&declaration.body)?;
+
+        if !self.undefined_variables.is_empty() {
+            return Err(anyhow!(
+                "ast contains undefined variables {:#?}",
+                self.undefined_variables
+            ));
+        }
 
         Ok(Function {
             identifier: declaration.identifier,
             arguments,
             return_type,
-            actions: self.get_actions(&declaration.body)?,
+            actions,
         })
     }
 }
