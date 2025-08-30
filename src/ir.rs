@@ -1,9 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::{
-    cell::{RefCell, RefMut},
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ast, lexer};
 
@@ -295,11 +291,28 @@ impl<T> Stack<T> {
     }
 }
 
-struct VariableStack {
+pub trait VariableStack {
+    fn get_type(&self, identifier: &str) -> Option<Type>;
+
+    fn get_type_err(&self, identifier: &str) -> Result<Type> {
+        self.get_type(identifier)
+            .ok_or(anyhow!("VariableStack.get_type_err({identifier})"))
+    }
+}
+
+struct Variables {
     stack: Stack<Rc<RefCell<Variable>>>,
 }
 
-impl VariableStack {
+impl VariableStack for Variables {
+    fn get_type(&self, identifier: &str) -> Option<Type> {
+        self.get(identifier)
+            .as_ref()
+            .map(|v| v.borrow()._type.clone())
+    }
+}
+
+impl Variables {
     fn new() -> Self {
         Self {
             stack: Stack::new(),
@@ -323,57 +336,26 @@ impl VariableStack {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct TypeStruct {
-    fields: Vec<TypeStructField>,
+pub struct TypeStruct {
+    pub fields: Vec<TypeStructField>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum TypeStructField {
+pub enum TypeStructField {
     Type(String, Type),
     Padding(usize),
 }
 
-impl TypeStruct {
-    fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
-        let mut offset = 0;
-
-        for field in self.fields.iter().rev() {
-            match field {
-                TypeStructField::Padding(padding) => offset += padding,
-                TypeStructField::Type(iden, _type) => {
-                    if iden == identifier {
-                        return Some((offset, _type));
-                    }
-                    offset += _type.size;
-                }
-            }
-        }
-
-        None
-    }
-
-    fn get_field_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
-        self.get_field_offset(identifier)
-            .ok_or(anyhow!("get_field_offset_err: not found {identifier}"))
-    }
-
-    fn identifier_field_count(&self) -> usize {
-        // - 1 there is padding at the end
-        // / 2 every field has padding before
-        (self.fields.len() - 1) / 2
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-struct TypeFunction {
+pub struct TypeFunction {
     pub arguments: Vec<Variable>,
     pub return_type: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Variable {
-    identifier: String,
-    _type: Type,
+pub struct Variable {
+    pub identifier: String,
+    pub _type: Type,
 }
 
 impl Variable {
@@ -393,7 +375,7 @@ impl Variable {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum TypeBuiltin {
+pub enum TypeBuiltin {
     Uint,
     Uint8,
     Int,
@@ -406,7 +388,7 @@ enum TypeBuiltin {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum TypeType {
+pub enum TypeType {
     Struct(TypeStruct),
     Variadic(Box<Type>),
     Slice(Box<Type>),
@@ -419,12 +401,12 @@ enum TypeType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Type {
+pub struct Type {
     // None for inline types
-    id: Option<String>,
-    size: usize,
-    alignment: usize,
-    _type: TypeType,
+    pub id: Option<String>,
+    pub size: usize,
+    pub alignment: usize,
+    pub _type: TypeType,
 }
 
 impl Type {
@@ -454,63 +436,17 @@ impl Type {
             _type: TypeType::Escaped(Box::new(item)),
         }
     }
-
-    fn equals(&self, other: &Self) -> Result<()> {
-        // todo: do this the other way around
-        if let TypeType::Builtin(builtin) = &self._type {
-            if let TypeBuiltin::Nil = builtin {
-                if let TypeType::Address(_) = &other._type {
-                    return Ok(());
-                }
-            }
-        }
-
-        match (&self.id, &other.id) {
-            (Some(self_id), Some(other_id)) => {
-                return match self_id == other_id {
-                    true => Ok(()),
-                    false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
-                }
-            }
-            _ => {}
-        }
-
-        let mut self_clone = self.clone();
-        let mut other_clone = other.clone();
-
-        self_clone.id = None;
-        other_clone.id = None;
-
-        match other == self {
-            true => Ok(()),
-            false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
-        }
-    }
-
-    fn extract_variadic(&self) -> Option<&Self> {
-        match &self._type {
-            TypeType::Variadic(item) => Some(&item),
-            _ => None,
-        }
-    }
-
-    fn resolve_lazy(self, type_resolver: &TypeResolver) -> Result<Self> {
-        match self._type {
-            TypeType::Lazy(alias) => type_resolver.resolve(&ast::Type::Alias(alias)),
-            _ => Ok(self),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
-struct Arithmetic {
-    left: Expression,
-    right: Expression,
-    _type: ArithmeticType,
+pub struct Arithmetic {
+    pub left: Expression,
+    pub right: Expression,
+    pub _type: ArithmeticType,
 }
 
 #[derive(Debug, Clone)]
-enum ArithmeticType {
+pub enum ArithmeticType {
     Plus,
     Minus,
     Divide,
@@ -519,16 +455,16 @@ enum ArithmeticType {
 }
 
 #[derive(Debug, Clone)]
-enum LiteralType {
+pub enum LiteralType {
     Int(usize),
     String(String),
     Bool(bool),
 }
 
 #[derive(Debug, Clone)]
-struct Literal {
-    literal_type: LiteralType,
-    _type: Type,
+pub struct Literal {
+    pub literal_type: LiteralType,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -547,27 +483,27 @@ pub struct Compare {
 }
 
 #[derive(Debug, Clone)]
-enum CallType {
+pub enum CallType {
     Function(ExpFunction),
     Closure(Expression),
 }
 
 #[derive(Debug, Clone)]
-struct Call {
-    arguments: Vec<Expression>,
-    call_type: CallType,
+pub struct Call {
+    pub arguments: Vec<Expression>,
+    pub call_type: CallType,
 }
 
 #[derive(Debug, Clone)]
-struct Index {
-    var: Expression,
-    expression: Expression,
+pub struct Index {
+    pub var: Expression,
+    pub expression: Expression,
 }
 
 #[derive(Debug, Clone)]
-struct DotAccess {
-    expression: Expression,
-    identifier: String,
+pub struct DotAccess {
+    pub expression: Expression,
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone)]
@@ -583,25 +519,26 @@ pub struct StructInit {
 }
 
 #[derive(Debug, Clone)]
-struct ExpFunction {
-    identifier: String,
-    _type: Type,
+pub struct ExpFunction {
+    pub identifier: String,
+    pub _type: Type,
 }
 
 #[derive(Debug, Clone)]
-struct Closure {
-    _type: Type,
-    actions: Vec<Action>,
+pub struct Closure {
+    pub _type: Type,
+    pub escaped_variables: Vec<String>,
+    pub actions: Vec<Action>,
 }
 
 #[derive(Debug, Clone)]
-struct Method {
-    _self: Expression,
-    function: ExpFunction,
+pub struct Method {
+    pub _self: Expression,
+    pub function: ExpFunction,
 }
 
 #[derive(Debug, Clone)]
-enum Expression {
+pub enum Expression {
     Spread(Box<Expression>),
     Index(Box<Index>),
     Compare(Box<Compare>),
@@ -626,7 +563,7 @@ enum Expression {
 }
 
 impl Expression {
-    pub fn _type(&self, variables: &VariableStack) -> Result<Type> {
+    pub fn _type<T: VariableStack>(&self, variables: &T) -> Result<Type> {
         match self {
             Self::Literal(literal) => Ok(literal._type.clone()),
             Self::Spread(expression) => Ok(Type::create_variadic(expression._type(variables)?)),
@@ -635,7 +572,7 @@ impl Expression {
                 _ => Err(anyhow!("index non slice type")),
             },
             Self::Compare(_compare) => Ok(BOOL.clone()),
-            Self::Variable(identifier) => Ok(variables.get_err(identifier)?.borrow()._type.clone()),
+            Self::Variable(identifier) => Ok(variables.get_type_err(identifier)?),
             Self::Type(v) => Ok(v.clone()),
             Self::Deref(expression) => match expression._type(variables)?._type {
                 TypeType::Address(_type) => Ok(*_type),
@@ -703,7 +640,7 @@ impl Expression {
         }
     }
 
-    fn ensure_address(self, variables: &VariableStack) -> Result<Self> {
+    fn ensure_address<T: VariableStack>(self, variables: &T) -> Result<Self> {
         let _type = self._type(variables)?;
         match _type._type {
             TypeType::Address(_) | TypeType::Escaped(_) => Ok(self),
@@ -738,9 +675,9 @@ pub enum AndOrType {
 }
 
 #[derive(Debug, Clone)]
-struct VariableDeclaration {
-    variable: Rc<RefCell<Variable>>,
-    expression: Expression,
+pub struct VariableDeclaration {
+    pub variable: Rc<RefCell<Variable>>,
+    pub expression: Expression,
 }
 
 #[derive(Debug, Clone)]
@@ -777,7 +714,7 @@ pub struct VariableAssignment {
 }
 
 #[derive(Debug, Clone)]
-enum Action {
+pub enum Action {
     VariableDeclaration(VariableDeclaration),
     VariableAssignment(VariableAssignment),
     Expression(Expression),
@@ -789,31 +726,26 @@ enum Action {
     Continue,
 }
 
-struct Function {
-    identifier: String,
-    arguments: Vec<Rc<RefCell<Variable>>>,
-    return_type: Type,
-    actions: Vec<Action>,
+pub struct Function {
+    pub identifier: String,
+    pub arguments: Vec<Rc<RefCell<Variable>>>,
+    pub return_type: Type,
+    pub actions: Vec<Action>,
 }
 
-struct ActionLabel {
-    identifier: String,
-    index: usize,
-}
-
-struct Ir<'a> {
-    variables: VariableStack,
+pub struct Ir<'a> {
+    variables: Variables,
     type_resolver: TypeResolver<'a>,
-    undefined_variables: HashSet<String>,
+    undefined_variables: Vec<String>,
     ast: &'a ast::Ast,
 }
 
 impl<'a> Ir<'a> {
     pub fn new(ast: &'a ast::Ast) -> Self {
         Self {
-            variables: VariableStack::new(),
+            variables: Variables::new(),
             type_resolver: TypeResolver::new(&ast.type_declarations),
-            undefined_variables: HashSet::new(),
+            undefined_variables: Vec::new(),
             ast,
         }
     }
@@ -857,7 +789,7 @@ impl<'a> Ir<'a> {
                     // not a variable
                     // not a function declaration
                     // assume its a variable thats defined outside the function scope (closure)
-                    self.undefined_variables.insert(identifier.clone());
+                    self.undefined_variables.push(identifier.clone());
                     return Ok(Expression::Variable(identifier.clone()));
                 };
 
@@ -1119,10 +1051,17 @@ impl<'a> Ir<'a> {
 
                 for undefined in &closure_ir.undefined_variables {
                     self.variables.get_err(undefined)?.borrow_mut().escape();
-                    self.undefined_variables.insert(undefined.clone());
+
+                    if !self.undefined_variables.contains(undefined) {
+                        self.undefined_variables.push(undefined.clone());
+                    }
                 }
 
-                return Ok(Expression::Closure(Closure { _type, actions }));
+                return Ok(Expression::Closure(Closure {
+                    _type,
+                    actions,
+                    escaped_variables: self.undefined_variables.clone(),
+                }));
             }
         }
     }
@@ -1146,18 +1085,99 @@ impl<'a> Ir<'a> {
     }
 
     fn get_if(&mut self, _if: &ast::If) -> Result<If> {
-        todo!();
+        let expression = self.get_expression(&_if.expression, None)?;
+        let actions = self.get_actions(&_if.body)?;
+
+        let elseif = _if
+            .elseif
+            .iter()
+            .map(|v| {
+                Ok(ElseIf {
+                    expression: self.get_expression(&v.expression, None)?,
+                    actions: self.get_actions(&v.body)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let _else = _if
+            ._else
+            .as_ref()
+            .map(|v| -> Result<Else> {
+                Ok(Else {
+                    actions: self.get_actions(&v.body)?,
+                })
+            })
+            .transpose()?;
+
+        Ok(If {
+            expression,
+            actions,
+            elseif,
+            _else,
+        })
     }
 
     fn get_for(&mut self, _for: &ast::For) -> Result<For> {
-        todo!();
+        let initializer = _for
+            .initializer
+            .as_ref()
+            .map(|v| -> Result<Action> { Ok(self.get_action(v)?) })
+            .transpose()?;
+
+        let expression = _for
+            .expression
+            .as_ref()
+            .map(|v| -> Result<Expression> { Ok(self.get_expression(v, None)?) })
+            .transpose()?;
+
+        let after_each = _for
+            .after_each
+            .as_ref()
+            .map(|v| -> Result<Action> { Ok(self.get_action(v)?) })
+            .transpose()?;
+
+        let actions = self.get_actions(&_for.body)?;
+
+        Ok(For {
+            initializer,
+            expression,
+            after_each,
+            actions,
+        })
     }
 
     fn get_variable_assignment(
         &mut self,
         assignment: &ast::VariableAssignment,
     ) -> Result<VariableAssignment> {
-        todo!();
+        let var = self.get_expression(&assignment.var, None)?;
+        let var_type = var._type(&self.variables)?;
+        Ok(VariableAssignment {
+            var,
+            expression: self.get_expression(&assignment.expression, Some(&var_type))?,
+        })
+    }
+
+    fn get_action(&mut self, node: &ast::Node) -> Result<Action> {
+        Ok(match node {
+            ast::Node::VariableDeclaration(v) => {
+                Action::VariableDeclaration(self.get_variable_declaration(v)?)
+            }
+            ast::Node::Debug => Action::Debug,
+            ast::Node::Break => Action::Break,
+            ast::Node::Continue => Action::Continue,
+            ast::Node::Expression(exp) => Action::Expression(self.get_expression(exp, None)?),
+            ast::Node::Return(exp) => Action::Return(
+                exp.as_ref()
+                    .map(|v| self.get_expression(v, None))
+                    .transpose()?,
+            ),
+            ast::Node::If(v) => Action::If(self.get_if(v)?),
+            ast::Node::For(v) => Action::For(Box::new(self.get_for(v)?)),
+            ast::Node::VariableAssignment(v) => {
+                Action::VariableAssignment(self.get_variable_assignment(v)?)
+            }
+        })
     }
 
     fn get_actions(&mut self, body: &[ast::Node]) -> Result<Vec<Action>> {
@@ -1165,25 +1185,7 @@ impl<'a> Ir<'a> {
 
         let mut actions: Vec<Action> = Vec::new();
         for node in body {
-            actions.push(match node {
-                ast::Node::VariableDeclaration(v) => {
-                    Action::VariableDeclaration(self.get_variable_declaration(v)?)
-                }
-                ast::Node::Debug => Action::Debug,
-                ast::Node::Break => Action::Break,
-                ast::Node::Continue => Action::Continue,
-                ast::Node::Expression(exp) => Action::Expression(self.get_expression(exp, None)?),
-                ast::Node::Return(exp) => Action::Return(
-                    exp.as_ref()
-                        .map(|v| self.get_expression(v, None))
-                        .transpose()?,
-                ),
-                ast::Node::If(v) => Action::If(self.get_if(v)?),
-                ast::Node::For(v) => Action::For(Box::new(self.get_for(v)?)),
-                ast::Node::VariableAssignment(v) => {
-                    Action::VariableAssignment(self.get_variable_assignment(v)?)
-                }
-            });
+            actions.push(self.get_action(node)?);
         }
 
         self.variables.stack.pop_frame();
