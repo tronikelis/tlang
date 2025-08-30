@@ -821,6 +821,9 @@ impl<'a> TokenParser<'a> {
             functions.insert(declaration.identifier.clone(), declaration);
         }
 
+        self.iter.expect(lexer::Token::CClose)?;
+        self.iter.next();
+
         Ok(ImplBlockDeclaration { _type, functions })
     }
 
@@ -958,6 +961,21 @@ impl<'a> TokenParser<'a> {
 
         let mut function_arguments: Vec<Variable> = Vec::new();
 
+        if let Some(method_type) = method_type {
+            self.iter.expect(lexer::Token::Star)?;
+            self.iter.next();
+
+            let identifier = self.parse_identifier()?;
+            if identifier != "self" {
+                return Err(anyhow!("method first argument must be '*self'"));
+            }
+
+            function_arguments.push(Variable {
+                identifier,
+                _type: Type::Address(Box::new(method_type.clone())),
+            });
+        }
+
         while let Some(token) = self.iter.peek(0) {
             match token {
                 lexer::Token::PClose => {
@@ -971,14 +989,7 @@ impl<'a> TokenParser<'a> {
             }
 
             let identifier = self.parse_identifier()?;
-            let mut _type: Type;
-            if identifier == "self" {
-                _type = Type::Address(Box::new(method_type.cloned().ok_or(anyhow!(
-                    "parse_function_declaration: self usage in non method function"
-                ))?));
-            } else {
-                _type = self.parse_type()?;
-            }
+            let mut _type = self.parse_type()?;
 
             if let lexer::Token::Dot3 = self.iter.peek_err(0)? {
                 self.iter.next();

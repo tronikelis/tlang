@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ast, lexer};
 
-fn align(alignment: usize, stack_size: usize) -> usize {
+pub fn align(alignment: usize, stack_size: usize) -> usize {
     if alignment == 0 || stack_size == 0 {
         0
     } else {
@@ -208,55 +208,55 @@ impl<'a> TypeResolver<'a> {
 }
 
 lazy_static::lazy_static! {
-    static ref NIL: Type = Type {
+    pub static ref NIL: Type = Type {
         id: Some("nil".to_string()),
         size: PTR_SIZE,
         alignment: PTR_SIZE,
         _type: TypeType::Builtin(TypeBuiltin::Nil),
     };
-    static ref UINT: Type = Type {
+    pub static ref UINT: Type = Type {
         id: Some("uint".to_string()),
         size: size_of::<usize>(),
         alignment: size_of::<usize>(),
         _type: TypeType::Builtin(TypeBuiltin::Uint),
     };
-    static ref UINT8: Type = Type {
+    pub static ref UINT8: Type = Type {
         id: Some("uint8".to_string()),
         size: 1,
         alignment: 1,
         _type: TypeType::Builtin(TypeBuiltin::Uint8),
     };
-    static ref INT: Type = Type {
+    pub static ref INT: Type = Type {
         id: Some("int".to_string()),
         size: size_of::<isize>(),
         alignment: size_of::<isize>(),
         _type: TypeType::Builtin(TypeBuiltin::Int),
     };
-    static ref BOOL: Type = Type {
+    pub static ref BOOL: Type = Type {
         id: Some("bool".to_string()),
         size: size_of::<usize>(),      // for now
         alignment: size_of::<usize>(), // for now
         _type: TypeType::Builtin(TypeBuiltin::Bool),
     };
-    static ref STRING: Type = Type {
+    pub static ref STRING: Type = Type {
         id: Some("string".to_string()),
         size: size_of::<usize>(),
         alignment: size_of::<usize>(),
         _type: TypeType::Builtin(TypeBuiltin::String),
     };
-    static ref COMPILER_TYPE: Type = Type {
+    pub static ref COMPILER_TYPE: Type = Type {
         id: Some("Type".to_string()),
         size: 0,
         alignment: 0,
         _type: TypeType::Builtin(TypeBuiltin::CompilerType),
     };
-    static ref VOID: Type = Type {
+    pub static ref VOID: Type = Type {
         id: Some("void".to_string()),
         size: 0,
         alignment: 0,
         _type: TypeType::Builtin(TypeBuiltin::Void),
     };
-    static ref PTR: Type = Type {
+    pub static ref PTR: Type = Type {
         id: Some("ptr".to_string()),
         size: PTR_SIZE,
         alignment: PTR_SIZE,
@@ -264,9 +264,10 @@ lazy_static::lazy_static! {
     };
 }
 
-const SLICE_SIZE: usize = size_of::<usize>();
-const PTR_SIZE: usize = size_of::<usize>();
+pub const SLICE_SIZE: usize = size_of::<usize>();
+pub const PTR_SIZE: usize = size_of::<usize>();
 
+#[derive(Debug, Clone)]
 struct Stack<T> {
     items: Vec<Vec<T>>,
 }
@@ -300,16 +301,28 @@ pub trait VariableStack {
     }
 }
 
+#[derive(Debug, Clone)]
+enum VariableItem {
+    Variable(Rc<RefCell<Variable>>),
+    SearchEnd,
+}
+
+#[derive(Debug, Clone)]
 struct Variables {
-    stack: Stack<Rc<RefCell<Variable>>>,
+    stack: Stack<VariableItem>,
 }
 
 impl VariableStack for Variables {
     fn get_type(&self, identifier: &str) -> Option<Type> {
         self.get(identifier)
             .as_ref()
-            .map(|v| v.borrow()._type.clone())
+            .map(|v| v.variable.borrow()._type.clone())
     }
+}
+
+struct VariableGetResult {
+    variable: Rc<RefCell<Variable>>,
+    escaped: bool,
 }
 
 impl Variables {
@@ -319,17 +332,34 @@ impl Variables {
         }
     }
 
-    fn get(&self, identifier: &str) -> Option<Rc<RefCell<Variable>>> {
+    fn get(&self, identifier: &str) -> Option<VariableGetResult> {
+        let mut search_ended = false;
         for item in self.stack.items.iter().flatten().rev() {
-            if item.borrow().identifier == identifier {
-                return Some(item.clone());
+            match item {
+                VariableItem::SearchEnd => search_ended = true,
+                VariableItem::Variable(var) => {
+                    if var.borrow().identifier == identifier {
+                        if search_ended {
+                            var.borrow_mut().escape();
+                            return Some(VariableGetResult {
+                                variable: var.clone(),
+                                escaped: true,
+                            });
+                        }
+
+                        return Some(VariableGetResult {
+                            variable: var.clone(),
+                            escaped: false,
+                        });
+                    }
+                }
             }
         }
 
         None
     }
 
-    fn get_err(&self, identifier: &str) -> Result<Rc<RefCell<Variable>>> {
+    fn get_err(&self, identifier: &str) -> Result<VariableGetResult> {
         self.get(identifier)
             .ok_or(anyhow!("VariableStack.get({identifier}) not found"))
     }
@@ -410,6 +440,13 @@ pub struct Type {
 }
 
 impl Type {
+    fn skip_escaped(&self) -> &Self {
+        match &self._type {
+            TypeType::Escaped(_type) => _type,
+            _ => self,
+        }
+    }
+
     fn create_variadic(item: Self) -> Self {
         Self {
             id: item.id.as_ref().map(|id| id.clone() + "..."),
@@ -533,6 +570,7 @@ pub struct Closure {
 
 #[derive(Debug, Clone)]
 pub struct Method {
+    pub type_id: String,
     pub _self: Expression,
     pub function: ExpFunction,
 }
@@ -726,6 +764,7 @@ pub enum Action {
     Continue,
 }
 
+#[derive(Debug)]
 pub struct Function {
     pub identifier: String,
     pub arguments: Vec<Rc<RefCell<Variable>>>,
@@ -736,7 +775,7 @@ pub struct Function {
 pub struct Ir<'a> {
     variables: Variables,
     type_resolver: TypeResolver<'a>,
-    undefined_variables: Vec<String>,
+    escaped_variables: Vec<String>,
     ast: &'a ast::Ast,
 }
 
@@ -745,7 +784,7 @@ impl<'a> Ir<'a> {
         Self {
             variables: Variables::new(),
             type_resolver: TypeResolver::new(&ast.type_declarations),
-            undefined_variables: Vec::new(),
+            escaped_variables: Vec::new(),
             ast,
         }
     }
@@ -759,7 +798,7 @@ impl<'a> Ir<'a> {
             ast::Expression::Address(exp) => {
                 let inner = self.get_expression(&exp, expected_type)?;
                 if let Expression::Variable(var) = &inner {
-                    self.variables.get_err(var)?.borrow_mut().escape();
+                    self.variables.get_err(var)?.variable.borrow_mut().escape();
                 }
 
                 return Ok(Expression::Address(Box::new(inner)));
@@ -781,17 +820,18 @@ impl<'a> Ir<'a> {
                 };
 
                 if let Some(var) = self.variables.get(&identifier) {
-                    return Ok(Expression::Variable(var.borrow().identifier.clone()));
+                    let identifier = var.variable.borrow().identifier.clone();
+                    if var.escaped {
+                        self.escaped_variables.push(identifier.clone());
+                    }
+                    return Ok(Expression::Variable(identifier));
                 }
 
-                let Some(function_declaration) = self.ast.function_declarations.get(identifier)
-                else {
-                    // not a variable
-                    // not a function declaration
-                    // assume its a variable thats defined outside the function scope (closure)
-                    self.undefined_variables.push(identifier.clone());
-                    return Ok(Expression::Variable(identifier.clone()));
-                };
+                let function_declaration = self
+                    .ast
+                    .function_declarations
+                    .get(identifier)
+                    .ok_or(anyhow!("function not found"))?;
 
                 let resolved_type_function = self.type_resolver.resolve_type_function(
                     &function_declaration.arguments,
@@ -879,7 +919,7 @@ impl<'a> Ir<'a> {
                         }));
                     };
 
-                    let _type = match &_type._type {
+                    let _type = match &_type.skip_escaped()._type {
                         TypeType::Builtin(builtin) => match builtin {
                             TypeBuiltin::Int => INT.clone(),
                             TypeBuiltin::Uint => UINT.clone(),
@@ -973,7 +1013,7 @@ impl<'a> Ir<'a> {
                     match (&block_type.id, &_type.id) {
                         (Some(block_id), Some(_type_id)) if block_id == _type_id => {
                             if let Expression::Variable(var) = &exp {
-                                self.variables.get_err(var)?.borrow_mut().escape();
+                                self.variables.get_err(var)?.variable.borrow_mut().escape();
                             }
 
                             let resolved_type_function = self.type_resolver.resolve_type_function(
@@ -982,6 +1022,7 @@ impl<'a> Ir<'a> {
                             )?;
 
                             let result_expression = Expression::Method(Box::new(Method {
+                                type_id: block_id.clone(),
                                 _self: exp.ensure_address(&self.variables)?,
                                 function: ExpFunction {
                                     identifier: function_declaration.identifier.clone(),
@@ -1047,20 +1088,22 @@ impl<'a> Ir<'a> {
                 let _type = self.type_resolver.resolve(&closure._type)?;
 
                 let mut closure_ir = Self::new(self.ast);
+
+                closure_ir.variables = self.variables.clone();
+                closure_ir.variables.stack.push(VariableItem::SearchEnd);
+
                 let actions = closure_ir.get_actions(&closure.body)?;
 
-                for undefined in &closure_ir.undefined_variables {
-                    self.variables.get_err(undefined)?.borrow_mut().escape();
-
-                    if !self.undefined_variables.contains(undefined) {
-                        self.undefined_variables.push(undefined.clone());
+                for identifier in &closure_ir.escaped_variables {
+                    if !self.escaped_variables.contains(identifier) {
+                        self.escaped_variables.push(identifier.clone());
                     }
                 }
 
                 return Ok(Expression::Closure(Closure {
                     _type,
                     actions,
-                    escaped_variables: self.undefined_variables.clone(),
+                    escaped_variables: self.escaped_variables.clone(),
                 }));
             }
         }
@@ -1074,7 +1117,9 @@ impl<'a> Ir<'a> {
             &declaration.variable,
             &self.type_resolver,
         )?));
-        self.variables.stack.push(variable.clone());
+        self.variables
+            .stack
+            .push(VariableItem::Variable(variable.clone()));
 
         let expected_type = variable.borrow()._type.clone();
 
@@ -1193,9 +1238,9 @@ impl<'a> Ir<'a> {
         Ok(actions)
     }
 
-    fn create_from_function_declaration(
+    pub fn create_from_function_declaration(
         mut self,
-        declaration: ast::FunctionDeclaration,
+        declaration: &ast::FunctionDeclaration,
     ) -> Result<Function> {
         let arguments = declaration
             .arguments
@@ -1211,20 +1256,15 @@ impl<'a> Ir<'a> {
         let return_type = self.type_resolver.resolve(&declaration.return_type)?;
 
         for arg in &arguments {
-            self.variables.stack.push(arg.clone());
+            self.variables
+                .stack
+                .push(VariableItem::Variable(arg.clone()));
         }
 
         let actions = self.get_actions(&declaration.body)?;
 
-        if !self.undefined_variables.is_empty() {
-            return Err(anyhow!(
-                "ast contains undefined variables {:#?}",
-                self.undefined_variables
-            ));
-        }
-
         Ok(Function {
-            identifier: declaration.identifier,
+            identifier: declaration.identifier.clone(),
             arguments,
             return_type,
             actions,
