@@ -453,6 +453,14 @@ pub struct Type {
 }
 
 impl Type {
+    fn method_id(&self, identifier: &str) -> Option<String> {
+        self.id.as_ref().map(|v| format!("{}.{}", v, identifier))
+    }
+
+    fn method_id_err(&self, identifier: &str) -> Result<String> {
+        self.method_id(identifier).ok_or(anyhow!("Type.method_id"))
+    }
+
     fn skip_escaped(&self) -> &Self {
         match &self._type {
             TypeType::Escaped(_type) => _type,
@@ -779,27 +787,39 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Function {
-    pub identifier: String,
     pub arguments: Vec<Rc<RefCell<Variable>>>,
     pub return_type: Type,
     pub actions: Vec<Action>,
 }
 
-pub struct Ir<'a> {
+pub struct IrParser<'a> {
     variables: Variables,
     type_resolver: TypeResolver<'a>,
     escaped_variables: Vec<String>,
+    impl_resolved: HashMap<String, &'a ast::FunctionDeclaration>,
     ast: &'a ast::Ast,
 }
 
-impl<'a> Ir<'a> {
-    pub fn new(ast: &'a ast::Ast) -> Self {
-        Self {
-            variables: Variables::new(),
-            type_resolver: TypeResolver::new(&ast.type_declarations),
-            escaped_variables: Vec::new(),
-            ast,
+impl<'a> IrParser<'a> {
+    pub fn new(ast: &'a ast::Ast) -> Result<Self> {
+        let type_resolver = TypeResolver::new(&ast.type_declarations);
+
+        let mut impl_resolved = HashMap::new();
+
+        for block in &ast.impl_block_declarations {
+            let _type = type_resolver.resolve(&block._type)?;
+            for (k, v) in &block.functions {
+                impl_resolved.insert(_type.method_id_err(k)?, v);
+            }
         }
+
+        Ok(Self {
+            variables: Variables::new(),
+            type_resolver,
+            escaped_variables: Vec::new(),
+            impl_resolved,
+            ast,
+        })
     }
 
     fn get_expression(
@@ -1016,43 +1036,30 @@ impl<'a> Ir<'a> {
                 let exp = self.get_expression(&dot_access.expression, expected_type)?;
                 let _type = exp._type(&self.variables)?;
 
-                for block in &self.ast.impl_block_declarations {
-                    let Some(function_declaration) = block.functions.get(&dot_access.identifier)
-                    else {
-                        continue;
-                    };
-
-                    let block_type = self.type_resolver.resolve(&block._type)?;
-                    match (&block_type.id, &_type.id) {
-                        (Some(block_id), Some(_type_id)) if block_id == _type_id => {
-                            if let Expression::Variable(var) = &exp {
-                                self.variables.get_err(var)?.variable.borrow_mut().escape();
-                            }
-
-                            let resolved_type_function = self.type_resolver.resolve_type_function(
-                                &function_declaration.arguments,
-                                &function_declaration.return_type,
-                            )?;
-
-                            let result_expression = Expression::Method(Box::new(Method {
-                                type_id: block_id.clone(),
-                                _self: exp.ensure_address(&self.variables)?,
-                                function: ExpFunction {
-                                    identifier: format!(
-                                        "{}.{}",
-                                        block_id,
-                                        function_declaration.identifier.clone()
-                                    ),
-                                    _type: resolved_type_function.to_function(),
-                                },
-                            }));
-
-                            return match expected_type {
-                                None => Ok(result_expression),
-                                Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
-                            };
+                if let Some(identifier) = _type.method_id(&dot_access.identifier) {
+                    if let Some(function_declaration) = self.impl_resolved.get(&identifier) {
+                        if let Expression::Variable(var) = &exp {
+                            self.variables.get_err(var)?.variable.borrow_mut().escape();
                         }
-                        _ => {}
+
+                        let resolved_type_function = self.type_resolver.resolve_type_function(
+                            &function_declaration.arguments,
+                            &function_declaration.return_type,
+                        )?;
+
+                        let result_expression = Expression::Method(Box::new(Method {
+                            type_id: _type.id.expect("method id returned"),
+                            _self: exp.ensure_address(&self.variables)?,
+                            function: ExpFunction {
+                                identifier,
+                                _type: resolved_type_function.to_function(),
+                            },
+                        }));
+
+                        return match expected_type {
+                            None => Ok(result_expression),
+                            Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
+                        };
                     }
                 }
 
@@ -1104,7 +1111,7 @@ impl<'a> Ir<'a> {
             ast::Expression::Closure(closure) => {
                 let _type = self.type_resolver.resolve(&closure._type)?;
 
-                let mut closure_ir = Self::new(self.ast);
+                let mut closure_ir = Self::new(self.ast)?;
 
                 closure_ir.variables = self.variables.clone();
                 closure_ir.variables.stack.push(VariableItem::SearchEnd);
@@ -1255,7 +1262,7 @@ impl<'a> Ir<'a> {
         Ok(actions)
     }
 
-    pub fn create_from_function_declaration(
+    fn create_from_function_declaration(
         mut self,
         declaration: &ast::FunctionDeclaration,
     ) -> Result<Function> {
@@ -1281,10 +1288,37 @@ impl<'a> Ir<'a> {
         let actions = self.get_actions(&declaration.body)?;
 
         Ok(Function {
-            identifier: declaration.identifier.clone(),
             arguments,
             return_type,
             actions,
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct Ir {
+    pub functions: HashMap<String, Function>,
+}
+
+impl Ir {
+    pub fn new(ast: &ast::Ast) -> Result<Self> {
+        let mut functions = HashMap::new();
+        let type_resolver = TypeResolver::new(&ast.type_declarations);
+
+        for (identifier, declaration) in &ast.function_declarations {
+            let function = IrParser::new(ast)?.create_from_function_declaration(declaration)?;
+            functions.insert(identifier.clone(), function);
+        }
+
+        for block in &ast.impl_block_declarations {
+            let _type = type_resolver.resolve(&block._type)?;
+
+            for (identifier, declaration) in &block.functions {
+                let function = IrParser::new(ast)?.create_from_function_declaration(declaration)?;
+                functions.insert(_type.method_id_err(identifier)?, function);
+            }
+        }
+
+        Ok(Self { functions })
     }
 }

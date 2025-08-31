@@ -36,7 +36,7 @@ fn main() {
                     let foo int = 26
 
                     let ok a = 27
-                    a.get()
+                    ok.get()
 
                     foo.get()
 
@@ -53,11 +53,6 @@ fn main() {
     let ast = ast::Ast::new(&tokens).unwrap();
     println!("{:#?}", ast);
 
-    for (identifier, declaration) in &ast.function_declarations {
-        let function = ir::Ir::new(&ast)
-            .create_from_function_declaration(declaration)
-            .unwrap();
-
-        println!("{function:#?}");
-    }
+    let ir = ir::Ir::new(&ast).unwrap();
+    println!("{ir:#?}");
 }
