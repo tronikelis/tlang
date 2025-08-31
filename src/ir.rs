@@ -1296,8 +1296,16 @@ impl<'a> IrParser<'a> {
 }
 
 #[derive(Debug)]
+pub struct StaticVariable {
+    pub expression: Expression,
+    pub _type: Type,
+    pub identifier: String,
+}
+
+#[derive(Debug)]
 pub struct Ir {
     pub functions: HashMap<String, Function>,
+    pub static_variables: Vec<StaticVariable>,
 }
 
 impl Ir {
@@ -1319,6 +1327,33 @@ impl Ir {
             }
         }
 
-        Ok(Self { functions })
+        let mut static_variables: Vec<StaticVariable> = Vec::new();
+        for static_var in &ast.static_var_declarations {
+            let _type = type_resolver.resolve(&static_var._type)?;
+
+            let mut parser = IrParser::new(ast)?;
+            static_variables.iter().for_each(|v| {
+                parser
+                    .variables
+                    .stack
+                    .push(VariableItem::Variable(Rc::new(RefCell::new(Variable {
+                        identifier: v.identifier.clone(),
+                        _type: v._type.clone(),
+                    }))))
+            });
+
+            let expression = parser.get_expression(&static_var.expression, Some(&_type))?;
+
+            static_variables.push(StaticVariable {
+                expression,
+                _type,
+                identifier: static_var.identifier.clone(),
+            })
+        }
+
+        Ok(Self {
+            functions,
+            static_variables,
+        })
     }
 }

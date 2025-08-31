@@ -32,6 +32,10 @@ fn main() {
                     }
                 }
 
+                let static1 int = 28
+
+                let static int = 6969 + static1
+
                 fn main() void {
                     let foo int = 26
 
