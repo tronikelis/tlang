@@ -59,7 +59,7 @@ impl<'a> TypeResolver<'a> {
     }
 
     fn resolve(&self, _type: &ast::Type) -> Result<Type> {
-        self.resolve_with_alias(_type, None)
+        self.resolve_with_alias(_type, None, None)
     }
 
     fn resolve_type_function(
@@ -106,20 +106,29 @@ impl<'a> TypeResolver<'a> {
         })
     }
 
-    fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
+    fn resolve_with_alias(
+        &self,
+        _type: &ast::Type,
+        initial_alias: Option<&str>,
+        alias: Option<&str>,
+    ) -> Result<Type> {
         match _type {
             ast::Type::Alias(inner_alias) => {
-                match inner_alias.as_str() {
-                    "uint" => return Ok(UINT.clone()),
-                    "uint8" => return Ok(UINT8.clone()),
-                    "int" => return Ok(INT.clone()),
-                    "bool" => return Ok(BOOL.clone()),
-                    "string" => return Ok(STRING.clone()),
-                    "Type" => return Ok(COMPILER_TYPE.clone()),
-                    "void" => return Ok(VOID.clone()),
-                    "ptr" => return Ok(PTR.clone()),
-                    _ => {}
+                let builtin = match inner_alias.as_str() {
+                    "uint" => Some(UINT.clone()),
+                    "uint8" => Some(UINT8.clone()),
+                    "int" => Some(INT.clone()),
+                    "bool" => Some(BOOL.clone()),
+                    "string" => Some(STRING.clone()),
+                    "Type" => Some(COMPILER_TYPE.clone()),
+                    "void" => Some(VOID.clone()),
+                    "ptr" => Some(PTR.clone()),
+                    _ => None,
                 };
+                if let Some(mut builtin) = builtin {
+                    builtin.id = initial_alias.map(|v| v.to_string()).or(builtin.id);
+                    return Ok(builtin);
+                }
 
                 let inner = self
                     .type_declarations
@@ -142,10 +151,14 @@ impl<'a> TypeResolver<'a> {
                     }
                 }
 
-                self.resolve_with_alias(&inner, Some(inner_alias))
+                self.resolve_with_alias(
+                    &inner,
+                    initial_alias.or(Some(inner_alias)),
+                    Some(inner_alias),
+                )
             }
             ast::Type::Slice(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
+                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
                     id: nested.id.as_ref().map(|id| id.clone() + "[]"),
                     size: SLICE_SIZE,
@@ -154,7 +167,7 @@ impl<'a> TypeResolver<'a> {
                 })
             }
             ast::Type::Variadic(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
+                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
                     id: nested.id.as_ref().map(|id| id.clone() + "..."),
                     size: size_of::<usize>(),
@@ -168,7 +181,7 @@ impl<'a> TypeResolver<'a> {
                 let mut highest_alignment: usize = 0;
 
                 for var in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(&var._type, alias)?;
+                    let resolved = self.resolve_with_alias(&var._type, initial_alias, alias)?;
                     if resolved.alignment > highest_alignment {
                         highest_alignment = resolved.alignment;
                     }
@@ -192,7 +205,7 @@ impl<'a> TypeResolver<'a> {
                 })
             }
             ast::Type::Address(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
+                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
                     id: nested.id.as_ref().map(|id| id.clone() + "&"),
                     size: PTR_SIZE,
@@ -1025,7 +1038,11 @@ impl<'a> Ir<'a> {
                                 type_id: block_id.clone(),
                                 _self: exp.ensure_address(&self.variables)?,
                                 function: ExpFunction {
-                                    identifier: function_declaration.identifier.clone(),
+                                    identifier: format!(
+                                        "{}.{}",
+                                        block_id,
+                                        function_declaration.identifier.clone()
+                                    ),
                                     _type: resolved_type_function.to_function(),
                                 },
                             }));

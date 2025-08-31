@@ -18,6 +18,14 @@ fn main() {
                 type void void
                 type Type Type
 
+                type a int
+
+                impl a {
+                    fn get(*self) a {
+                        return *self
+                    }
+                }
+
                 impl int {
                     fn get(*self) int {
                         return *self
@@ -26,6 +34,9 @@ fn main() {
 
                 fn main() void {
                     let foo int = 26
+
+                    let ok a = 27
+                    a.get()
 
                     foo.get()
 
