@@ -281,26 +281,26 @@ pub const SLICE_SIZE: usize = size_of::<usize>();
 pub const PTR_SIZE: usize = size_of::<usize>();
 
 #[derive(Debug, Clone)]
-struct Stack<T> {
-    items: Vec<Vec<T>>,
+pub struct Stack<T> {
+    pub items: Vec<Vec<T>>,
 }
 
 impl<T> Stack<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let mut items = Vec::new();
         items.push(Vec::new());
         Self { items }
     }
 
-    fn push(&mut self, item: T) {
+    pub fn push(&mut self, item: T) {
         self.items.last_mut().unwrap().push(item);
     }
 
-    fn push_frame(&mut self) {
+    pub fn push_frame(&mut self) {
         self.items.push(Vec::new());
     }
 
-    fn pop_frame(&mut self) -> Option<Vec<T>> {
+    pub fn pop_frame(&mut self) -> Option<Vec<T>> {
         self.items.pop()
     }
 }
@@ -329,13 +329,8 @@ impl VariableStack for Variables {
     fn get_type(&self, identifier: &str) -> Option<Type> {
         self.get(identifier)
             .as_ref()
-            .map(|v| v.variable.borrow()._type.clone())
+            .map(|v| v.borrow()._type.clone())
     }
-}
-
-struct VariableGetResult {
-    variable: Rc<RefCell<Variable>>,
-    escaped: bool,
 }
 
 impl Variables {
@@ -345,7 +340,7 @@ impl Variables {
         }
     }
 
-    fn get(&self, identifier: &str) -> Option<VariableGetResult> {
+    fn get(&self, identifier: &str) -> Option<Rc<RefCell<Variable>>> {
         let mut search_ended = false;
         for item in self.stack.items.iter().flatten().rev() {
             match item {
@@ -354,16 +349,9 @@ impl Variables {
                     if var.borrow().identifier == identifier {
                         if search_ended {
                             var.borrow_mut().escape();
-                            return Some(VariableGetResult {
-                                variable: var.clone(),
-                                escaped: true,
-                            });
                         }
 
-                        return Some(VariableGetResult {
-                            variable: var.clone(),
-                            escaped: false,
-                        });
+                        return Some(var.clone());
                     }
                 }
             }
@@ -372,7 +360,7 @@ impl Variables {
         None
     }
 
-    fn get_err(&self, identifier: &str) -> Result<VariableGetResult> {
+    fn get_err(&self, identifier: &str) -> Result<Rc<RefCell<Variable>>> {
         self.get(identifier)
             .ok_or(anyhow!("VariableStack.get({identifier}) not found"))
     }
@@ -443,6 +431,15 @@ pub enum TypeType {
     Escaped(Box<Type>),
 }
 
+impl TypeType {
+    pub fn is_escaped(&self) -> bool {
+        match self {
+            Self::Escaped(_) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
     // None for inline types
@@ -461,14 +458,21 @@ impl Type {
         self.method_id(identifier).ok_or(anyhow!("Type.method_id"))
     }
 
-    fn skip_escaped(&self) -> &Self {
+    pub fn skip_escaped(&self) -> &Self {
         match &self._type {
             TypeType::Escaped(_type) => _type,
             _ => self,
         }
     }
 
-    fn create_variadic(item: Self) -> Self {
+    pub fn expect_closure(&self) -> Result<&TypeFunction> {
+        match &self._type {
+            TypeType::Closure(closure) => Ok(closure),
+            _ => Err(anyhow!("expect_closure: {self:#?}")),
+        }
+    }
+
+    pub fn create_variadic(item: Self) -> Self {
         Self {
             id: item.id.as_ref().map(|id| id.clone() + "..."),
             size: SLICE_SIZE,
@@ -477,7 +481,7 @@ impl Type {
         }
     }
 
-    fn create_address(item: Self) -> Self {
+    pub fn create_address(item: Self) -> Self {
         Self {
             id: item.id.as_ref().map(|id| id.clone() + "&"),
             size: PTR_SIZE,
@@ -486,7 +490,7 @@ impl Type {
         }
     }
 
-    fn create_escaped(item: Self) -> Self {
+    pub fn create_escaped(item: Self) -> Self {
         Self {
             id: item.id.clone(),
             size: PTR_SIZE,
@@ -585,7 +589,8 @@ pub struct ExpFunction {
 #[derive(Debug, Clone)]
 pub struct Closure {
     pub _type: Type,
-    pub escaped_variables: Vec<String>,
+    pub escaped_variables: Vec<Rc<RefCell<Variable>>>,
+    pub arguments: Vec<Rc<RefCell<Variable>>>,
     pub actions: Vec<Action>,
 }
 
@@ -787,6 +792,7 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Function {
+    pub identifier: String,
     pub arguments: Vec<Rc<RefCell<Variable>>>,
     pub return_type: Type,
     pub actions: Vec<Action>,
@@ -795,7 +801,7 @@ pub struct Function {
 pub struct IrParser<'a> {
     variables: Variables,
     type_resolver: TypeResolver<'a>,
-    escaped_variables: Vec<String>,
+    escaped_variables: Vec<Rc<RefCell<Variable>>>,
     impl_resolved: HashMap<String, &'a ast::FunctionDeclaration>,
     ast: &'a ast::Ast,
 }
@@ -831,7 +837,7 @@ impl<'a> IrParser<'a> {
             ast::Expression::Address(exp) => {
                 let inner = self.get_expression(&exp, expected_type)?;
                 if let Expression::Variable(var) = &inner {
-                    self.variables.get_err(var)?.variable.borrow_mut().escape();
+                    self.variables.get_err(var)?.borrow_mut().escape();
                 }
 
                 return Ok(Expression::Address(Box::new(inner)));
@@ -853,11 +859,10 @@ impl<'a> IrParser<'a> {
                 };
 
                 if let Some(var) = self.variables.get(&identifier) {
-                    let identifier = var.variable.borrow().identifier.clone();
-                    if var.escaped {
-                        self.escaped_variables.push(identifier.clone());
+                    if var.borrow()._type._type.is_escaped() {
+                        self.escaped_variables.push(var.clone());
                     }
-                    return Ok(Expression::Variable(identifier));
+                    return Ok(Expression::Variable(var.borrow().identifier.clone()));
                 }
 
                 let function_declaration = self
@@ -1039,7 +1044,7 @@ impl<'a> IrParser<'a> {
                 if let Some(identifier) = _type.method_id(&dot_access.identifier) {
                     if let Some(function_declaration) = self.impl_resolved.get(&identifier) {
                         if let Expression::Variable(var) = &exp {
-                            self.variables.get_err(var)?.variable.borrow_mut().escape();
+                            self.variables.get_err(var)?.borrow_mut().escape();
                         }
 
                         let resolved_type_function = self.type_resolver.resolve_type_function(
@@ -1116,17 +1121,41 @@ impl<'a> IrParser<'a> {
                 closure_ir.variables = self.variables.clone();
                 closure_ir.variables.stack.push(VariableItem::SearchEnd);
 
+                let type_closure = _type.expect_closure()?;
+                let arguments = type_closure
+                    .arguments
+                    .iter()
+                    .map(|v| {
+                        Rc::new(RefCell::new(Variable {
+                            identifier: v.identifier.clone(),
+                            _type: v._type.clone(),
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                arguments.iter().for_each(|v| {
+                    closure_ir
+                        .variables
+                        .stack
+                        .push(VariableItem::Variable(v.clone()))
+                });
+
                 let actions = closure_ir.get_actions(&closure.body)?;
 
-                for identifier in &closure_ir.escaped_variables {
-                    if !self.escaped_variables.contains(identifier) {
-                        self.escaped_variables.push(identifier.clone());
+                for var in closure_ir.escaped_variables {
+                    if self
+                        .escaped_variables
+                        .iter()
+                        .find(|v| v.borrow().identifier == var.borrow().identifier)
+                        .is_none()
+                    {
+                        self.escaped_variables.push(var.clone());
                     }
                 }
 
                 return Ok(Expression::Closure(Closure {
                     _type,
                     actions,
+                    arguments,
                     escaped_variables: self.escaped_variables.clone(),
                 }));
             }
@@ -1265,6 +1294,7 @@ impl<'a> IrParser<'a> {
     fn create_from_function_declaration(
         mut self,
         declaration: &ast::FunctionDeclaration,
+        method_type: Option<&Type>,
     ) -> Result<Function> {
         let arguments = declaration
             .arguments
@@ -1288,6 +1318,10 @@ impl<'a> IrParser<'a> {
         let actions = self.get_actions(&declaration.body)?;
 
         Ok(Function {
+            identifier: method_type
+                .map(|v| v.method_id_err(&declaration.identifier))
+                .transpose()?
+                .unwrap_or(declaration.identifier.clone()),
             arguments,
             return_type,
             actions,
@@ -1314,7 +1348,8 @@ impl Ir {
         let type_resolver = TypeResolver::new(&ast.type_declarations);
 
         for (identifier, declaration) in &ast.function_declarations {
-            let function = IrParser::new(ast)?.create_from_function_declaration(declaration)?;
+            let function =
+                IrParser::new(ast)?.create_from_function_declaration(declaration, None)?;
             functions.insert(identifier.clone(), function);
         }
 
@@ -1322,7 +1357,8 @@ impl Ir {
             let _type = type_resolver.resolve(&block._type)?;
 
             for (identifier, declaration) in &block.functions {
-                let function = IrParser::new(ast)?.create_from_function_declaration(declaration)?;
+                let function = IrParser::new(ast)?
+                    .create_from_function_declaration(declaration, Some(&_type))?;
                 functions.insert(_type.method_id_err(identifier)?, function);
             }
         }
