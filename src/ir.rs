@@ -16,6 +16,7 @@ pub fn align(alignment: usize, stack_size: usize) -> usize {
     }
 }
 
+#[derive(Debug)]
 pub struct TypeResolver<'a> {
     type_declarations: &'a HashMap<String, ast::Type>,
 }
@@ -54,7 +55,7 @@ impl ResolvedTypeFunction {
 }
 
 impl<'a> TypeResolver<'a> {
-    pub fn new(type_declarations: &'a HashMap<String, ast::Type>) -> Self {
+    fn new(type_declarations: &'a HashMap<String, ast::Type>) -> Self {
         Self { type_declarations }
     }
 
@@ -371,6 +372,37 @@ pub struct TypeStruct {
     pub fields: Vec<TypeStructField>,
 }
 
+impl TypeStruct {
+    pub fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
+        let mut offset = 0;
+
+        for field in self.fields.iter().rev() {
+            match field {
+                TypeStructField::Padding(padding) => offset += padding,
+                TypeStructField::Type(iden, _type) => {
+                    if iden == identifier {
+                        return Some((offset, _type));
+                    }
+                    offset += _type.size;
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn get_field_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
+        self.get_field_offset(identifier)
+            .ok_or(anyhow!("get_field_offset_err: not found {identifier}"))
+    }
+
+    pub fn identifier_field_count(&self) -> usize {
+        // - 1 there is padding at the end
+        // / 2 every field has padding before
+        (self.fields.len() - 1) / 2
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeStructField {
     Type(String, Type),
@@ -472,6 +504,13 @@ impl Type {
         }
     }
 
+    pub fn expect_function(&self) -> Result<&TypeFunction> {
+        match &self._type {
+            TypeType::Function(function) => Ok(function),
+            _ => Err(anyhow!("expect_function: {self:#?}")),
+        }
+    }
+
     pub fn create_variadic(item: Self) -> Self {
         Self {
             id: item.id.as_ref().map(|id| id.clone() + "..."),
@@ -496,6 +535,52 @@ impl Type {
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             _type: TypeType::Escaped(Box::new(item)),
+        }
+    }
+
+    pub fn resolve_lazy(self, type_resolver: &TypeResolver) -> Result<Self> {
+        match self._type {
+            TypeType::Lazy(alias) => type_resolver.resolve(&ast::Type::Alias(alias)),
+            _ => Ok(self),
+        }
+    }
+
+    pub fn equals(&self, other: &Self) -> Result<()> {
+        // todo: do this the other way around
+        if let TypeType::Builtin(builtin) = &self._type {
+            if let TypeBuiltin::Nil = builtin {
+                if let TypeType::Address(_) = &other._type {
+                    return Ok(());
+                }
+            }
+        }
+
+        match (&self.id, &other.id) {
+            (Some(self_id), Some(other_id)) => {
+                return match self_id == other_id {
+                    true => Ok(()),
+                    false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+                }
+            }
+            _ => {}
+        }
+
+        let mut self_clone = self.clone();
+        let mut other_clone = other.clone();
+
+        self_clone.id = None;
+        other_clone.id = None;
+
+        match other == self {
+            true => Ok(()),
+            false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+        }
+    }
+
+    pub fn extract_variadic(&self) -> Option<&Self> {
+        match &self._type {
+            TypeType::Variadic(item) => Some(&item),
+            _ => None,
         }
     }
 }
@@ -548,6 +633,7 @@ pub struct Compare {
 pub enum CallType {
     Function(ExpFunction),
     Closure(Expression),
+    TypeCast(Type),
 }
 
 #[derive(Debug, Clone)]
@@ -665,6 +751,9 @@ impl Expression {
                 let _type = match &call.call_type {
                     CallType::Closure(exp) => exp._type(variables)?,
                     CallType::Function(exp_function) => exp_function._type.clone(),
+                    CallType::TypeCast(_type_to) => {
+                        return Ok(_type_to.clone());
+                    }
                 };
 
                 let type_function = match _type._type {
@@ -991,6 +1080,19 @@ impl<'a> IrParser<'a> {
             }
             ast::Expression::Call(call) => {
                 let exp = self.get_expression(&call.expression, expected_type)?;
+
+                if let Expression::Type(_type) = exp {
+                    let arguments = call
+                        .arguments
+                        .iter()
+                        .map(|v| Ok(self.get_expression(v, None)?))
+                        .collect::<Result<_>>()?;
+
+                    return Ok(Expression::Call(Box::new(Call {
+                        arguments,
+                        call_type: CallType::TypeCast(_type.clone()),
+                    })));
+                }
 
                 let type_function = match &exp._type(&self.variables)?._type {
                     TypeType::Closure(type_function) | TypeType::Function(type_function) => {
@@ -1337,13 +1439,14 @@ pub struct StaticVariable {
 }
 
 #[derive(Debug)]
-pub struct Ir {
+pub struct Ir<'a> {
     pub functions: HashMap<String, Function>,
     pub static_variables: Vec<StaticVariable>,
+    pub type_resolver: TypeResolver<'a>,
 }
 
-impl Ir {
-    pub fn new(ast: &ast::Ast) -> Result<Self> {
+impl<'a> Ir<'a> {
+    pub fn new(ast: &'a ast::Ast) -> Result<Self> {
         let mut functions = HashMap::new();
         let type_resolver = TypeResolver::new(&ast.type_declarations);
 
@@ -1388,6 +1491,7 @@ impl Ir {
         }
 
         Ok(Self {
+            type_resolver,
             functions,
             static_variables,
         })
