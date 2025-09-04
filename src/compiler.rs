@@ -809,9 +809,19 @@ struct TypeClosure {
     return_type: ir::Type,
 }
 
-struct TypeCast {
-    expression: ir::Expression,
-    _type: ir::Type,
+struct TypeCast<'a> {
+    expression: &'a ir::Expression,
+    _type: &'a ir::Type,
+}
+
+enum FunctionCallType<'a> {
+    Function(&'a ir::ExpFunction),
+    Closure(&'a ir::Expression),
+}
+
+struct FunctionCall<'a> {
+    arguments: &'a [ir::Expression],
+    call_type: FunctionCallType<'a>,
 }
 
 #[derive(Debug)]
@@ -858,7 +868,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(ir::NIL.clone())
     }
 
-    fn compile_closure(&mut self, closure: ir::Closure) -> Result<ir::Type> {
+    fn compile_closure(&mut self, closure: &ir::Closure) -> Result<ir::Type> {
         self.instructions.push_alignment(ir::PTR_SIZE);
 
         // right now all nested closures capture everything inside them
@@ -892,7 +902,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         self.closures.push(
             FunctionCompiler::new(
-                Function::Closure(closure),
+                Function::Closure(closure.clone()), // todo: fix this clone hahah
                 self.static_memory.clone(),
                 self.ir.clone(),
             )
@@ -902,7 +912,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(closure_type)
     }
 
-    fn compile_variable(&mut self, variable: &ir::Variable) -> Result<ir::Type> {
+    fn compile_variable(&mut self, identifier: &str) -> Result<ir::Type> {
+        let (_, variable) = self.instructions.var_get_offset_err(identifier)?;
+        let variable = variable.clone();
+
         if let ir::TypeType::Escaped(_type) = &variable._type._type {
             // this will leak alignment
             self.instructions.push_alignment(ir::PTR_SIZE);
@@ -1377,11 +1390,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     // append(slice ir::Type, value ir::Type) void
-    fn compile_function_builtin_append(&mut self, call: &ir::Call) -> Result<ir::Type> {
-        let ir::CallType::Function(_) = &call.call_type else {
-            panic!("wtf");
-        };
-
+    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -1409,11 +1418,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     // len(slice ir::Type) int
-    fn compile_function_builtin_len(&mut self, call: &ir::Call) -> Result<ir::Type> {
-        let ir::CallType::Function(_) = &call.call_type else {
-            panic!("wtf");
-        };
-
+    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let slice_arg = call
             .arguments
             .get(0)
@@ -1434,11 +1439,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     // new(_ ir::Type, args ir::Type...) ir::Type
-    fn compile_function_builtin_new(&mut self, call: &ir::Call) -> Result<ir::Type> {
-        let ir::CallType::Function(_) = &call.call_type else {
-            panic!("wtf");
-        };
-
+    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let type_arg = call
             .arguments
             .get(0)
@@ -1478,11 +1479,11 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         }
     }
 
-    fn compile_function_call(&mut self, call: &ir::Call) -> Result<ir::Type> {
+    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         // todo: check these
         // self.check_function_call_argument_count(call)?;
 
-        if let ir::CallType::Function(function) = &call.call_type {
+        if let FunctionCallType::Function(function) = &call.call_type {
             match function.identifier.as_str() {
                 "append" => return self.compile_function_builtin_append(call),
                 "len" => return self.compile_function_builtin_len(call),
@@ -1491,29 +1492,23 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
         }
 
-        let return_alignment = match call.call_type {
-            ir::CallType::Function(v) => v._type.alignment,
-            ir::CallType::Closure(v) => {
+        let return_alignment = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.alignment,
+            FunctionCallType::Closure(v) => {
                 v._type(self.instructions)?
                     .expect_closure()?
                     .return_type
                     .alignment
             }
-            ir::CallType::TypeCast(_) => {
-                panic!("incorrect compile_function_call usage");
-            }
         };
 
-        let expected_arguments = match call.call_type {
-            ir::CallType::Function(v) => v._type.expect_function()?.arguments.clone(),
-            ir::CallType::Closure(v) => v
+        let expected_arguments = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.expect_function()?.arguments.clone(),
+            FunctionCallType::Closure(v) => v
                 ._type(self.instructions)?
                 .expect_closure()?
                 .arguments
                 .clone(),
-            ir::CallType::TypeCast(_) => {
-                panic!("incorrect compile_function_call usage");
-            }
         };
 
         self.instructions.push_alignment(return_alignment);
@@ -1573,8 +1568,8 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             self.instructions.pop_stack_frame_size()
         };
 
-        if let Some(declaration) = &call.declaration {
-            match declaration.identifier.as_str() {
+        if let FunctionCallType::Function(function) = &call.call_type {
+            match function.identifier.as_str() {
                 "libc_write" => {
                     self.instructions.instr_libc_write();
                     return Ok(ir::INT.clone());
@@ -1583,14 +1578,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
         }
 
-        let return_type = match &call.declaration {
-            Some(declaration) => self.resolve_type(&declaration.return_type)?,
-            None => {
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .return_type
-            }
+        let return_type = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.expect_function()?.return_type.clone(),
+            FunctionCallType::Closure(v) => v
+                ._type(self.instructions)?
+                .expect_closure()?
+                .return_type
+                .clone(),
         };
         let return_size = return_type.size;
 
@@ -1609,13 +1603,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         // aligning for pushing of return address
         reset_size += self.instructions.push_alignment(ir::PTR_SIZE);
 
-        match &call.declaration {
-            Some(declaration) => {
+        match &call.call_type {
+            FunctionCallType::Function(function) => {
                 self.instructions
-                    .instr_jump_and_link(declaration.identifier.clone());
+                    .instr_jump_and_link(function.identifier.clone());
             }
-            None => {
-                self.compile_expression(&call.call.expression)?;
+            FunctionCallType::Closure(expression) => {
+                self.compile_expression(expression)?;
                 self.instructions.instr_jump_and_link_closure();
             }
         }
@@ -1625,43 +1619,36 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(return_type)
     }
 
-    fn resolve_function_call(&self, call: &ast::Call) -> FunctionCall {
-        if let ast::Expression::ir::Type(_type) = &call.expression {
-            if let ast::ir::Type::Alias(identifier) = _type {
-                return FunctionCall {
-                    call: call.clone(),
-                    declaration: self.ir.get(identifier).map(|v| v.clone()),
-                };
-            }
-        };
-
-        FunctionCall {
-            call: call.clone(),
-            declaration: None,
+    fn compile_call(&mut self, call: &ir::Call) -> Result<ir::Type> {
+        match &call.call_type {
+            ir::CallType::Closure(expression) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Closure(expression),
+            }),
+            ir::CallType::Function(function) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Function(function),
+            }),
+            ir::CallType::TypeCast(_type) => self.compile_type_cast(&TypeCast {
+                expression: &call.arguments[0],
+                _type,
+            }),
         }
     }
 
-    fn compile_call(&mut self, call: &ast::Call) -> Result<ir::Type> {
-        if let Ok(v) = self.resolve_type_cast(call) {
-            return self.compile_type_cast(&v);
-        }
-
-        self.compile_function_call(&self.resolve_function_call(call))
-    }
-
-    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<ir::Type> {
+    fn compile_arithmetic(&mut self, arithmetic: &ir::Arithmetic) -> Result<ir::Type> {
         let a = self.compile_expression(&arithmetic.left)?;
         let b = self.compile_expression(&arithmetic.right)?;
 
         if a != b {
             return Err(anyhow!("can't add different types"));
         }
-        if a == *VOID {
+        if a == *ir::VOID {
             return Err(anyhow!("can't add void type"));
         }
 
         match arithmetic._type {
-            ast::ArithmeticType::Minus => {
+            ir::ArithmeticType::Minus => {
                 if *ir::INT == a {
                     self.instructions.instr_minus_int();
                     self.instructions.instr_add_i();
@@ -1669,7 +1656,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     return Err(anyhow!("can only minus int"));
                 }
             }
-            ast::ArithmeticType::Plus => {
+            ir::ArithmeticType::Plus => {
                 if *ir::INT == a {
                     self.instructions.instr_add_i();
                 } else if a == *ir::STRING {
@@ -1678,21 +1665,21 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     return Err(anyhow!("can only plus int and string"));
                 }
             }
-            ast::ArithmeticType::Multiply => {
+            ir::ArithmeticType::Multiply => {
                 if *ir::INT == a {
                     self.instructions.instr_multiply_i();
                 } else {
                     return Err(anyhow!("can only multiply int"));
                 }
             }
-            ast::ArithmeticType::Divide => {
+            ir::ArithmeticType::Divide => {
                 if *ir::INT == a {
                     self.instructions.instr_divide_i();
                 } else {
                     return Err(anyhow!("can only divide int"));
                 }
             }
-            ast::ArithmeticType::Modulo => {
+            ir::ArithmeticType::Modulo => {
                 if *ir::INT == a {
                     self.instructions.instr_modulo_i();
                 } else {
@@ -1704,25 +1691,19 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(a)
     }
 
-    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<ir::Type> {
-        let literal_type = match literal.literal {
-            lexer::Literal::Int(_) => ir::INT.clone(),
-            lexer::Literal::Bool(_) => ir::BOOL.clone(),
-            lexer::Literal::String(_) => ir::STRING.clone(),
-        };
-
-        match &literal.literal {
-            lexer::Literal::Int(int) => {
-                if literal_type == *ir::UINT8 {
+    fn compile_literal(&mut self, literal: &ir::Literal) -> Result<ir::Type> {
+        match &literal.literal_type {
+            ir::LiteralType::Int(int) => {
+                if literal._type == *ir::UINT8 {
                     self.instructions.instr_push_u8(*int)?;
-                } else if literal_type == *ir::INT {
+                } else if literal._type == *ir::INT {
                     self.instructions.instr_push_i(*int)?;
                 } else {
-                    return Err(anyhow!("can't cast int to {literal_type:#?}"));
+                    return Err(anyhow!("can't cast int to {:#?}", literal._type));
                 }
             }
-            lexer::Literal::Bool(bool) => {
-                if literal_type == *ir::BOOL {
+            ir::LiteralType::Bool(bool) => {
+                if literal._type == *ir::BOOL {
                     self.instructions.instr_push_i({
                         if *bool {
                             1
@@ -1731,20 +1712,20 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         }
                     })?;
                 } else {
-                    return Err(anyhow!("can't cast bool to {literal_type:#?}"));
+                    return Err(anyhow!("can't cast bool to {:#?}", literal._type));
                 }
             }
-            lexer::Literal::String(string) => {
+            ir::LiteralType::String(string) => {
                 let index = self.static_memory.borrow_mut().push_string_slice(&string);
                 self.instructions
                     .instr_push_static(index, ir::SLICE_SIZE, ir::SLICE_SIZE);
             }
         }
 
-        Ok(literal_type)
+        Ok(literal._type.clone())
     }
 
-    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<ir::Type> {
+    fn compile_andor(&mut self, andor: &ir::AndOr) -> Result<ir::Type> {
         self.instructions.stack_instructions.jump();
 
         let left = self.compile_expression(&andor.left)?;
@@ -1753,7 +1734,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         }
 
         match andor._type {
-            ast::AndOrType::Or => {
+            ir::AndOrType::Or => {
                 self.instructions.stack_instructions.back_if_true(1);
 
                 let right = self.compile_expression(&andor.right)?;
@@ -1763,7 +1744,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
                 self.instructions.instr_or();
             }
-            ast::AndOrType::And => {
+            ir::AndOrType::And => {
                 self.instructions.stack_instructions.back_if_false(1);
 
                 let right = self.compile_expression(&andor.right)?;
@@ -1781,28 +1762,39 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(ir::BOOL.clone())
     }
 
+    fn compile_to_closure(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
+        todo!();
+    }
+
     fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
         let exp = match expression {
-            ast::Expression::AndOr(v) => self.compile_andor(v),
-            ast::Expression::Literal(v) => self.compile_literal(v),
-            ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Call(v) => self.compile_call(v),
-            ast::Expression::TypeInit(v) => self.compile_type_init(v),
-            ast::Expression::Compare(v) => self.compile_compare(v),
-            ast::Expression::Infix(v) => self.compile_infix(v),
-            ast::Expression::SliceInit(v) => self.compile_slice_init(v),
-            ast::Expression::Index(v) => self.compile_expression_index(v),
-            ast::Expression::Negate(v) => self.compile_negate(v),
-            ast::Expression::Spread(v) => self.compile_spread(v),
-            ast::Expression::StructInit(v) => self.compile_struct_init(v),
-            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
-            ast::Expression::Deref(v) => self.compile_deref(v),
-            ast::Expression::Address(v) => self.compile_address(v),
-            ast::Expression::ir::Type(v) => self.compile_type(v),
-            ast::Expression::Closure(v) => self.compile_closure(v),
-            ast::Expression::Nil => self.compile_nil(),
+            ir::Expression::AndOr(v) => self.compile_andor(v),
+            ir::Expression::Literal(v) => self.compile_literal(v),
+            ir::Expression::Arithmetic(v) => self.compile_arithmetic(v),
+            ir::Expression::Call(v) => self.compile_call(v),
+            ir::Expression::Compare(v) => self.compile_compare(v),
+            ir::Expression::Infix(v) => self.compile_infix(v),
+            ir::Expression::SliceInit(v) => self.compile_slice_init(v),
+            ir::Expression::Index(v) => self.compile_expression_index(v),
+            ir::Expression::Negate(v) => self.compile_negate(v),
+            ir::Expression::Spread(v) => self.compile_spread(v),
+            ir::Expression::StructInit(v) => self.compile_struct_init(v),
+            ir::Expression::DotAccess(v) => self.compile_dot_access(v),
+            ir::Expression::Deref(v) => self.compile_deref(v),
+            ir::Expression::Address(v) => self.compile_address(v),
+            ir::Expression::Closure(v) => self.compile_closure(v),
+            ir::Expression::Nil => self.compile_nil(),
+            ir::Expression::Variable(v) => self.compile_variable(v),
+            ir::Expression::Type(_type) => Ok(_type.clone()),
+            ir::Expression::ToClosure(v) => self.compile_to_closure(v),
+            ir::Expression::Function(_) => {
+                panic!("cant compile function expression, expected call expression")
+            }
+            ir::Expression::Method(_) => {
+                panic!("cant compile method, expected call expression")
+            }
         }?;
 
         if exp.alignment != 0 {
