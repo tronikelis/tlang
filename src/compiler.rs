@@ -860,7 +860,7 @@ impl DotAccessField {
 struct ExpressionCompiler<'a, 'b> {
     instructions: &'a mut Instructions,
     closures: &'a mut Vec<CompiledInstructions>,
-    ir: Rc<ir::Ir<'b>>,
+    ir: &'b ir::Ir<'b>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
@@ -868,7 +868,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn new(
         instructions: &'a mut Instructions,
         closures: &'a mut Vec<CompiledInstructions>,
-        ir: Rc<ir::Ir<'b>>,
+        ir: &'b ir::Ir<'b>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
     ) -> Self {
         Self {
@@ -920,7 +920,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             FunctionCompiler::new(
                 Function::Closure(closure),
                 self.static_memory.clone(),
-                self.ir.clone(),
+                self.ir,
             )
             .compile()?,
         );
@@ -1833,18 +1833,13 @@ pub struct Compiled {
 }
 
 pub fn compile(ir: ir::Ir) -> Result<Compiled> {
-    let ir = Rc::new(ir);
-
     let mut functions = HashMap::<String, Vec<ScopedInstruction>>::new();
     let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
     for (identifier, declaration) in &ir.functions {
-        let compiled = FunctionCompiler::new(
-            Function::Function(declaration),
-            static_memory.clone(),
-            ir.clone(),
-        )
-        .compile()?;
+        let compiled =
+            FunctionCompiler::new(Function::Function(declaration), static_memory.clone(), &ir)
+                .compile()?;
 
         functions.insert(
             identifier.clone(),
@@ -1863,7 +1858,7 @@ pub struct FunctionCompiler<'a> {
     instructions: Instructions,
     function: Function<'a>,
     closures: Vec<CompiledInstructions>,
-    ir: Rc<ir::Ir<'a>>,
+    ir: &'a ir::Ir<'a>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
@@ -1877,7 +1872,7 @@ impl<'a> FunctionCompiler<'a> {
     fn new(
         function: Function<'a>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
-        ir: Rc<ir::Ir<'a>>,
+        ir: &'a ir::Ir<'a>,
     ) -> Self {
         Self {
             static_memory,
