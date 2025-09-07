@@ -17,37 +17,24 @@ fn main() {
                 type uint8 uint8
                 type void void
                 type Type Type
-
-                type a int
-
-                impl a {
-                    fn get(*self) a {
-                        return *self
-                    }
-                }
-
-                impl int {
-                    fn get(*self) int {
-                        return *self
-                    }
-                }
-
-                let static1 int = 28
-
-                let static int = 6969 + static1
+                fn libc_write(fd int, slice uint8[]) int {}
 
                 fn main() void {
-                    let foo int = 26
+                    let foo int = 25
 
-                    let ok a = 27
-                    ok.get()
-
-                    foo.get()
-
-                    let ok fn() void = fn() void {
-                        foo = 29
-                        return
+                    let nice fn()void = fn()void {
+                        foo = 28
                     }
+                    nice()
+
+                    for let i int = 0; i < 100; i++ {
+                        foo = foo + 1
+                    }
+                    __debug__
+
+                    libc_write(1, uint8[](\"foo\"))
+                    
+                    return
                 }
             ",
     );
@@ -59,4 +46,10 @@ fn main() {
 
     let ir = ir::Ir::new(&ast).unwrap();
     println!("{ir:#?}");
+
+    let compiled = compiler::compile(ir).unwrap();
+    let linked = linker::link(compiled.functions).unwrap();
+    println!("{linked:#?}");
+
+    vm::Vm::new(linked, compiled.static_memory).run();
 }
