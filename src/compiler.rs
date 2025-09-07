@@ -261,9 +261,25 @@ impl StackInstructions {
     }
 }
 
-enum Function {
-    Function(ir::Function),
-    Closure(ir::Closure),
+enum Function<'a> {
+    Function(&'a ir::Function),
+    Closure(&'a ir::Closure),
+}
+
+impl<'a> Function<'a> {
+    fn return_type(&self) -> &ir::Type {
+        match &self {
+            Self::Function(v) => &v.return_type,
+            Self::Closure(v) => &v._type.expect_closure().unwrap().return_type,
+        }
+    }
+
+    fn actions(&self) -> &[ir::Action] {
+        match &self {
+            Self::Function(v) => &v.actions,
+            Self::Closure(v) => &v.actions,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -902,7 +918,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         self.closures.push(
             FunctionCompiler::new(
-                Function::Closure(closure.clone()), // todo: fix this clone hahah
+                Function::Closure(closure),
                 self.static_memory.clone(),
                 self.ir.clone(),
             )
@@ -1813,33 +1829,22 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
 pub struct Compiled {
     pub functions: HashMap<String, Vec<ScopedInstruction>>,
-    pub static_instructions: Vec<ScopedInstruction>,
     pub static_memory: vm::StaticMemory,
 }
 
-pub fn compile(ast: ast::Ast) -> Result<Compiled> {
+pub fn compile(ir: ir::Ir) -> Result<Compiled> {
+    let ir = Rc::new(ir);
+
     let mut functions = HashMap::<String, Vec<ScopedInstruction>>::new();
     let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
-    let function_declarations = Rc::new(ast.function_declarations);
-
-    let (static_var_stack, static_instructions) = compile_static_vars(
-        ast.static_var_declarations,
-        type_resolver.clone(),
-        function_declarations.clone(),
-        static_memory.clone(),
-    )?;
-
-    for (identifier, declaration) in function_declarations.iter() {
+    for (identifier, declaration) in &ir.functions {
         let compiled = FunctionCompiler::new(
-            Function::from_declaration(&type_resolver, declaration).unwrap(),
-            static_var_stack.clone(),
+            Function::Function(declaration),
             static_memory.clone(),
-            type_resolver.clone(),
-            function_declarations.clone(),
+            ir.clone(),
         )
-        .compile()
-        .unwrap();
+        .compile()?;
 
         functions.insert(
             identifier.clone(),
@@ -1851,52 +1856,14 @@ pub fn compile(ast: ast::Ast) -> Result<Compiled> {
     Ok(Compiled {
         static_memory,
         functions,
-        static_instructions,
     })
 }
 
-fn compile_static_vars(
-    vars: Vec<ast::StaticVarDeclaration>,
-    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
-    static_memory: Rc<RefCell<vm::StaticMemory>>,
-) -> Result<(VarStack<VarStackItem>, Vec<ScopedInstruction>)> {
-    let mut instructions = Instructions::new(VarStack::new());
-    let mut closures = Vec::new();
-
-    for v in vars {
-        instructions.push_alignment(ir::PTR_SIZE);
-
-        let exp = ExpressionCompiler::new(
-            &mut instructions,
-            &mut closures,
-            type_resolver.clone(),
-            function_declarations.clone(),
-            static_memory.clone(),
-        )
-        .compile_expression(&v.expression)?;
-        type_resolver.resolve(&v._type)?.equals(&exp)?;
-
-        instructions.instr_alloc(exp.size, exp.alignment);
-        instructions.var_mark(Variable {
-            _type: ir::Type::create_escaped(exp),
-            identifier: v.identifier.clone(),
-        });
-    }
-
-    Ok((
-        instructions.var_stack.stack.clone(),
-        ScopedInstruction::from_compiled_instructions(&CompiledInstructions {
-            instructions: instructions.get_instructions(),
-            closures,
-        }),
-    ))
-}
-
-pub struct FunctionCompiler {
+pub struct FunctionCompiler<'a> {
     instructions: Instructions,
-    function: Function,
+    function: Function<'a>,
     closures: Vec<CompiledInstructions>,
-    ir: Rc<ir::Ir>,
+    ir: Rc<ir::Ir<'a>>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
@@ -1906,11 +1873,11 @@ pub struct CompiledInstructions {
     pub closures: Vec<CompiledInstructions>,
 }
 
-impl FunctionCompiler {
+impl<'a> FunctionCompiler<'a> {
     fn new(
-        function: Function,
+        function: Function<'a>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
-        ir: Rc<ir::Ir>,
+        ir: Rc<ir::Ir<'a>>,
     ) -> Self {
         Self {
             static_memory,
@@ -1921,36 +1888,22 @@ impl FunctionCompiler {
         }
     }
 
-    fn resolve_variable(&self, _type: &ast::ir::Type) -> Result<(usize, Variable)> {
-        let ast::ir::Type::Alias(identifier) = _type else {
-            return Err(anyhow!("resolve_variable: cant resolve non alias"));
-        };
-
-        let variable = self
-            .instructions
-            .var_get_offset(identifier)
-            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
-
-        Ok((variable.0, variable.1.clone()))
-    }
-
     fn expression_compiler(&mut self) -> ExpressionCompiler {
         ExpressionCompiler::new(
             &mut self.instructions,
             &mut self.closures,
-            self.type_resolver.clone(),
-            self.function_declarations.clone(),
+            self.ir.clone(),
             self.static_memory.clone(),
         )
     }
 
-    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<ir::Type> {
+    fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         self.expression_compiler().compile_expression(expression)
     }
 
     fn compile_dot_access_field_offset(
         &mut self,
-        dot_access: &ast::DotAccess,
+        dot_access: &ir::DotAccess,
     ) -> Result<DotAccessField> {
         self.expression_compiler()
             .compile_dot_access_field_offset(dot_access)
@@ -1958,46 +1911,39 @@ impl FunctionCompiler {
 
     fn compile_variable_declaration(
         &mut self,
-        declaration: &ast::VariableDeclaration,
+        declaration: &ir::VariableDeclaration,
     ) -> Result<()> {
-        let escaped = self
-            .current_body
-            .last()
-            .unwrap()
-            .does_variable_escape(&declaration.variable.identifier, 1);
+        let escaped = declaration.variable.borrow()._type._type.is_escaped();
         if escaped {
             self.instructions.push_alignment(ir::PTR_SIZE);
         }
 
-        let mut exp = self.compile_expression(&declaration.expression)?;
-        if exp == *VOID {
+        let exp = self.compile_expression(&declaration.expression)?;
+        if exp == *ir::VOID {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        self.resolve_type(&declaration.variable._type)?
-            .equals(&exp)?;
+        exp.equals(&declaration.variable.borrow()._type)?;
 
         if escaped {
             self.instructions.instr_alloc(exp.size, exp.alignment);
-            exp = ir::Type::create_escaped(exp);
         }
 
-        self.instructions.var_mark(Variable {
-            identifier: declaration.variable.identifier.clone(),
-            _type: exp,
-        });
+        self.instructions
+            .var_mark(declaration.variable.borrow().clone());
 
         Ok(())
     }
 
-    fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
+    fn compile_variable_assignment(&mut self, assignment: &ir::VariableAssignment) -> Result<()> {
         self.instructions.push_stack_frame();
 
         match &assignment.var {
-            ast::Expression::ir::Type(_type) => {
-                let (offset, variable) = self.resolve_variable(_type)?;
+            ir::Expression::Variable(identifier) => {
+                let (offset, variable) = self.instructions.var_get_offset_err(identifier)?;
+                let variable = variable.clone();
 
-                if let TypeType::Escaped(_type) = &variable._type._type {
+                if let ir::TypeType::Escaped(_type) = &variable._type._type {
                     let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
                     self.instructions.instr_increment(ir::PTR_SIZE);
                     self.instructions.instr_copy(
@@ -2024,9 +1970,9 @@ impl FunctionCompiler {
                     self.instructions.instr_copy(offset + size, 0, exp.size);
                 }
             }
-            ast::Expression::Index(index) => {
+            ir::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
-                let TypeType::Slice(slice_item) = &slice._type else {
+                let ir::TypeType::Slice(slice_item) = &slice._type else {
                     return Err(anyhow!("can only index slices"));
                 };
 
@@ -2042,7 +1988,7 @@ impl FunctionCompiler {
 
                 self.instructions.instr_slice_index_set(item.size);
             }
-            ast::Expression::DotAccess(dot_access) => {
+            ir::Expression::DotAccess(dot_access) => {
                 let field = self.compile_dot_access_field_offset(dot_access)?;
 
                 self.instructions.push_stack_frame();
@@ -2060,9 +2006,9 @@ impl FunctionCompiler {
                     }
                 }
             }
-            ast::Expression::Deref(expression) => {
+            ir::Expression::Deref(expression) => {
                 let dst = self.compile_expression(expression)?;
-                let TypeType::Address(_type) = dst._type else {
+                let ir::TypeType::Address(_type) = dst._type else {
                     return Err(anyhow!("can not dereference non address"));
                 };
 
@@ -2081,7 +2027,11 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
+    fn compile_if_block(
+        &mut self,
+        expression: &ir::Expression,
+        actions: &[ir::Action],
+    ) -> Result<()> {
         let exp = self.compile_expression(expression)?;
         if exp != *ir::BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
@@ -2089,26 +2039,26 @@ impl FunctionCompiler {
 
         self.instructions.stack_instructions.jump_if_true();
 
-        self.compile_body(body)?;
+        self.compile_actions(actions)?;
         self.instructions.stack_instructions.back(2);
         self.instructions.stack_instructions.pop_index();
 
         Ok(())
     }
 
-    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+    fn compile_if(&mut self, _if: &ir::If) -> Result<()> {
         self.instructions.push_stack_frame();
 
         self.instructions.stack_instructions.jump();
 
-        self.compile_if_block(&_if.expression, &_if.body)?;
+        self.compile_if_block(&_if.expression, &_if.actions)?;
 
         for v in &_if.elseif {
-            self.compile_if_block(&v.expression, &v.body)?;
+            self.compile_if_block(&v.expression, &v.actions)?;
         }
 
         if let Some(v) = &_if._else {
-            self.compile_body(&v.body)?;
+            self.compile_actions(&v.actions)?;
         }
 
         self.instructions.stack_instructions.back(1);
@@ -2119,10 +2069,10 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
+    fn compile_for(&mut self, _for: &ir::For) -> Result<()> {
         self.instructions.push_stack_frame();
         if let Some(v) = &_for.initializer {
-            self.compile_node(v)?;
+            self.compile_action(v)?;
         }
 
         self.instructions
@@ -2159,7 +2109,7 @@ impl FunctionCompiler {
             }
         };
 
-        self.compile_body(&_for.body)?;
+        self.compile_actions(&_for.actions)?;
         self.instructions.pop_stack_frame();
 
         self.instructions.stack_instructions.back(1);
@@ -2167,7 +2117,7 @@ impl FunctionCompiler {
 
         // continue will jump here
         if let Some(v) = &_for.after_each {
-            self.compile_node(v)?;
+            self.compile_action(v)?;
         }
 
         self.instructions.stack_instructions.again();
@@ -2214,29 +2164,29 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
-        match node {
-            ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
-            ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
-            ast::Node::Expression(exp) => {
+    fn compile_action(&mut self, action: &ir::Action) -> Result<()> {
+        match action {
+            ir::Action::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
+            ir::Action::Return(exp) => self.compile_return(exp.as_ref())?,
+            ir::Action::Expression(exp) => {
                 self.instructions.push_stack_frame();
                 self.compile_expression(exp)?;
                 self.instructions.pop_stack_frame();
             }
-            ast::Node::VariableAssignment(assignment) => {
+            ir::Action::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
             }
-            ast::Node::If(v) => {
+            ir::Action::If(v) => {
                 self.compile_if(v)?;
             }
-            ast::Node::Debug => {
+            ir::Action::Debug => {
                 self.instructions.instr_debug();
             }
-            ast::Node::For(v) => self.compile_for(v)?,
-            ast::Node::Break => {
+            ir::Action::For(v) => self.compile_for(v)?,
+            ir::Action::Break => {
                 self.compile_for_break()?;
             }
-            ast::Node::Continue => {
+            ir::Action::Continue => {
                 self.compile_for_continue()?;
             }
         };
@@ -2244,25 +2194,22 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
-        self.current_body.push(CompilerBody::new(body.to_vec()));
+    fn compile_actions(&mut self, actions: &[ir::Action]) -> Result<()> {
         self.instructions.push_stack_frame();
 
-        for node in body {
-            self.compile_node(node)?;
-            self.current_body.last_mut().unwrap().next();
+        for action in actions {
+            self.compile_action(action)?;
         }
 
-        self.current_body.pop();
         self.instructions.pop_stack_frame();
 
         Ok(())
     }
 
-    fn compile_return(&mut self, exp: Option<&ast::Expression>) -> Result<()> {
+    fn compile_return(&mut self, exp: Option<&ir::Expression>) -> Result<()> {
         if let Some(exp) = exp {
             let exp = self.compile_expression(exp)?;
-            if exp != self.function.return_type {
+            if exp != *self.function.return_type() {
                 return Err(anyhow!("incorrect type"));
             }
 
@@ -2283,7 +2230,7 @@ impl FunctionCompiler {
     pub fn compile(mut self) -> Result<CompiledInstructions> {
         self.instructions.init_function_prologue(&self.function)?;
 
-        self.compile_body(&self.function.body.clone())?;
+        self.compile_actions(&self.function.actions().to_vec())?;
 
         self.compile_return(None)?;
 
