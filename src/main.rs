@@ -19,21 +19,18 @@ fn main() {
                 type Type Type
                 fn libc_write(fd int, slice uint8[]) int {}
 
+                impl int {
+                    fn set(*self, value int) *int {
+                        *self = value
+                        return self
+                    }
+                }
+
                 fn main() void {
                     let foo int = 25
-
-                    let nice fn()void = fn()void {
-                        foo = 28
-                    }
-                    nice()
-
-                    for let i int = 0; i < 100; i++ {
-                        foo = foo + 1
-                    }
+                    foo.set(100).set(69)
+                    let footest int = foo
                     __debug__
-
-                    libc_write(1, uint8[](\"foo\"))
-                    
                     return
                 }
             ",

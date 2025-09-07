@@ -545,7 +545,11 @@ impl Type {
         }
     }
 
-    pub fn equals(&self, other: &Self) -> Result<()> {
+    pub fn equals(&self, other: &Self) -> bool {
+        self.must_equal(other).is_ok()
+    }
+
+    pub fn must_equal(&self, other: &Self) -> Result<()> {
         // todo: do this the other way around
         if let TypeType::Builtin(builtin) = &self._type {
             if let TypeBuiltin::Nil = builtin {
@@ -634,6 +638,7 @@ pub enum CallType {
     Function(ExpFunction),
     Closure(Expression),
     TypeCast(Type),
+    Method(Method),
 }
 
 #[derive(Debug, Clone)]
@@ -754,6 +759,7 @@ impl Expression {
                     CallType::TypeCast(_type_to) => {
                         return Ok(_type_to.clone());
                     }
+                    CallType::Method(method) => method.function._type.clone(),
                 };
 
                 let type_function = match _type._type {
@@ -783,7 +789,7 @@ impl Expression {
 
                     _type.ok_or(anyhow!("dot_access unknown identifier"))
                 }
-                _ => Err(anyhow!("dot accessing non struct")),
+                _type => Err(anyhow!("dot accessing non struct {_type:#?}")),
             },
             Self::SliceInit(slice_init) => Ok(slice_init._type.clone()),
             Self::StructInit(struct_init) => Ok(struct_init._type.clone()),
@@ -796,7 +802,7 @@ impl Expression {
     fn ensure_address<T: VariableStack>(self, variables: &T) -> Result<Self> {
         let _type = self._type(variables)?;
         match _type._type {
-            TypeType::Address(_) | TypeType::Escaped(_) => Ok(self),
+            TypeType::Address(_) => Ok(self),
             _ => Ok(Expression::Address(Box::new(self))),
         }
     }
@@ -1051,9 +1057,9 @@ impl<'a> IrParser<'a> {
                             TypeBuiltin::Int => INT.clone(),
                             TypeBuiltin::Uint => UINT.clone(),
                             TypeBuiltin::Uint8 => UINT8.clone(),
-                            _ => return Err(anyhow!("literal wrong type")),
+                            _type => return Err(anyhow!("literal wrong type {_type:#?}")),
                         },
-                        _ => return Err(anyhow!("literal wrong type")),
+                        _type => return Err(anyhow!("literal wrong type {_type:#?}")),
                     };
 
                     return Ok(Expression::Literal(Literal {
@@ -1103,14 +1109,16 @@ impl<'a> IrParser<'a> {
 
                 let mut arguments: Vec<Expression> = Vec::new();
 
+                let mut is_method = 0;
                 if let Expression::Method(method) = &exp {
                     arguments.push(method._self.clone());
+                    is_method = 1;
                 }
 
                 for (i, arg) in call.arguments.iter().enumerate() {
                     let fn_arg = type_function
                         .arguments
-                        .get(i)
+                        .get(i + is_method)
                         .ok_or(anyhow!("type_function argument not found"))?;
 
                     arguments.push(self.get_expression(&arg, Some(&fn_arg._type))?);
@@ -1120,7 +1128,7 @@ impl<'a> IrParser<'a> {
                     arguments,
                     call_type: match exp {
                         Expression::Function(exp_function) => CallType::Function(exp_function),
-                        Expression::Method(method) => CallType::Function(method.function),
+                        Expression::Method(method) => CallType::Method(*method),
                         exp => CallType::Closure(exp),
                     },
                 })));

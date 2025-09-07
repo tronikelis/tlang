@@ -833,6 +833,7 @@ struct TypeCast<'a> {
 enum FunctionCallType<'a> {
     Function(&'a ir::ExpFunction),
     Closure(&'a ir::Expression),
+    Method(&'a ir::Method),
 }
 
 struct FunctionCall<'a> {
@@ -1190,7 +1191,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     ))?;
 
                     let exp_type = self.compile_expression(exp)?;
-                    exp_type.equals(_type)?;
+                    exp_type.must_equal(_type)?;
                 }
             }
         }
@@ -1509,7 +1510,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         }
 
         let return_alignment = match &call.call_type {
-            FunctionCallType::Function(v) => v._type.alignment,
+            FunctionCallType::Function(v) => v._type.expect_function()?.return_type.alignment,
+            FunctionCallType::Method(v) => {
+                v.function._type.expect_function()?.return_type.alignment
+            }
             FunctionCallType::Closure(v) => {
                 v._type(self.instructions)?
                     .expect_closure()?
@@ -1520,6 +1524,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         let expected_arguments = match &call.call_type {
             FunctionCallType::Function(v) => v._type.expect_function()?.arguments.clone(),
+            FunctionCallType::Method(v) => v.function._type.expect_function()?.arguments.clone(),
             FunctionCallType::Closure(v) => v
                 ._type(self.instructions)?
                 .expect_closure()?
@@ -1532,7 +1537,12 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         let argument_size = {
             self.instructions.push_stack_frame();
             for (i, expected_arg) in expected_arguments.iter().enumerate() {
-                let arg = call.arguments.get(i);
+                let mut arg = call.arguments.get(i);
+                if i == 0 {
+                    if let FunctionCallType::Method(method) = &call.call_type {
+                        arg = Some(&method._self);
+                    }
+                }
 
                 let Some(arg) = arg else {
                     // calling push(int...) -> like push()
@@ -1546,9 +1556,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 let Some(inner) = expected_arg._type.extract_variadic() else {
                     // calling push(a int) -> like push(20)
                     let exp = self.compile_expression(arg)?;
-                    if exp != expected_arg._type {
-                        return Err(anyhow!("function call type mismatch"));
-                    }
+                    exp.must_equal(&expected_arg._type)?;
                     continue;
                 };
 
@@ -1596,6 +1604,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         let return_type = match &call.call_type {
             FunctionCallType::Function(v) => v._type.expect_function()?.return_type.clone(),
+            FunctionCallType::Method(v) => v.function._type.expect_function()?.return_type.clone(),
             FunctionCallType::Closure(v) => v
                 ._type(self.instructions)?
                 .expect_closure()?
@@ -1624,6 +1633,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 self.instructions
                     .instr_jump_and_link(function.identifier.clone());
             }
+            FunctionCallType::Method(method) => {
+                self.instructions
+                    .instr_jump_and_link(method.function.identifier.clone());
+            }
             FunctionCallType::Closure(expression) => {
                 self.compile_expression(expression)?;
                 self.instructions.instr_jump_and_link_closure();
@@ -1648,6 +1661,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             ir::CallType::TypeCast(_type) => self.compile_type_cast(&TypeCast {
                 expression: &call.arguments[0],
                 _type,
+            }),
+            ir::CallType::Method(method) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Method(method),
             }),
         }
     }
@@ -1887,7 +1904,7 @@ impl<'a> FunctionCompiler<'a> {
         ExpressionCompiler::new(
             &mut self.instructions,
             &mut self.closures,
-            self.ir.clone(),
+            self.ir,
             self.static_memory.clone(),
         )
     }
@@ -1918,7 +1935,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        exp.equals(&declaration.variable.borrow()._type)?;
+        exp.must_equal(&declaration.variable.borrow()._type)?;
 
         if escaped {
             self.instructions.instr_alloc(exp.size, exp.alignment);
@@ -1990,7 +2007,7 @@ impl<'a> FunctionCompiler<'a> {
                 let exp = self.compile_expression(&assignment.expression)?;
                 let exp_size = self.instructions.pop_stack_frame_size();
 
-                exp.equals(field._type())?;
+                exp.must_equal(field._type())?;
 
                 match field {
                     DotAccessField::Heap(_type) => {
