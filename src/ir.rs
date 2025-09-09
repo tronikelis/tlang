@@ -25,31 +25,24 @@ struct ResolvedTypeFunction {
     type_function: TypeFunction,
     size: usize,
     alignment: usize,
-    id: String,
 }
 
 impl ResolvedTypeFunction {
     fn to_function(self) -> Type {
         Type {
-            id: Some(self.id),
+            alias: None,
             size: self.size,
             alignment: self.alignment,
-            _type: TypeType::Function(Box::new(TypeFunction {
-                arguments: self.type_function.arguments,
-                return_type: self.type_function.return_type,
-            })),
+            _type: TypeType::Function(Box::new(self.type_function)),
         }
     }
 
-    fn to_closure(self) -> Type {
+    fn to_closure(self, alias: Option<String>) -> Type {
         Type {
-            id: Some(self.id),
+            alias,
             size: self.size,
             alignment: self.alignment,
-            _type: TypeType::Closure(Box::new(TypeFunction {
-                arguments: self.type_function.arguments,
-                return_type: self.type_function.return_type,
-            })),
+            _type: TypeType::Closure(Box::new(self.type_function)),
         }
     }
 }
@@ -68,36 +61,19 @@ impl<'a> TypeResolver<'a> {
         args: &[ast::Variable],
         return_type: &ast::Type,
     ) -> Result<ResolvedTypeFunction> {
-        let mut arguments = Vec::new();
-
-        let mut id = String::from("fn (");
-        for var in args {
-            let resolved = self.resolve(&var._type)?;
-            id.push_str(
-                resolved
-                    .id
-                    .as_ref()
-                    .ok_or(anyhow!("resolve_closure: type without id"))?,
-            );
-            id.push(',');
-            arguments.push(Variable {
-                identifier: var.identifier.clone(),
-                _type: resolved,
-            });
-        }
-        id.push(')');
+        let arguments = args
+            .iter()
+            .map(|v| {
+                Ok(Variable {
+                    _type: self.resolve(&v._type)?,
+                    identifier: v.identifier.clone(),
+                })
+            })
+            .collect::<Result<_>>()?;
 
         let resolved_return_type = self.resolve(return_type)?;
 
-        id.push_str(
-            resolved_return_type
-                .id
-                .as_ref()
-                .ok_or(anyhow!("resolve_closure: return type without id"))?,
-        );
-
         Ok(ResolvedTypeFunction {
-            id,
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             type_function: TypeFunction {
@@ -127,7 +103,7 @@ impl<'a> TypeResolver<'a> {
                     _ => None,
                 };
                 if let Some(mut builtin) = builtin {
-                    builtin.id = initial_alias.map(|v| v.to_string()).or(builtin.id);
+                    builtin.alias = initial_alias.map(|v| v.to_string()).or(builtin.alias);
                     return Ok(builtin);
                 }
 
@@ -144,7 +120,7 @@ impl<'a> TypeResolver<'a> {
                         }
 
                         return Ok(Type {
-                            id: Some(alias.to_string() + "{}"),
+                            alias: None, // todo: ??
                             size: 0,
                             alignment: 0,
                             _type: TypeType::Lazy(alias.to_string()),
@@ -161,7 +137,7 @@ impl<'a> TypeResolver<'a> {
             ast::Type::Slice(_type) => {
                 let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "[]"),
+                    alias: nested.alias.clone(),
                     size: SLICE_SIZE,
                     alignment: SLICE_SIZE,
                     _type: TypeType::Slice(Box::new(nested)),
@@ -170,7 +146,7 @@ impl<'a> TypeResolver<'a> {
             ast::Type::Variadic(_type) => {
                 let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "..."),
+                    alias: nested.alias.clone(),
                     size: size_of::<usize>(),
                     alignment: size_of::<usize>(),
                     _type: TypeType::Variadic(Box::new(nested)),
@@ -182,7 +158,7 @@ impl<'a> TypeResolver<'a> {
                 let mut highest_alignment: usize = 0;
 
                 for var in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(&var._type, initial_alias, alias)?;
+                    let resolved = self.resolve_with_alias(&var._type, None, alias)?;
                     if resolved.alignment > highest_alignment {
                         highest_alignment = resolved.alignment;
                     }
@@ -198,80 +174,84 @@ impl<'a> TypeResolver<'a> {
                 size += end_padding;
                 fields.push(TypeStructField::Padding(end_padding));
 
+                let type_struct = TypeStruct { fields };
                 Ok(Type {
-                    id: alias.map(|id| id.to_string() + "{}"),
+                    alias: initial_alias.map(|v| v.to_string()),
                     size,
                     alignment: highest_alignment,
-                    _type: TypeType::Struct(TypeStruct { fields }),
+                    _type: TypeType::Struct(type_struct),
                 })
             }
             ast::Type::Address(_type) => {
                 let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
                 Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "&"),
+                    alias: nested.alias.clone(),
                     size: PTR_SIZE,
                     alignment: PTR_SIZE,
                     _type: TypeType::Address(Box::new(nested)),
                 })
             }
-            ast::Type::Closure(type_closure) => Ok(self
-                .resolve_type_function(&type_closure.arguments, &type_closure.return_type)?
-                .to_closure()),
+            ast::Type::Closure(type_closure) => {
+                let type_function =
+                    self.resolve_type_function(&type_closure.arguments, &type_closure.return_type)?;
+
+                Ok(type_function.to_closure(initial_alias.map(|v| v.to_string())))
+            }
         }
     }
 }
 
 lazy_static::lazy_static! {
     pub static ref NIL: Type = Type {
-        id: Some("nil".to_string()),
+        alias: Some("nil".to_string()),
         size: PTR_SIZE,
         alignment: PTR_SIZE,
         _type: TypeType::Builtin(TypeBuiltin::Nil),
     };
     pub static ref UINT: Type = Type {
-        id: Some("uint".to_string()),
+        alias: Some("uint".to_string()),
         size: size_of::<usize>(),
         alignment: size_of::<usize>(),
         _type: TypeType::Builtin(TypeBuiltin::Uint),
     };
     pub static ref UINT8: Type = Type {
-        id: Some("uint8".to_string()),
+        alias: Some("uint8".to_string()),
         size: 1,
         alignment: 1,
         _type: TypeType::Builtin(TypeBuiltin::Uint8),
     };
     pub static ref INT: Type = Type {
-        id: Some("int".to_string()),
+        alias: Some("int".to_string()),
         size: size_of::<isize>(),
         alignment: size_of::<isize>(),
         _type: TypeType::Builtin(TypeBuiltin::Int),
     };
     pub static ref BOOL: Type = Type {
-        id: Some("bool".to_string()),
+        alias: Some("bool".to_string()),
         size: size_of::<usize>(),      // for now
         alignment: size_of::<usize>(), // for now
         _type: TypeType::Builtin(TypeBuiltin::Bool),
     };
     pub static ref STRING: Type = Type {
-        id: Some("string".to_string()),
+        alias: Some("string".to_string()),
         size: size_of::<usize>(),
         alignment: size_of::<usize>(),
         _type: TypeType::Builtin(TypeBuiltin::String),
     };
     pub static ref COMPILER_TYPE: Type = Type {
-        id: Some("Type".to_string()),
+        alias: Some("compilertype".to_string()),
         size: 0,
         alignment: 0,
         _type: TypeType::Builtin(TypeBuiltin::CompilerType),
     };
     pub static ref VOID: Type = Type {
-        id: Some("void".to_string()),
+        alias: Some("void".to_string()),
         size: 0,
         alignment: 0,
         _type: TypeType::Builtin(TypeBuiltin::Void),
     };
     pub static ref PTR: Type = Type {
-        id: Some("ptr".to_string()),
+        alias: Some("ptr".to_string()),
         size: PTR_SIZE,
         alignment: PTR_SIZE,
         _type: TypeType::Builtin(TypeBuiltin::Ptr),
@@ -474,8 +454,9 @@ impl TypeType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
-    // None for inline types
-    pub id: Option<String>,
+    // None for inline types,
+    // will be None when there is no alias
+    pub alias: Option<String>,
     pub size: usize,
     pub alignment: usize,
     pub _type: TypeType,
@@ -483,11 +464,47 @@ pub struct Type {
 
 impl Type {
     fn method_id(&self, identifier: &str) -> Option<String> {
-        self.id.as_ref().map(|v| format!("{}.{}", v, identifier))
+        self.alias.as_ref().map(|v| format!("{}.{}", v, identifier))
     }
 
     fn method_id_err(&self, identifier: &str) -> Result<String> {
         self.method_id(identifier).ok_or(anyhow!("Type.method_id"))
+    }
+
+    fn as_string(&self) -> String {
+        match &self._type {
+            TypeType::Lazy(v) => v.clone(),
+            TypeType::Slice(_type) => _type.as_string() + "[]",
+            TypeType::Builtin(_) => self.alias.clone().expect("builtin alias"),
+            TypeType::Address(_type) => _type.as_string() + "&",
+            TypeType::Struct(type_struct) => {
+                let mut str = String::from("{");
+
+                for field in &type_struct.fields {
+                    if let TypeStructField::Type(iden, _type) = field {
+                        str.push_str(&format!("{}:{},", iden, _type.as_string()));
+                    }
+                }
+
+                str.push('}');
+
+                str
+            }
+            TypeType::Variadic(_type) => _type.as_string() + "...",
+            TypeType::Escaped(_type) => _type.as_string(),
+            TypeType::Closure(type_function) | TypeType::Function(type_function) => {
+                let mut str = String::from("fn(");
+
+                for arg in &type_function.arguments {
+                    str.push_str(&format!("{},", arg._type.as_string()));
+                }
+
+                str.push(')');
+                str.push_str(&type_function.return_type.as_string());
+
+                str
+            }
+        }
     }
 
     pub fn skip_escaped(&self) -> &Self {
@@ -513,7 +530,7 @@ impl Type {
 
     pub fn create_variadic(item: Self) -> Self {
         Self {
-            id: item.id.as_ref().map(|id| id.clone() + "..."),
+            alias: item.alias.clone(),
             size: SLICE_SIZE,
             alignment: SLICE_SIZE,
             _type: TypeType::Variadic(Box::new(item)),
@@ -522,7 +539,7 @@ impl Type {
 
     pub fn create_address(item: Self) -> Self {
         Self {
-            id: item.id.as_ref().map(|id| id.clone() + "&"),
+            alias: item.alias.clone(),
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             _type: TypeType::Address(Box::new(item)),
@@ -531,7 +548,7 @@ impl Type {
 
     pub fn create_escaped(item: Self) -> Self {
         Self {
-            id: item.id.clone(),
+            alias: item.alias.clone(),
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             _type: TypeType::Escaped(Box::new(item)),
@@ -546,6 +563,9 @@ impl Type {
     }
 
     pub fn equals(&self, other: &Self) -> bool {
+        // this actually should be reverse:
+        // must_equal() { match self.equals() { true => Ok, false => Err } }
+        //
         self.must_equal(other).is_ok()
     }
 
@@ -559,23 +579,16 @@ impl Type {
             }
         }
 
-        match (&self.id, &other.id) {
-            (Some(self_id), Some(other_id)) => {
-                return match self_id == other_id {
-                    true => Ok(()),
-                    false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+        match (&self.alias, &other.alias) {
+            (Some(a), Some(b)) => {
+                if a == b {
+                    return Ok(());
                 }
             }
             _ => {}
         }
 
-        let mut self_clone = self.clone();
-        let mut other_clone = other.clone();
-
-        self_clone.id = None;
-        other_clone.id = None;
-
-        match other == self {
+        match self.as_string() == other.as_string() {
             true => Ok(()),
             false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
         }
@@ -687,7 +700,6 @@ pub struct Closure {
 
 #[derive(Debug, Clone)]
 pub struct Method {
-    pub type_id: String,
     pub _self: Expression,
     pub function: ExpFunction,
 }
@@ -744,9 +756,9 @@ impl Expression {
                 let _type = expression._type(variables)?;
                 match _type._type {
                     TypeType::Function(type_function) => Ok(Type {
+                        alias: _type.alias,
                         size: PTR_SIZE,
                         alignment: PTR_SIZE,
-                        id: _type.id,
                         _type: TypeType::Closure(type_function),
                     }),
                     _ => Err(anyhow!("to closure from non function")),
@@ -771,26 +783,35 @@ impl Expression {
 
                 Ok(type_function.return_type)
             }
-            Self::DotAccess(dot_access) => match dot_access.expression._type(variables)?._type {
-                TypeType::Struct(type_struct) => {
-                    let mut _type: Option<Type> = None;
+            Self::DotAccess(dot_access) => {
+                let type_struct = match dot_access.expression._type(variables)?._type {
+                    TypeType::Address(_type) => match _type._type {
+                        TypeType::Struct(v) => v,
+                        _type => return Err(anyhow!("cant dot access {_type:#?}")),
+                    },
+                    TypeType::Struct(v) => v,
+                    _type => return Err(anyhow!("cant dot access {_type:#?}")),
+                };
 
-                    for field in type_struct.fields {
-                        match field {
-                            TypeStructField::Padding(_) => {}
-                            TypeStructField::Type(identifier, v) => {
-                                if identifier == dot_access.identifier {
-                                    _type = Some(v);
-                                    break;
-                                }
+                let mut _type: Option<Type> = None;
+
+                for field in type_struct.fields {
+                    match field {
+                        TypeStructField::Padding(_) => {}
+                        TypeStructField::Type(identifier, v) => {
+                            if identifier == dot_access.identifier {
+                                _type = Some(v);
+                                break;
                             }
                         }
                     }
-
-                    _type.ok_or(anyhow!("dot_access unknown identifier"))
                 }
-                _type => Err(anyhow!("dot accessing non struct {_type:#?}")),
-            },
+
+                _type.ok_or(anyhow!(
+                    "dot_access unknown identifier {}",
+                    dot_access.identifier
+                ))
+            }
             Self::SliceInit(slice_init) => Ok(slice_init._type.clone()),
             Self::StructInit(struct_init) => Ok(struct_init._type.clone()),
             Self::Nil => Ok(NIL.clone()),
@@ -888,7 +909,7 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Function {
     pub identifier: String,
-    pub arguments: Vec<Rc<RefCell<Variable>>>,
+    pub arguments: Vec<Variable>,
     pub return_type: Type,
     pub actions: Vec<Action>,
 }
@@ -1163,7 +1184,7 @@ impl<'a> IrParser<'a> {
                         )?;
 
                         let result_expression = Expression::Method(Box::new(Method {
-                            type_id: _type.id.expect("method id returned"),
+                            // type_id: _type.id.expect("method id returned"),
                             _self: exp.ensure_address(&self.variables)?,
                             function: ExpFunction {
                                 identifier,
@@ -1432,7 +1453,7 @@ impl<'a> IrParser<'a> {
                 .map(|v| v.method_id_err(&declaration.identifier))
                 .transpose()?
                 .unwrap_or(declaration.identifier.clone()),
-            arguments,
+            arguments: arguments.iter().map(|v| v.borrow().clone()).collect(),
             return_type,
             actions,
         })

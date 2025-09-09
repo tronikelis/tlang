@@ -19,6 +19,23 @@ fn main() {
                 type Type Type
                 fn libc_write(fd int, slice uint8[]) int {}
 
+                type User struct {
+                    name string
+                    email string
+                }
+
+                impl User {
+                    fn set_name(*self, name string) *User {
+                        self.name = name
+                        return self
+                    }
+
+                    fn set_email(*self, email string) *User {
+                        self.email = email
+                        return self
+                    }
+                }
+
                 impl int {
                     fn set(*self, value int) *int {
                         *self = value
@@ -27,9 +44,17 @@ fn main() {
                 }
 
                 fn main() void {
-                    let foo int = 25
-                    foo.set(100).set(69)
-                    let footest int = foo
+                    let u User = User{
+                        name: \"nice\",
+                        email: \"lolok\",
+                    }
+                    u.set_name(\"nicenice\").set_email(\"okokok\")
+
+                    let i int = 0
+                    i.set(22).set(100).set(127).set(1337)
+
+                    let i1 int = i
+                    let foo User = u
                     __debug__
                     return
                 }
@@ -46,7 +71,8 @@ fn main() {
 
     let compiled = compiler::compile(ir).unwrap();
     let linked = linker::link(compiled.functions).unwrap();
-    println!("{linked:#?}");
+    let linked_with_index = linked.iter().enumerate().collect::<Vec<_>>();
+    println!("{linked_with_index:#?}");
 
     vm::Vm::new(linked, compiled.static_memory).run();
 }

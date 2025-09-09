@@ -684,11 +684,7 @@ impl Instructions {
         };
 
         let arguments: Vec<ir::Variable> = match function {
-            Function::Function(function) => function
-                .arguments
-                .iter()
-                .map(|v| v.borrow().clone())
-                .collect(),
+            Function::Function(function) => function.arguments.iter().map(|v| v.clone()).collect(),
             Function::Closure(closure) => closure
                 .arguments
                 .iter()
@@ -1120,9 +1116,6 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 };
 
                 Ok(ir::Type::create_address(_type))
-            }
-            ir::Expression::Address(_) => {
-                Err(anyhow!("compile_address: cant take address of this"))
             }
             expression => {
                 self.instructions.push_alignment(ir::PTR_SIZE);
