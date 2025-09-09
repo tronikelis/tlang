@@ -44,6 +44,9 @@ fn main() {
                 }
 
                 fn main() void {
+                    let nice fn()void = fn()void {}
+                    nice()
+
                     let u User = User{
                         name: \"nice\",
                         email: \"lolok\",
@@ -51,7 +54,7 @@ fn main() {
                     u.set_name(\"nicenice\").set_email(\"okokok\")
 
                     let i int = 0
-                    i.set(22).set(100).set(127).set(1337)
+                    i.set(22).set(100).set(127).set(1338)
 
                     let i1 int = i
                     let foo User = u

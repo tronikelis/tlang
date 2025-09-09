@@ -463,26 +463,28 @@ pub struct Type {
 }
 
 impl Type {
-    fn method_id(&self, identifier: &str) -> Option<String> {
-        self.alias.as_ref().map(|v| format!("{}.{}", v, identifier))
+    fn method_id(&self, identifier: &str) -> String {
+        let id = match &self._type {
+            TypeType::Address(_type) => _type.id(),
+            _ => self.id(),
+        };
+        format!("{}.{}", id, identifier)
     }
 
-    fn method_id_err(&self, identifier: &str) -> Result<String> {
-        self.method_id(identifier).ok_or(anyhow!("Type.method_id"))
-    }
+    fn id(&self) -> String {
+        let suffix = match &self._type {
+            TypeType::Escaped(_type) => return _type.id(), // dont like this single return here
 
-    fn as_string(&self) -> String {
-        match &self._type {
             TypeType::Lazy(v) => v.clone(),
-            TypeType::Slice(_type) => _type.as_string() + "[]",
+            TypeType::Slice(_type) => _type.id() + "[]",
             TypeType::Builtin(_) => self.alias.clone().expect("builtin alias"),
-            TypeType::Address(_type) => _type.as_string() + "&",
+            TypeType::Address(_type) => _type.id() + "&",
             TypeType::Struct(type_struct) => {
                 let mut str = String::from("{");
 
                 for field in &type_struct.fields {
                     if let TypeStructField::Type(iden, _type) = field {
-                        str.push_str(&format!("{}:{},", iden, _type.as_string()));
+                        str.push_str(&format!("{}:{},", iden, _type.id()));
                     }
                 }
 
@@ -490,21 +492,25 @@ impl Type {
 
                 str
             }
-            TypeType::Variadic(_type) => _type.as_string() + "...",
-            TypeType::Escaped(_type) => _type.as_string(),
+            TypeType::Variadic(_type) => _type.id() + "...",
             TypeType::Closure(type_function) | TypeType::Function(type_function) => {
                 let mut str = String::from("fn(");
 
                 for arg in &type_function.arguments {
-                    str.push_str(&format!("{},", arg._type.as_string()));
+                    str.push_str(&format!("{},", arg._type.id()));
                 }
 
                 str.push(')');
-                str.push_str(&type_function.return_type.as_string());
+                str.push_str(&type_function.return_type.id());
 
                 str
             }
-        }
+        };
+
+        self.alias
+            .as_ref()
+            .map(|v| format!("[{}]:{}", v, suffix))
+            .unwrap_or(suffix)
     }
 
     pub fn skip_escaped(&self) -> &Self {
@@ -579,18 +585,14 @@ impl Type {
             }
         }
 
-        match (&self.alias, &other.alias) {
-            (Some(a), Some(b)) => {
-                if a == b {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
+        let s_id = self.id();
+        let o_id = other.id();
 
-        match self.as_string() == other.as_string() {
+        match s_id == o_id {
             true => Ok(()),
-            false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
+            false => Err(anyhow!(
+                "equals: {self:#?} != {other:#?}, id {s_id} != {o_id}"
+            )),
         }
     }
 
@@ -931,7 +933,7 @@ impl<'a> IrParser<'a> {
         for block in &ast.impl_block_declarations {
             let _type = type_resolver.resolve(&block._type)?;
             for (k, v) in &block.functions {
-                impl_resolved.insert(_type.method_id_err(k)?, v);
+                impl_resolved.insert(_type.method_id(k), v);
             }
         }
 
@@ -1172,31 +1174,30 @@ impl<'a> IrParser<'a> {
                 let exp = self.get_expression(&dot_access.expression, expected_type)?;
                 let _type = exp._type(&self.variables)?;
 
-                if let Some(identifier) = _type.method_id(&dot_access.identifier) {
-                    if let Some(function_declaration) = self.impl_resolved.get(&identifier) {
-                        if let Expression::Variable(var) = &exp {
-                            self.variables.get_err(var)?.borrow_mut().escape();
-                        }
-
-                        let resolved_type_function = self.type_resolver.resolve_type_function(
-                            &function_declaration.arguments,
-                            &function_declaration.return_type,
-                        )?;
-
-                        let result_expression = Expression::Method(Box::new(Method {
-                            // type_id: _type.id.expect("method id returned"),
-                            _self: exp.ensure_address(&self.variables)?,
-                            function: ExpFunction {
-                                identifier,
-                                _type: resolved_type_function.to_function(),
-                            },
-                        }));
-
-                        return match expected_type {
-                            None => Ok(result_expression),
-                            Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
-                        };
+                let maybe_identifier = _type.method_id(&dot_access.identifier);
+                if let Some(function_declaration) = self.impl_resolved.get(&maybe_identifier) {
+                    if let Expression::Variable(var) = &exp {
+                        self.variables.get_err(var)?.borrow_mut().escape();
                     }
+
+                    let resolved_type_function = self.type_resolver.resolve_type_function(
+                        &function_declaration.arguments,
+                        &function_declaration.return_type,
+                    )?;
+
+                    let result_expression = Expression::Method(Box::new(Method {
+                        // type_id: _type.id.expect("method id returned"),
+                        _self: exp.ensure_address(&self.variables)?,
+                        function: ExpFunction {
+                            identifier: maybe_identifier,
+                            _type: resolved_type_function.to_function(),
+                        },
+                    }));
+
+                    return match expected_type {
+                        None => Ok(result_expression),
+                        Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
+                    };
                 }
 
                 return Ok(Expression::DotAccess(Box::new(DotAccess {
@@ -1450,8 +1451,7 @@ impl<'a> IrParser<'a> {
 
         Ok(Function {
             identifier: method_type
-                .map(|v| v.method_id_err(&declaration.identifier))
-                .transpose()?
+                .map(|v| v.method_id(&declaration.identifier))
                 .unwrap_or(declaration.identifier.clone()),
             arguments: arguments.iter().map(|v| v.borrow().clone()).collect(),
             return_type,
@@ -1491,7 +1491,7 @@ impl<'a> Ir<'a> {
             for (identifier, declaration) in &block.functions {
                 let function = IrParser::new(ast)?
                     .create_from_function_declaration(declaration, Some(&_type))?;
-                functions.insert(_type.method_id_err(identifier)?, function);
+                functions.insert(_type.method_id(identifier), function);
             }
         }
 
