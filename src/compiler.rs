@@ -1,200 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::{
-    ast::{self, Dfs, DfsMut},
-    lexer, vm,
-};
-
-#[derive(Debug, Clone)]
-struct VarStack<T> {
-    items: Vec<Vec<T>>,
-}
-
-impl<T> VarStack<T> {
-    fn new() -> Self {
-        let mut items = Vec::new();
-        items.push(Vec::new());
-        Self { items }
-    }
-
-    fn push(&mut self, item: T) {
-        self.items.last_mut().unwrap().push(item);
-    }
-
-    fn push_frame(&mut self) {
-        self.items.push(Vec::new());
-    }
-
-    fn pop_frame(&mut self) -> Option<Vec<T>> {
-        self.items.pop()
-    }
-}
-
-struct ClosureEscapedVariables<'a> {
-    closure: &'a ast::Closure,
-    var_stack: VarStack<String>,
-    not_found_variables: Vec<String>,
-}
-
-impl<'a> ClosureEscapedVariables<'a> {
-    fn new(closure: &'a ast::Closure) -> Self {
-        let mut var_stack = VarStack::new();
-
-        for var in &closure._type.closure_err().unwrap().arguments {
-            var_stack.push(var.identifier.clone());
-        }
-
-        Self {
-            closure,
-            var_stack,
-            not_found_variables: Vec::new(),
-        }
-    }
-
-    fn search(mut self) -> Vec<String> {
-        self.search_body(self.closure.body.iter());
-        self.not_found_variables
-    }
-}
-
-impl<'a, 'b> ast::DfsMut<'b> for ClosureEscapedVariables<'a> {
-    fn search_body(&mut self, body: impl Iterator<Item = &'b ast::Node>) -> ast::DfsRet {
-        self.var_stack.push_frame();
-        let result = ast::dfsret_search_body!(self, body);
-        self.var_stack.pop_frame();
-        result
-    }
-
-    fn search_expression_type(&mut self, _type: &ast::Type) -> ast::DfsRet {
-        let ast::Type::Alias(identifier) = _type else {
-            return ast::DfsRet::Continue;
-        };
-
-        if let None = self
-            .var_stack
-            .items
-            .iter()
-            .flatten()
-            .find(|v| *v == identifier)
-        {
-            self.not_found_variables.push(identifier.clone());
-        }
-
-        ast::DfsRet::Continue
-    }
-
-    fn search_node_variable_declaration(
-        &mut self,
-        declaration: &ast::VariableDeclaration,
-    ) -> ast::DfsRet {
-        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
-        self.var_stack.push(declaration.variable.identifier.clone());
-        ast::DfsRet::Continue
-    }
-}
-
-struct DoesVariableEscapeInClosure<'a, 'b>(&'b DoesVariableEscape<'a>);
-
-impl<'a, 'b, 'c> ast::Dfs<'c> for DoesVariableEscapeInClosure<'a, 'b> {
-    fn search_expression_type(&self, _type: &ast::Type) -> ast::DfsRet {
-        let ast::Type::Alias(identifier) = _type else {
-            return ast::DfsRet::Continue;
-        };
-
-        if self.0.identifier == identifier {
-            ast::DfsRet::Found
-        } else {
-            ast::DfsRet::Continue
-        }
-    }
-
-    fn search_node_variable_declaration(
-        &self,
-        declaration: &ast::VariableDeclaration,
-    ) -> ast::DfsRet {
-        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
-
-        if declaration.variable.identifier == self.0.identifier {
-            return ast::DfsRet::Break;
-        }
-
-        ast::DfsRet::Continue
-    }
-}
-
-struct DoesVariableEscape<'a> {
-    identifier: &'a str,
-}
-
-impl<'a> DoesVariableEscape<'a> {
-    fn new(identifier: &'a str) -> Self {
-        Self { identifier }
-    }
-
-    fn search(self, iter: impl Iterator<Item = &'a ast::Node>) -> bool {
-        match self.search_body(iter) {
-            ast::DfsRet::Found => true,
-            _ => false,
-        }
-    }
-}
-
-impl<'a, 'b> ast::Dfs<'b> for DoesVariableEscape<'a> {
-    fn search_expression_address(&self, exp: &ast::Expression) -> ast::DfsRet {
-        match exp {
-            ast::Expression::Type(_type) => {
-                if let ast::Type::Alias(identifier) = _type {
-                    if self.identifier == identifier {
-                        return ast::DfsRet::Found;
-                    }
-                }
-            }
-            ast::Expression::DotAccess(dot_access) => {
-                return self.search_expression_address(&dot_access.deepest().expression);
-            }
-            _ => {}
-        }
-
-        self.search_expression(exp)
-    }
-
-    fn search_node_variable_declaration(
-        &self,
-        declaration: &ast::VariableDeclaration,
-    ) -> ast::DfsRet {
-        ast::dfsret_return_if!(self.search_expression(&declaration.expression));
-
-        if declaration.variable.identifier == self.identifier {
-            return ast::DfsRet::Break;
-        }
-
-        ast::DfsRet::Continue
-    }
-
-    fn search_expression_closure(&self, closure: &'b ast::Closure) -> ast::DfsRet {
-        DoesVariableEscapeInClosure(self).search_expression_closure(closure)
-    }
-}
-
-struct CompilerBody {
-    i: usize,
-    body: Vec<ast::Node>,
-}
-
-impl CompilerBody {
-    fn new(body: Vec<ast::Node>) -> Self {
-        Self { body, i: 0 }
-    }
-
-    fn next(&mut self) {
-        self.i += 1;
-    }
-
-    fn does_variable_escape(&self, identifier: &str, skip: usize) -> bool {
-        DoesVariableEscape::new(identifier).search(self.body.iter().skip(self.i + skip))
-    }
-}
+use crate::{ir, lexer, vm};
 
 #[derive(Debug, Clone)]
 pub enum CompilerInstruction {
@@ -284,22 +91,20 @@ impl ScopedInstruction {
 enum VarStackItem {
     Increment(usize),
     Reset(usize),
-    Var(Variable),
+    Var(ir::Variable),
     Label,
 }
 
 #[derive(Debug, Clone)]
 struct CompilerVarStack {
-    stack: VarStack<VarStackItem>,
-    static_stack: VarStack<VarStackItem>,
+    stack: ir::Stack<VarStackItem>,
     arg_size: Option<usize>,
 }
 
 impl CompilerVarStack {
-    fn new(static_stack: VarStack<VarStackItem>) -> Self {
+    fn new() -> Self {
         Self {
-            stack: VarStack::new(),
-            static_stack,
+            stack: ir::Stack::new(),
             arg_size: None,
         }
     }
@@ -321,12 +126,7 @@ impl CompilerVarStack {
     }
 
     fn iter_rev(&self) -> impl Iterator<Item = &VarStackItem> {
-        self.static_stack
-            .items
-            .iter()
-            .chain(self.stack.items.iter())
-            .flatten()
-            .rev()
+        self.stack.items.iter().flatten().rev()
     }
 
     fn size_for<'a>(items: impl Iterator<Item = &'a VarStackItem>) -> usize {
@@ -338,7 +138,7 @@ impl CompilerVarStack {
         })
     }
 
-    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
+    fn get_var_offset(&self, identifier: &str) -> Option<(usize, &ir::Variable)> {
         let mut offset: isize = 0;
         for item in self.iter_rev() {
             match item {
@@ -461,15 +261,23 @@ impl StackInstructions {
     }
 }
 
-fn align(alignment: usize, stack_size: usize) -> usize {
-    if alignment == 0 || stack_size == 0 {
-        0
-    } else {
-        let modulo = stack_size % alignment;
-        if modulo == 0 {
-            0
-        } else {
-            alignment - modulo
+enum Function<'a> {
+    Function(&'a ir::Function),
+    Closure(&'a ir::Closure),
+}
+
+impl<'a> Function<'a> {
+    fn return_type(&self) -> &ir::Type {
+        match &self {
+            Self::Function(v) => &v.return_type,
+            Self::Closure(v) => &v._type.expect_closure().unwrap().return_type,
+        }
+    }
+
+    fn actions(&self) -> &[ir::Action] {
+        match &self {
+            Self::Function(v) => &v.actions,
+            Self::Closure(v) => &v.actions,
         }
     }
 }
@@ -480,15 +288,22 @@ struct Instructions {
     var_stack: CompilerVarStack,
 }
 
+impl ir::VariableStack for Instructions {
+    fn get_type(&self, identifier: &str) -> Option<ir::Type> {
+        let var = self.var_get_offset(identifier);
+        var.map(|v| v.1._type.clone())
+    }
+}
+
 impl Instructions {
-    fn new(static_var_stack: VarStack<VarStackItem>) -> Self {
+    fn new() -> Self {
         Self {
             stack_instructions: StackInstructions::new(),
-            var_stack: CompilerVarStack::new(static_var_stack),
+            var_stack: CompilerVarStack::new(),
         }
     }
 
-    fn var_mark(&mut self, var: Variable) {
+    fn var_mark(&mut self, var: ir::Variable) {
         self.var_stack.stack.push(VarStackItem::Var(var));
     }
 
@@ -496,8 +311,13 @@ impl Instructions {
         self.var_stack.stack.push(VarStackItem::Label);
     }
 
-    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &Variable)> {
+    fn var_get_offset(&self, identifier: &str) -> Option<(usize, &ir::Variable)> {
         self.var_stack.get_var_offset(identifier)
+    }
+
+    fn var_get_offset_err(&self, identifier: &str) -> Result<(usize, &ir::Variable)> {
+        self.var_get_offset(identifier)
+            .ok_or(anyhow!("var_get_offset_err: {identifier}"))
     }
 
     fn var_reset_label(&mut self) {
@@ -518,13 +338,15 @@ impl Instructions {
                 size, alignment,
             )));
         self.var_stack.stack.push(VarStackItem::Reset(size));
-        self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
     }
 
     fn instr_deref(&mut self, size: usize) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::Deref(size)));
-        self.var_stack.stack.push(VarStackItem::Reset(PTR_SIZE));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::PTR_SIZE));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
@@ -535,7 +357,7 @@ impl Instructions {
             )));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(PTR_SIZE + size));
+            .push(VarStackItem::Reset(ir::PTR_SIZE + size));
     }
 
     fn instr_slice_index_set(&mut self, size: usize) {
@@ -545,7 +367,7 @@ impl Instructions {
             )));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(size + SLICE_SIZE + INT.size));
+            .push(VarStackItem::Reset(size + ir::SLICE_SIZE + ir::INT.size));
     }
 
     fn instr_slice_index_get(&mut self, size: usize) {
@@ -555,15 +377,19 @@ impl Instructions {
             )));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
+            .push(VarStackItem::Reset(ir::INT.size + ir::SLICE_SIZE));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_slice_len(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::SliceLen));
-        self.var_stack.stack.push(VarStackItem::Reset(SLICE_SIZE));
-        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::SLICE_SIZE));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT.size));
     }
 
     fn instr_slice_append(&mut self, size: usize) {
@@ -573,19 +399,23 @@ impl Instructions {
             )));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(SLICE_SIZE + size));
+            .push(VarStackItem::Reset(ir::SLICE_SIZE + size));
     }
 
     fn instr_and(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::And));
-        self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::BOOL.size));
     }
 
     fn instr_or(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::Or));
-        self.var_stack.stack.push(VarStackItem::Reset(BOOL.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::BOOL.size));
     }
 
     fn instr_negate_bool(&mut self) {
@@ -618,8 +448,10 @@ impl Instructions {
             ));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(escaped_count * PTR_SIZE));
-        self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
+            .push(VarStackItem::Reset(escaped_count * ir::PTR_SIZE));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
     }
 
     fn instr_push_slice_new_len(&mut self, size: usize) {
@@ -629,39 +461,41 @@ impl Instructions {
             )));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(size + INT.size - SLICE_SIZE));
+            .push(VarStackItem::Reset(size + ir::INT.size - ir::SLICE_SIZE));
     }
 
     fn instr_push_slice(&mut self) {
-        self.push_alignment(SLICE_SIZE);
+        self.push_alignment(ir::SLICE_SIZE);
 
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::PushSlice));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(SLICE_SIZE));
+            .push(VarStackItem::Increment(ir::SLICE_SIZE));
     }
 
     fn instr_push_u8(&mut self, int: usize) -> Result<()> {
-        self.push_alignment(UINT8.alignment);
+        self.push_alignment(ir::UINT8.alignment);
         let uint8: u8 = int.try_into()?;
 
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::PushU8(uint8)));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(UINT8.size));
+            .push(VarStackItem::Increment(ir::UINT8.size));
 
         Ok(())
     }
 
     fn instr_push_i(&mut self, int: usize) -> Result<()> {
-        self.push_alignment(INT.alignment);
+        self.push_alignment(ir::INT.alignment);
         let int: isize = int.try_into()?;
 
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::PushI(int)));
-        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT.size));
 
         Ok(())
     }
@@ -674,49 +508,53 @@ impl Instructions {
     fn instr_add_i(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::AddI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
     }
 
     fn instr_multiply_i(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::MultiplyI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
     }
 
     fn instr_divide_i(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::DivideI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
     }
 
     fn instr_modulo_i(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::ModuloI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
     }
 
     fn instr_to_bool(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::ToBoolI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(BOOL.size));
+            .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
     fn instr_compare_i(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CompareI));
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size * 2));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(BOOL.size));
+            .push(VarStackItem::Reset(ir::INT.size * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
     fn instr_add_string(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::AddString));
-        self.var_stack.stack.push(VarStackItem::Reset(STRING.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::STRING.size));
     }
 
     fn instr_push_static(&mut self, index: usize, size: usize, alignment: usize) {
@@ -741,10 +579,10 @@ impl Instructions {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CastIntUint8));
 
-        self.var_stack.stack.push(VarStackItem::Reset(INT.size));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(UINT8.size));
+            .push(VarStackItem::Increment(ir::UINT8.size));
     }
 
     // align before calling this
@@ -752,8 +590,12 @@ impl Instructions {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CastUint8Int));
 
-        self.var_stack.stack.push(VarStackItem::Reset(UINT8.size));
-        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::UINT8.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT.size));
     }
 
     fn instr_cast_slice_ptr(&mut self) {
@@ -780,7 +622,7 @@ impl Instructions {
         self.stack_instructions.push(CompilerInstruction::Real(
             vm::Instruction::JumpAndLinkClosure,
         ));
-        self.var_stack.stack.push(VarStackItem::Reset(PTR_SIZE));
+        self.var_stack.stack.push(VarStackItem::Reset(ir::PTR_SIZE));
     }
 
     fn instr_shift(&mut self, size: usize, amount: usize) {
@@ -796,12 +638,14 @@ impl Instructions {
             .push(CompilerInstruction::Real(vm::Instruction::LibcWrite));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(INT.size + SLICE_SIZE));
-        self.var_stack.stack.push(VarStackItem::Increment(INT.size));
+            .push(VarStackItem::Reset(ir::INT.size + ir::SLICE_SIZE));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT.size));
     }
 
     fn push_alignment(&mut self, alignment: usize) -> usize {
-        let alignment = align(alignment, self.var_stack.total_size());
+        let alignment = ir::align(alignment, self.var_stack.total_size());
         if alignment != 0 {
             self.instr_increment(alignment);
         }
@@ -832,23 +676,33 @@ impl Instructions {
     }
 
     fn init_function_prologue(&mut self, function: &Function) -> Result<()> {
-        let mut escaped_variables: Vec<(String, Type)> = Vec::new();
         let mut argument_size: usize = 0;
 
-        for arg in &function.arguments {
-            let (escaped, _type) = {
-                if let TypeType::Escaped(_type) = arg._type._type.clone() {
-                    (true, *_type)
-                } else {
-                    (false, arg._type.clone())
-                }
-            };
-            let return_type = function.return_type.clone();
+        let return_type = match function {
+            Function::Function(function) => function.return_type.clone(),
+            Function::Closure(closure) => closure._type.expect_closure()?.return_type.clone(),
+        };
 
-            argument_size += _type.size;
+        let arguments: Vec<ir::Variable> = match function {
+            Function::Function(function) => function.arguments.iter().map(|v| v.clone()).collect(),
+            Function::Closure(closure) => closure
+                .arguments
+                .iter()
+                .map(|v| v.borrow().clone())
+                .collect(),
+        };
 
-            let alignment = align(
-                _type.alignment,
+        // arguments are pushed into the stack
+        for arg in &arguments {
+            // skipping escape here, because at this point,
+            // variable is not allocated on the heap yet
+            let mut arg = arg.clone();
+            arg._type = arg._type.skip_escaped().clone();
+
+            argument_size += arg._type.size;
+
+            let alignment = ir::align(
+                arg._type.alignment,
                 self.var_stack.total_size() + return_type.size,
             );
 
@@ -860,51 +714,64 @@ impl Instructions {
 
             self.var_stack
                 .stack
-                .push(VarStackItem::Increment(_type.size));
+                .push(VarStackItem::Increment(arg._type.size));
             self.var_mark(arg.clone());
-
-            if escaped {
-                escaped_variables.push((arg.identifier.clone(), _type));
-            }
         }
 
-        if argument_size < function.return_type.size {
-            self.var_stack.stack.push(VarStackItem::Increment(
-                function.return_type.size - argument_size,
-            ))
+        // return value is set in the arguments
+        // space is allocated if return value does not fit into arguments
+        if argument_size < return_type.size {
+            self.var_stack
+                .stack
+                .push(VarStackItem::Increment(return_type.size - argument_size))
         }
 
-        // return address
-        if function.identifier != "main" {
-            let alignment = align(PTR_SIZE, self.var_stack.total_size());
+        // add return address for all functions except for main function
+        // it does not have anywhere to return
+        let add_return_address = match function {
+            Function::Closure(_) => true,
+            Function::Function(function) => function.identifier != "main",
+        };
+
+        if add_return_address {
+            let alignment = ir::align(ir::PTR_SIZE, self.var_stack.total_size());
             if alignment != 0 {
                 self.var_stack
                     .stack
                     .push(VarStackItem::Increment(alignment));
             }
 
-            self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
+            self.var_stack
+                .stack
+                .push(VarStackItem::Increment(ir::PTR_SIZE));
         }
 
         self.var_stack.set_arg_size();
 
+        // for closures:
+        // escaped variables are pushed now
+        // these are already allocated to the heap
         // already aligned because of return address
-        for arg in &function.closure_arguments {
-            assert!(arg._type._type.is_escaped());
-            self.var_stack.stack.push(VarStackItem::Increment(PTR_SIZE));
-            self.var_mark(arg.clone());
+        if let Function::Closure(closure) = function {
+            for arg in &closure.escaped_variables {
+                assert!(arg.borrow()._type._type.is_escaped());
+                self.var_stack
+                    .stack
+                    .push(VarStackItem::Increment(ir::PTR_SIZE));
+                self.var_mark(arg.borrow().clone());
+            }
         }
 
-        for (identifier, _type) in escaped_variables {
-            let (offset, _) = self.var_get_offset(&identifier).unwrap();
-            let alignment = self.push_alignment(PTR_SIZE);
-            self.instr_increment(_type.size);
-            self.instr_copy(0, offset + _type.size + alignment, _type.size);
-            self.instr_alloc(_type.size, _type.alignment);
-            self.var_mark(Variable {
-                _type: Type::create_escaped(_type),
-                identifier,
-            });
+        // any escaped function arguments are allocated now, after return address
+        for arg in &arguments {
+            if let ir::TypeType::Escaped(_type) = &arg._type._type {
+                let (offset, _) = self.var_get_offset(&arg.identifier).unwrap();
+                let alignment = self.push_alignment(ir::PTR_SIZE);
+                self.instr_increment(_type.size);
+                self.instr_copy(0, offset + _type.size + alignment, _type.size);
+                self.instr_alloc(_type.size, _type.alignment);
+                self.var_mark(arg.clone());
+            }
         }
 
         Ok(())
@@ -916,7 +783,12 @@ impl Instructions {
                 self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
             )));
 
-        if function.identifier == "main" {
+        let is_main = match function {
+            Function::Function(function) => function.identifier == "main",
+            Function::Closure(_) => false,
+        };
+
+        if is_main {
             self.stack_instructions
                 .push(CompilerInstruction::Real(vm::Instruction::Exit));
         } else {
@@ -929,108 +801,6 @@ impl Instructions {
         self.stack_instructions.instructions
     }
 }
-
-#[derive(Debug, Clone, PartialEq)]
-enum TypeStructField {
-    Type(String, Type),
-    Padding(usize),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct TypeStruct {
-    fields: Vec<TypeStructField>,
-}
-
-impl TypeStruct {
-    fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
-        let mut offset = 0;
-
-        for field in self.fields.iter().rev() {
-            match field {
-                TypeStructField::Padding(padding) => offset += padding,
-                TypeStructField::Type(iden, _type) => {
-                    if iden == identifier {
-                        return Some((offset, _type));
-                    }
-                    offset += _type.size;
-                }
-            }
-        }
-
-        None
-    }
-
-    fn get_field_offset_err(&self, identifier: &str) -> Result<(usize, &Type)> {
-        self.get_field_offset(identifier)
-            .ok_or(anyhow!("get_field_offset_err: not found {identifier}"))
-    }
-
-    fn identifier_field_count(&self) -> usize {
-        // - 1 there is padding at the end
-        // / 2 every field has padding before
-        (self.fields.len() - 1) / 2
-    }
-}
-
-lazy_static::lazy_static! {
-    static ref NIL: Type = Type {
-        id: Some("nil".to_string()),
-        size: PTR_SIZE,
-        alignment: PTR_SIZE,
-        _type: TypeType::Builtin(TypeBuiltin::Nil),
-    };
-    static ref UINT: Type = Type {
-        id: Some("uint".to_string()),
-        size: size_of::<usize>(),
-        alignment: size_of::<usize>(),
-        _type: TypeType::Builtin(TypeBuiltin::Uint),
-    };
-    static ref UINT8: Type = Type {
-        id: Some("uint8".to_string()),
-        size: 1,
-        alignment: 1,
-        _type: TypeType::Builtin(TypeBuiltin::Uint8),
-    };
-    static ref INT: Type = Type {
-        id: Some("int".to_string()),
-        size: size_of::<isize>(),
-        alignment: size_of::<isize>(),
-        _type: TypeType::Builtin(TypeBuiltin::Int),
-    };
-    static ref BOOL: Type = Type {
-        id: Some("bool".to_string()),
-        size: size_of::<usize>(),      // for now
-        alignment: size_of::<usize>(), // for now
-        _type: TypeType::Builtin(TypeBuiltin::Bool),
-    };
-    static ref STRING: Type = Type {
-        id: Some("string".to_string()),
-        size: size_of::<usize>(),
-        alignment: size_of::<usize>(),
-        _type: TypeType::Builtin(TypeBuiltin::String),
-    };
-    static ref COMPILER_TYPE: Type = Type {
-        id: Some("Type".to_string()),
-        size: 0,
-        alignment: 0,
-        _type: TypeType::Builtin(TypeBuiltin::CompilerType),
-    };
-    static ref VOID: Type = Type {
-        id: Some("void".to_string()),
-        size: 0,
-        alignment: 0,
-        _type: TypeType::Builtin(TypeBuiltin::Void),
-    };
-    static ref PTR: Type = Type {
-        id: Some("ptr".to_string()),
-        size: PTR_SIZE,
-        alignment: PTR_SIZE,
-        _type: TypeType::Builtin(TypeBuiltin::Ptr),
-    };
-}
-
-const SLICE_SIZE: usize = size_of::<usize>();
-const PTR_SIZE: usize = size_of::<usize>();
 
 #[derive(Debug, Clone, PartialEq)]
 enum TypeBuiltin {
@@ -1047,298 +817,36 @@ enum TypeBuiltin {
 
 #[derive(Debug, Clone, PartialEq)]
 struct TypeClosure {
-    arguments: Vec<(String, Type)>,
-    return_type: Type,
+    arguments: Vec<(String, ir::Type)>,
+    return_type: ir::Type,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum TypeType {
-    Struct(TypeStruct),
-    Variadic(Box<Type>),
-    Slice(Box<Type>),
-    Builtin(TypeBuiltin),
-    Address(Box<Type>),
-    Lazy(String),
-    Closure(Box<TypeClosure>),
-    Escaped(Box<Type>),
+struct TypeCast<'a> {
+    expression: &'a ir::Expression,
+    _type: &'a ir::Type,
 }
 
-impl TypeType {
-    fn closure_err(self) -> Result<TypeClosure> {
-        match self {
-            Self::Closure(v) => Ok(*v),
-            _type => Err(anyhow!("closure_err: got {_type:#?}")),
-        }
-    }
-
-    fn is_escaped(&self) -> bool {
-        match self {
-            Self::Escaped(_) => true,
-            _ => false,
-        }
-    }
+enum FunctionCallType<'a> {
+    Function(&'a ir::ExpFunction),
+    Closure(&'a ir::Expression),
+    Method(&'a ir::Method),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct Type {
-    // None for inline types
-    id: Option<String>,
-    size: usize,
-    alignment: usize,
-    _type: TypeType,
-}
-
-impl Type {
-    fn create_variadic(item: Self) -> Self {
-        Self {
-            id: item.id.as_ref().map(|id| id.clone() + "..."),
-            size: SLICE_SIZE,
-            alignment: SLICE_SIZE,
-            _type: TypeType::Variadic(Box::new(item)),
-        }
-    }
-
-    fn create_address(item: Self) -> Self {
-        Self {
-            id: item.id.as_ref().map(|id| id.clone() + "&"),
-            size: PTR_SIZE,
-            alignment: PTR_SIZE,
-            _type: TypeType::Address(Box::new(item)),
-        }
-    }
-
-    fn create_escaped(item: Self) -> Self {
-        Self {
-            id: item.id.clone(),
-            size: PTR_SIZE,
-            alignment: PTR_SIZE,
-            _type: TypeType::Escaped(Box::new(item)),
-        }
-    }
-
-    fn equals(&self, other: &Self) -> Result<()> {
-        // todo: do this the other way around
-        if let TypeType::Builtin(builtin) = &self._type {
-            if let TypeBuiltin::Nil = builtin {
-                if let TypeType::Address(_) = &other._type {
-                    return Ok(());
-                }
-            }
-        }
-
-        match (&self.id, &other.id) {
-            (Some(self_id), Some(other_id)) => {
-                return match self_id == other_id {
-                    true => Ok(()),
-                    false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
-                }
-            }
-            _ => {}
-        }
-
-        let mut self_clone = self.clone();
-        let mut other_clone = other.clone();
-
-        self_clone.id = None;
-        other_clone.id = None;
-
-        match other == self {
-            true => Ok(()),
-            false => Err(anyhow!("equals: {self:#?} != {other:#?}")),
-        }
-    }
-
-    fn extract_variadic(&self) -> Option<&Self> {
-        match &self._type {
-            TypeType::Variadic(item) => Some(&item),
-            _ => None,
-        }
-    }
-
-    fn resolve_lazy(self, type_resolver: &TypeResolver) -> Result<Self> {
-        match self._type {
-            TypeType::Lazy(alias) => type_resolver.resolve(&ast::Type::Alias(alias)),
-            _ => Ok(self),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct TypeResolver {
-    type_declarations: HashMap<String, ast::Type>,
-}
-
-impl TypeResolver {
-    pub fn new(type_declarations: HashMap<String, ast::Type>) -> Self {
-        Self { type_declarations }
-    }
-
-    fn resolve(&self, _type: &ast::Type) -> Result<Type> {
-        self.resolve_with_alias(_type, None)
-    }
-
-    fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
-        match _type {
-            ast::Type::Alias(inner_alias) => {
-                match inner_alias.as_str() {
-                    "uint" => return Ok(UINT.clone()),
-                    "uint8" => return Ok(UINT8.clone()),
-                    "int" => return Ok(INT.clone()),
-                    "bool" => return Ok(BOOL.clone()),
-                    "string" => return Ok(STRING.clone()),
-                    "Type" => return Ok(COMPILER_TYPE.clone()),
-                    "void" => return Ok(VOID.clone()),
-                    "ptr" => return Ok(PTR.clone()),
-                    _ => {}
-                };
-
-                let inner = self
-                    .type_declarations
-                    .get(inner_alias)
-                    .ok_or(anyhow!("can't resolve {inner_alias:#?}"))?;
-
-                if let Some(alias) = alias {
-                    if alias == inner_alias {
-                        match inner {
-                            ast::Type::Struct(_) => {}
-                            _ => panic!("recursive non struct?"),
-                        }
-
-                        return Ok(Type {
-                            id: Some(alias.to_string() + "{}"),
-                            size: 0,
-                            alignment: 0,
-                            _type: TypeType::Lazy(alias.to_string()),
-                        });
-                    }
-                }
-
-                self.resolve_with_alias(&inner, Some(inner_alias))
-            }
-            ast::Type::Slice(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
-                Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "[]"),
-                    size: SLICE_SIZE,
-                    alignment: SLICE_SIZE,
-                    _type: TypeType::Slice(Box::new(nested)),
-                })
-            }
-            ast::Type::Variadic(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
-                Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "..."),
-                    size: size_of::<usize>(),
-                    alignment: size_of::<usize>(),
-                    _type: TypeType::Variadic(Box::new(nested)),
-                })
-            }
-            ast::Type::Struct(type_struct) => {
-                let mut fields: Vec<TypeStructField> = Vec::new();
-                let mut size: usize = 0;
-                let mut highest_alignment: usize = 0;
-
-                for var in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(&var._type, alias)?;
-                    if resolved.alignment > highest_alignment {
-                        highest_alignment = resolved.alignment;
-                    }
-
-                    let alignment = align(resolved.alignment, size);
-                    size += resolved.size;
-                    size += alignment;
-                    fields.push(TypeStructField::Padding(alignment));
-                    fields.push(TypeStructField::Type(var.identifier.clone(), resolved));
-                }
-
-                let end_padding = align(highest_alignment, size);
-                size += end_padding;
-                fields.push(TypeStructField::Padding(end_padding));
-
-                Ok(Type {
-                    id: alias.map(|id| id.to_string() + "{}"),
-                    size,
-                    alignment: highest_alignment,
-                    _type: TypeType::Struct(TypeStruct { fields }),
-                })
-            }
-            ast::Type::Address(_type) => {
-                let nested = self.resolve_with_alias(_type, alias)?;
-                Ok(Type {
-                    id: nested.id.as_ref().map(|id| id.clone() + "&"),
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Address(Box::new(nested)),
-                })
-            }
-            ast::Type::Closure(type_closure) => {
-                let mut arguments = Vec::new();
-
-                let mut id = String::from("fn (");
-                for var in &type_closure.arguments {
-                    let resolved = self.resolve_with_alias(&var._type, alias)?;
-                    id.push_str(
-                        resolved
-                            .id
-                            .as_ref()
-                            .ok_or(anyhow!("resolve_closure: type without id"))?,
-                    );
-                    id.push(',');
-                    arguments.push((var.identifier.clone(), resolved));
-                }
-                id.push(')');
-
-                let resolved_return_type =
-                    self.resolve_with_alias(&type_closure.return_type, alias)?;
-
-                id.push_str(
-                    resolved_return_type
-                        .id
-                        .as_ref()
-                        .ok_or(anyhow!("resolve_closure: return type without id"))?,
-                );
-
-                Ok(Type {
-                    id: Some(id),
-                    size: PTR_SIZE,
-                    alignment: PTR_SIZE,
-                    _type: TypeType::Closure(Box::new(TypeClosure {
-                        arguments,
-                        return_type: resolved_return_type,
-                    })),
-                })
-            }
-        }
-    }
-}
-
-struct FunctionCall {
-    // None means closure call
-    declaration: Option<ast::FunctionDeclaration>,
-    call: ast::Call,
-}
-
-struct TypeCast {
-    expression: ast::Expression,
-    _type: Type,
-}
-
-#[derive(Debug, Clone)]
-struct Variable {
-    _type: Type,
-    identifier: String,
+struct FunctionCall<'a> {
+    arguments: &'a [ir::Expression],
+    call_type: FunctionCallType<'a>,
 }
 
 #[derive(Debug)]
 enum DotAccessField {
     // offset from the stack
-    Stack(usize, Type),
+    Stack(usize, ir::Type),
     // offset address is on top of the stack
-    Heap(Type),
+    Heap(ir::Type),
 }
 
 impl DotAccessField {
-    fn _type(&self) -> &Type {
+    fn _type(&self) -> &ir::Type {
         match self {
             Self::Stack(_, _type) => _type,
             Self::Heap(_type) => _type,
@@ -1346,134 +854,37 @@ impl DotAccessField {
     }
 }
 
-pub struct Function {
-    identifier: String,
-    arguments: Vec<Variable>,
-    closure_arguments: Vec<Variable>,
-    return_type: Type,
-    body: Vec<ast::Node>,
-}
-
-impl Function {
-    pub fn from_declaration(
-        type_resolver: &TypeResolver,
-        declaration: &ast::FunctionDeclaration,
-    ) -> Result<Self> {
-        Ok(Self {
-            identifier: declaration.identifier.clone(),
-            body: declaration.body.clone(),
-            return_type: type_resolver.resolve(&declaration.return_type)?,
-            closure_arguments: Vec::new(),
-            arguments: declaration
-                .arguments
-                .iter()
-                .map(|v| {
-                    let escaped =
-                        DoesVariableEscape::new(&v.identifier).search(declaration.body.iter());
-
-                    let mut _type = type_resolver.resolve(&v._type)?;
-                    if escaped {
-                        _type = Type::create_escaped(_type);
-                    }
-
-                    Ok(Variable {
-                        _type,
-                        identifier: v.identifier.clone(),
-                    })
-                })
-                .collect::<Result<_, anyhow::Error>>()?,
-        })
-    }
-
-    fn from_closure(
-        type_resolver: &TypeResolver,
-        closure: &ast::Closure,
-        closure_arguments: Vec<Variable>,
-    ) -> Result<Self> {
-        let closure_type = type_resolver
-            .resolve(&closure._type)?
-            ._type
-            .closure_err()
-            .unwrap();
-
-        Ok(Self {
-            identifier: "".to_string(), // todo??? what to do
-            body: closure.body.clone(),
-            return_type: closure_type.return_type.clone(),
-            closure_arguments,
-            arguments: closure_type
-                .arguments
-                .iter()
-                .map(|(identifier, _type)| {
-                    let escaped = DoesVariableEscape::new(identifier).search(closure.body.iter());
-
-                    let mut _type = _type.clone();
-                    if escaped {
-                        _type = Type::create_escaped(_type);
-                    }
-
-                    Variable {
-                        _type,
-                        identifier: identifier.clone(),
-                    }
-                })
-                .collect(),
-        })
-    }
-}
-
-struct ExpressionCompiler<'a> {
+struct ExpressionCompiler<'a, 'b> {
     instructions: &'a mut Instructions,
     closures: &'a mut Vec<CompiledInstructions>,
-    type_resolver: Rc<TypeResolver>,
-    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    ir: &'b ir::Ir<'b>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
-impl<'a> ExpressionCompiler<'a> {
+impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn new(
         instructions: &'a mut Instructions,
         closures: &'a mut Vec<CompiledInstructions>,
-        type_resolver: Rc<TypeResolver>,
-        function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+        ir: &'b ir::Ir<'b>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
     ) -> Self {
         Self {
             instructions,
             closures,
-            type_resolver,
-            function_declarations,
+            ir,
             static_memory,
         }
     }
 
-    fn compile_nil(&mut self) -> Result<Type> {
+    fn compile_nil(&mut self) -> Result<ir::Type> {
         self.instructions.instr_push_i(0)?;
-        Ok(NIL.clone())
+        Ok(ir::NIL.clone())
     }
 
-    fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
-        let ast::Type::Alias(identifier) = _type else {
-            return Err(anyhow!("resolve_variable: cant resolve non alias"));
-        };
-
-        let variable = self
-            .instructions
-            .var_get_offset(identifier)
-            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
-
-        Ok((variable.0, variable.1.clone()))
-    }
-
-    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        self.type_resolver.resolve(_type)
-    }
-
-    fn compile_closure(&mut self, closure: &ast::Closure) -> Result<Type> {
-        self.instructions.push_alignment(PTR_SIZE);
+    fn compile_closure(&mut self, closure: &ir::Closure) -> Result<ir::Type> {
+        self.instructions.push_alignment(ir::PTR_SIZE);
 
         // right now all nested closures capture everything inside them
-        // todo: find solution for this
         //
         // let foo = 20
         // fn() void { <- this closure does not need to capture "foo" (BUT IT DOES)
@@ -1481,76 +892,73 @@ impl<'a> ExpressionCompiler<'a> {
         //    foo = 50
         //  }
         // }
-        //
-        // is it even possible to fix this? closures are created lazily right now, so outer HAS to
-        // have inner values for it to copy them from the stack into nested closure
-        let escaped_variables = ClosureEscapedVariables::new(closure)
-            .search()
-            .into_iter()
-            .map(|v| {
-                let (offset, variable) = self.resolve_variable(&ast::Type::Alias(v))?;
-                assert!(
-                    variable._type._type.is_escaped(),
-                    "found non escaped variable when compiling closure",
-                );
 
-                self.instructions.instr_increment(PTR_SIZE);
-                self.instructions.instr_copy(0, PTR_SIZE + offset, PTR_SIZE);
+        for escaped in &closure.escaped_variables {
+            assert!(
+                escaped.borrow()._type._type.is_escaped(),
+                "found non escaped variable when compiling closure",
+            );
 
-                Ok(variable)
-            })
-            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+            let (offset, _) = self
+                .instructions
+                .var_get_offset_err(&escaped.borrow().identifier)?;
+
+            self.instructions.instr_increment(ir::PTR_SIZE);
+            self.instructions
+                .instr_copy(0, ir::PTR_SIZE + offset, ir::PTR_SIZE);
+        }
 
         self.instructions
-            .instr_push_closure(escaped_variables.len(), self.closures.len());
+            .instr_push_closure(closure.escaped_variables.len(), self.closures.len());
 
-        let closure_function =
-            Function::from_closure(&self.type_resolver, &closure, escaped_variables).unwrap();
+        let closure_type = closure._type.clone();
 
         self.closures.push(
             FunctionCompiler::new(
-                closure_function,
-                self.instructions.var_stack.static_stack.clone(),
+                Function::Closure(closure),
                 self.static_memory.clone(),
-                self.type_resolver.clone(),
-                self.function_declarations.clone(),
+                self.ir,
             )
             .compile()?,
         );
 
-        Ok(self.resolve_type(&closure._type)?)
+        Ok(closure_type)
     }
 
-    fn compile_variable(&mut self, mut offset: usize, variable: &Variable) -> Result<Type> {
-        if let TypeType::Escaped(_type) = &variable._type._type {
+    fn compile_variable(&mut self, identifier: &str) -> Result<ir::Type> {
+        let (_, variable) = self.instructions.var_get_offset_err(identifier)?;
+        let variable = variable.clone();
+
+        if let ir::TypeType::Escaped(_type) = &variable._type._type {
             // this will leak alignment
-            let alignment = self.instructions.push_alignment(PTR_SIZE);
-            self.instructions.instr_increment(PTR_SIZE);
-            self.instructions
-                .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
+            self.instructions.push_alignment(ir::PTR_SIZE);
+            self.instructions.instr_increment(ir::PTR_SIZE);
+
+            let (offset, _) = self.instructions.var_get_offset_err(&variable.identifier)?;
+            self.instructions.instr_copy(0, offset, ir::PTR_SIZE);
             self.instructions.instr_deref(_type.size);
 
             return Ok(*_type.clone());
         }
 
-        offset += self.instructions.push_alignment(variable._type.alignment);
+        self.instructions.push_alignment(variable._type.alignment);
         self.instructions.instr_increment(variable._type.size);
-        self.instructions
-            .instr_copy(0, offset + variable._type.size, variable._type.size);
+
+        let (offset, _) = self.instructions.var_get_offset_err(&variable.identifier)?;
+        self.instructions.instr_copy(0, offset, variable._type.size);
 
         Ok(variable._type.clone())
     }
 
     fn compile_dot_access_field_offset_base_heap(
         &mut self,
-        dot_access: &ast::DotAccess,
-        type_struct: &TypeStruct,
-        offset: usize,
-    ) -> Result<Type> {
-        let alignment = self.instructions.push_alignment(PTR_SIZE);
-        self.instructions.instr_increment(PTR_SIZE);
+        dot_access: &ir::DotAccess,
+        type_struct: &ir::TypeStruct,
+    ) -> Result<ir::Type> {
+        let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
+        self.instructions.instr_increment(ir::PTR_SIZE);
         self.instructions
-            .instr_copy(0, alignment + PTR_SIZE + offset, PTR_SIZE);
+            .instr_copy(0, alignment + ir::PTR_SIZE, ir::PTR_SIZE);
 
         let (field_offset, field_type) =
             type_struct.get_field_offset_err(&dot_access.identifier)?;
@@ -1562,16 +970,16 @@ impl<'a> ExpressionCompiler<'a> {
 
     fn compile_dot_access_field_offset(
         &mut self,
-        dot_access: &ast::DotAccess,
+        dot_access: &ir::DotAccess,
     ) -> Result<DotAccessField> {
-        if let ast::Expression::DotAccess(inner) = &dot_access.expression {
+        if let ir::Expression::DotAccess(inner) = &dot_access.expression {
             let target_field = self.compile_dot_access_field_offset(inner)?;
             let target_type = target_field._type();
 
             match &target_field {
                 DotAccessField::Heap(_type) => match &target_type._type {
                     // target heap -> current stack = offset address
-                    TypeType::Struct(type_struct) => {
+                    ir::TypeType::Struct(type_struct) => {
                         let (offset, field_type) =
                             type_struct.get_field_offset_err(&dot_access.identifier)?;
                         self.instructions.instr_offset(offset);
@@ -1579,18 +987,18 @@ impl<'a> ExpressionCompiler<'a> {
                         return Ok(DotAccessField::Heap(field_type.clone()));
                     }
                     // target heap -> current heap = dereference + offset
-                    TypeType::Address(address_type) => {
+                    ir::TypeType::Address(address_type) => {
                         let address_type =
-                            address_type.clone().resolve_lazy(&self.type_resolver)?;
+                            address_type.clone().resolve_lazy(&self.ir.type_resolver)?;
 
-                        let TypeType::Struct(type_struct) = &address_type._type else {
+                        let ir::TypeType::Struct(type_struct) = &address_type._type else {
                             return Err(anyhow!("cant dot access non struct type"));
                         };
 
                         let (offset, field_type) =
                             type_struct.get_field_offset_err(&dot_access.identifier)?;
 
-                        self.instructions.instr_deref(PTR_SIZE);
+                        self.instructions.instr_deref(ir::PTR_SIZE);
                         self.instructions.instr_offset(offset);
 
                         return Ok(DotAccessField::Heap(field_type.clone()));
@@ -1601,7 +1009,7 @@ impl<'a> ExpressionCompiler<'a> {
                 },
                 DotAccessField::Stack(stack_offset, _type) => match &target_type._type {
                     // target stack -> current stack = offset stack
-                    TypeType::Struct(type_struct) => {
+                    ir::TypeType::Struct(type_struct) => {
                         let (offset, field_type) =
                             type_struct.get_field_offset_err(&dot_access.identifier)?;
 
@@ -1611,16 +1019,16 @@ impl<'a> ExpressionCompiler<'a> {
                         ));
                     }
                     // target stack -> current heap = offset
-                    TypeType::Address(address_type) => {
-                        let alignment = self.instructions.push_alignment(PTR_SIZE);
-                        self.instructions.instr_increment(PTR_SIZE);
+                    ir::TypeType::Address(address_type) => {
+                        let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
+                        self.instructions.instr_increment(ir::PTR_SIZE);
                         self.instructions.instr_copy(
                             0,
-                            alignment + PTR_SIZE + *stack_offset,
-                            PTR_SIZE,
+                            alignment + ir::PTR_SIZE + *stack_offset,
+                            ir::PTR_SIZE,
                         );
 
-                        let TypeType::Struct(type_struct) = &address_type._type else {
+                        let ir::TypeType::Struct(type_struct) = &address_type._type else {
                             return Err(anyhow!("dot access on non struct/address type"));
                         };
 
@@ -1637,33 +1045,25 @@ impl<'a> ExpressionCompiler<'a> {
             }
         }
 
-        let ast::Expression::Type(_type) = &dot_access.expression else {
-            return Err(anyhow!("cant dot access non Type"));
-        };
-        let (offset, variable) = self.resolve_variable(_type)?;
+        let exp = self.compile_expression(&dot_access.expression)?;
 
-        if let TypeType::Escaped(_type) = variable._type._type {
+        if let ir::TypeType::Escaped(_type) = exp._type {
             match _type._type {
-                TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
-                    self.compile_dot_access_field_offset_base_heap(
-                        dot_access,
-                        &type_struct,
-                        offset,
-                    )?,
+                ir::TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
+                    self.compile_dot_access_field_offset_base_heap(dot_access, &type_struct)?,
                 )),
-                TypeType::Address(_type) => match _type._type {
-                    TypeType::Struct(type_struct) => {
-                        let alignment = self.instructions.push_alignment(PTR_SIZE);
-                        self.instructions.instr_increment(PTR_SIZE);
+                ir::TypeType::Address(_type) => match _type._type {
+                    ir::TypeType::Struct(type_struct) => {
+                        let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
+                        self.instructions.instr_increment(ir::PTR_SIZE);
                         self.instructions
-                            .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
-                        self.instructions.instr_deref(PTR_SIZE);
+                            .instr_copy(0, ir::PTR_SIZE + alignment, ir::PTR_SIZE);
+                        self.instructions.instr_deref(ir::PTR_SIZE);
 
                         Ok(DotAccessField::Heap(
                             self.compile_dot_access_field_offset_base_heap(
                                 dot_access,
                                 &type_struct,
-                                0,
                             )?,
                         ))
                     }
@@ -1672,23 +1072,16 @@ impl<'a> ExpressionCompiler<'a> {
                 _type => Err(anyhow!("cant access non struct/address type: {_type:#?}")),
             }
         } else {
-            match variable._type._type {
-                TypeType::Struct(type_struct) => {
+            match exp._type {
+                ir::TypeType::Struct(type_struct) => {
                     let (field_offset, field_type) =
                         type_struct.get_field_offset_err(&dot_access.identifier)?;
 
-                    Ok(DotAccessField::Stack(
-                        offset + field_offset,
-                        field_type.clone(),
-                    ))
+                    Ok(DotAccessField::Stack(field_offset, field_type.clone()))
                 }
-                TypeType::Address(_type) => match _type._type {
-                    TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
-                        self.compile_dot_access_field_offset_base_heap(
-                            dot_access,
-                            &type_struct,
-                            offset,
-                        )?,
+                ir::TypeType::Address(_type) => match _type._type {
+                    ir::TypeType::Struct(type_struct) => Ok(DotAccessField::Heap(
+                        self.compile_dot_access_field_offset_base_heap(dot_access, &type_struct)?,
                     )),
                     _type => Err(anyhow!("cant access non struct type: {_type:#?}")),
                 },
@@ -1697,28 +1090,24 @@ impl<'a> ExpressionCompiler<'a> {
         }
     }
 
-    fn compile_type(&mut self, _type: &ast::Type) -> Result<Type> {
-        let (offset, variable) = self.resolve_variable(_type)?;
-        self.compile_variable(offset, &variable)
-    }
-
-    fn compile_address(&mut self, expression: &ast::Expression) -> Result<Type> {
+    fn compile_address(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         match expression {
-            ast::Expression::Type(_type) => {
-                let (offset, var) = self.resolve_variable(_type)?;
+            ir::Expression::Variable(identifier) => {
+                let (offset, var) = self.instructions.var_get_offset_err(identifier)?;
+                let var = var.clone();
 
-                let TypeType::Escaped(_type) = var._type._type else {
+                let ir::TypeType::Escaped(_type) = &var._type._type else {
                     return Err(anyhow!("compile_address: rn all variables are escaped"));
                 };
 
-                let alignment = self.instructions.push_alignment(PTR_SIZE);
-                self.instructions.instr_increment(PTR_SIZE);
+                let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
+                self.instructions.instr_increment(ir::PTR_SIZE);
                 self.instructions
-                    .instr_copy(0, offset + PTR_SIZE + alignment, PTR_SIZE);
+                    .instr_copy(0, offset + ir::PTR_SIZE + alignment, ir::PTR_SIZE);
 
-                Ok(Type::create_address(*_type))
+                Ok(ir::Type::create_address(*_type.clone()))
             }
-            ast::Expression::DotAccess(dot_access) => {
+            ir::Expression::DotAccess(dot_access) => {
                 let field = self.compile_dot_access_field_offset(dot_access)?;
                 let DotAccessField::Heap(_type) = field else {
                     return Err(anyhow!(
@@ -1726,24 +1115,21 @@ impl<'a> ExpressionCompiler<'a> {
                     ));
                 };
 
-                Ok(Type::create_address(_type))
-            }
-            ast::Expression::Address(_) => {
-                Err(anyhow!("compile_address: cant take address of this"))
+                Ok(ir::Type::create_address(_type))
             }
             expression => {
-                self.instructions.push_alignment(PTR_SIZE);
+                self.instructions.push_alignment(ir::PTR_SIZE);
                 let exp = self.compile_expression(expression)?;
                 self.instructions.instr_alloc(exp.size, exp.alignment);
 
-                Ok(Type::create_address(exp))
+                Ok(ir::Type::create_address(exp))
             }
         }
     }
 
-    fn compile_deref(&mut self, expression: &ast::Expression) -> Result<Type> {
+    fn compile_deref(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         let exp = self.compile_expression(expression)?;
-        let TypeType::Address(_type) = exp._type else {
+        let ir::TypeType::Address(_type) = exp._type else {
             return Err(anyhow!(
                 "compile_deref: can't dereference non address types"
             ));
@@ -1754,7 +1140,7 @@ impl<'a> ExpressionCompiler<'a> {
         Ok(*_type)
     }
 
-    fn compile_dot_access(&mut self, dot_access: &ast::DotAccess) -> Result<Type> {
+    fn compile_dot_access(&mut self, dot_access: &ir::DotAccess) -> Result<ir::Type> {
         let field = self.compile_dot_access_field_offset(dot_access)?;
 
         match field {
@@ -1776,10 +1162,8 @@ impl<'a> ExpressionCompiler<'a> {
         }
     }
 
-    fn compile_struct_init(&mut self, struct_init: &ast::StructInit) -> Result<Type> {
-        let resolved_type = self.resolve_type(&struct_init._type)?;
-
-        let TypeType::Struct(type_struct) = &resolved_type._type else {
+    fn compile_struct_init(&mut self, struct_init: &ir::StructInit) -> Result<ir::Type> {
+        let ir::TypeType::Struct(type_struct) = &struct_init._type._type else {
             panic!("compile_struct_init: incorrect type wrong ast parser");
         };
 
@@ -1791,53 +1175,53 @@ impl<'a> ExpressionCompiler<'a> {
 
         for field in &type_struct.fields {
             match field {
-                TypeStructField::Padding(padding) => {
+                ir::TypeStructField::Padding(padding) => {
                     self.instructions.instr_increment(*padding);
                 }
-                TypeStructField::Type(identifier, _type) => {
+                ir::TypeStructField::Type(identifier, _type) => {
                     let exp = struct_init.fields.get(identifier).ok_or(anyhow!(
                         "compile_struct_init: initialization field not found"
                     ))?;
 
                     let exp_type = self.compile_expression(exp)?;
-                    exp_type.equals(_type)?;
+                    exp_type.must_equal(_type)?;
                 }
             }
         }
 
-        Ok(resolved_type)
+        Ok(struct_init._type.clone())
     }
 
-    fn compile_spread(&mut self, expression: &ast::Expression) -> Result<Type> {
+    fn compile_spread(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         let exp = self.compile_expression(expression)?;
 
-        let TypeType::Slice(slice_item) = exp._type else {
+        let ir::TypeType::Slice(slice_item) = exp._type else {
             return Err(anyhow!("compile_spread: can only spread slice types"));
         };
 
-        Ok(Type::create_variadic(*slice_item))
+        Ok(ir::Type::create_variadic(*slice_item))
     }
 
-    fn compile_negate(&mut self, negate: &ast::Expression) -> Result<Type> {
+    fn compile_negate(&mut self, negate: &ir::Expression) -> Result<ir::Type> {
         let exp_bool = self.compile_expression(negate)?;
-        if exp_bool != *BOOL {
+        if exp_bool != *ir::BOOL {
             return Err(anyhow!("can only negate bools"));
         }
 
         self.instructions.instr_negate_bool();
 
-        Ok(BOOL.clone())
+        Ok(ir::BOOL.clone())
     }
 
-    fn compile_expression_index(&mut self, index: &ast::Index) -> Result<Type> {
+    fn compile_expression_index(&mut self, index: &ir::Index) -> Result<ir::Type> {
         let exp_var = self.compile_expression(&index.var)?;
 
-        let TypeType::Slice(expected_type) = exp_var._type else {
+        let ir::TypeType::Slice(expected_type) = exp_var._type else {
             return Err(anyhow!("can't index this type"));
         };
 
         let exp_index = self.compile_expression(&index.expression)?;
-        if exp_index != *INT {
+        if exp_index != *ir::INT {
             return Err(anyhow!("cant index with {exp_index:#?}"));
         }
 
@@ -1846,10 +1230,8 @@ impl<'a> ExpressionCompiler<'a> {
         Ok(*expected_type)
     }
 
-    fn compile_slice_init(&mut self, slice_init: &ast::SliceInit) -> Result<Type> {
-        let resolved_type = self.resolve_type(&slice_init._type)?;
-
-        let TypeType::Slice(slice_item) = &resolved_type._type else {
+    fn compile_slice_init(&mut self, slice_init: &ir::SliceInit) -> Result<ir::Type> {
+        let ir::TypeType::Slice(slice_item) = &slice_init._type._type else {
             panic!("compile_slice_init: incorrect type, wrong ast parser");
         };
 
@@ -1858,8 +1240,9 @@ impl<'a> ExpressionCompiler<'a> {
         for v in &slice_init.expressions {
             self.instructions.push_stack_frame();
 
-            self.instructions.instr_increment(SLICE_SIZE);
-            self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
+            self.instructions.instr_increment(ir::SLICE_SIZE);
+            self.instructions
+                .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
             let exp = self.compile_expression(v)?;
             if exp != **slice_item {
@@ -1871,37 +1254,37 @@ impl<'a> ExpressionCompiler<'a> {
             self.instructions.pop_stack_frame();
         }
 
-        Ok(resolved_type)
+        Ok(slice_init._type.clone())
     }
 
-    fn compile_infix(&mut self, infix: &ast::Infix) -> Result<Type> {
+    fn compile_infix(&mut self, infix: &ir::Infix) -> Result<ir::Type> {
         let exp = self.compile_expression(&infix.expression)?;
         match infix._type {
-            ast::InfixType::Plus => {}
-            ast::InfixType::Minus => {
+            ir::InfixType::Plus => {}
+            ir::InfixType::Minus => {
                 self.instructions.instr_minus_int();
             }
         }
         Ok(exp)
     }
 
-    fn compile_compare(&mut self, compare: &ast::Compare) -> Result<Type> {
-        let a: Type;
-        let b: Type;
+    fn compile_compare(&mut self, compare: &ir::Compare) -> Result<ir::Type> {
+        let a: ir::Type;
+        let b: ir::Type;
 
         match compare.compare_type {
             // last item on the stack is smaller
-            ast::CompareType::Gt => {
+            ir::CompareType::Gt => {
                 b = self.compile_expression(&compare.left)?;
                 a = self.compile_expression(&compare.right)?;
             }
             // last item on the stack is bigger
-            ast::CompareType::Lt => {
+            ir::CompareType::Lt => {
                 b = self.compile_expression(&compare.right)?;
                 a = self.compile_expression(&compare.left)?;
             }
             // dont matter
-            ast::CompareType::Equals | ast::CompareType::NotEquals => {
+            ir::CompareType::Equals | ir::CompareType::NotEquals => {
                 a = self.compile_expression(&compare.right)?;
                 b = self.compile_expression(&compare.left)?;
             }
@@ -1910,12 +1293,12 @@ impl<'a> ExpressionCompiler<'a> {
         if a._type != b._type {
             return Err(anyhow!("can't compare different types"));
         }
-        if a != *BOOL && a != *INT {
+        if a != *ir::BOOL && a != *ir::INT {
             return Err(anyhow!("can only compare int/bool"));
         }
 
         match compare.compare_type {
-            ast::CompareType::Gt | ast::CompareType::Lt => {
+            ir::CompareType::Gt | ir::CompareType::Lt => {
                 // a = -a
                 self.instructions.instr_minus_int();
 
@@ -1925,90 +1308,56 @@ impl<'a> ExpressionCompiler<'a> {
                 // >0:1 <0:0
                 self.instructions.instr_to_bool();
             }
-            ast::CompareType::Equals => {
+            ir::CompareType::Equals => {
                 self.instructions.instr_compare_i();
             }
-            ast::CompareType::NotEquals => {
+            ir::CompareType::NotEquals => {
                 self.instructions.instr_compare_i();
                 self.instructions.instr_negate_bool();
             }
         }
 
-        Ok(BOOL.clone())
+        Ok(ir::BOOL.clone())
     }
 
-    fn compile_type_init(&mut self, type_init: &ast::TypeInit) -> Result<Type> {
-        match self.resolve_type(&type_init._type)?._type {
-            TypeType::Slice(_) => self.compile_slice_init(&ast::SliceInit {
-                _type: type_init._type.clone(),
-                expressions: Vec::new(),
-            }),
-            TypeType::Struct(_) => self.compile_struct_init(&ast::StructInit {
-                _type: type_init._type.clone(),
-                fields: HashMap::new(),
-            }),
-            _ => Err(anyhow!("compile_type_init: cant compile this type")),
-        }
-    }
-
-    fn resolve_type_cast(&self, call: &ast::Call) -> Result<TypeCast> {
-        let ast::Expression::Type(_type) = &call.expression else {
-            return Err(anyhow!(
-                "resolve_type_cast: cant type cast non Type expression"
-            ));
-        };
-
-        if call.arguments.len() != 1 {
-            return Err(anyhow!("resolve_type_cast: 1 argument required"));
-        }
-
-        let exp = call.arguments[0].clone();
-        let _type = self.resolve_type(_type)?;
-
-        Ok(TypeCast {
-            expression: exp,
-            _type,
-        })
-    }
-
-    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<Type> {
+    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<ir::Type> {
         self.instructions.push_alignment(type_cast._type.alignment);
 
         let target = self.compile_expression(&type_cast.expression)?;
 
         match target._type {
-            TypeType::Builtin(builtin) => match builtin {
-                TypeBuiltin::Int => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Uint8 => {
+            ir::TypeType::Builtin(builtin) => match builtin {
+                ir::TypeBuiltin::Int => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => {
                             self.instructions.instr_cast_int_uint8();
                         }
-                        TypeBuiltin::Uint => {
+                        ir::TypeBuiltin::Uint => {
                             self.instructions.instr_cast_int_uint();
                         }
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Uint8 => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Int => {
+                ir::TypeBuiltin::Uint8 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Int => {
                             self.instructions.instr_cast_uint8_int();
                         }
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::Ptr => match &type_cast._type._type {
-                    TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        TypeBuiltin::Uint => {}
+                ir::TypeBuiltin::Ptr => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                TypeBuiltin::String => match &type_cast._type._type {
-                    TypeType::Slice(item) => {
-                        if **item != *UINT8 {
+                ir::TypeBuiltin::String => match &type_cast._type._type {
+                    ir::TypeType::Slice(item) => {
+                        if **item != *ir::UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
@@ -2018,24 +1367,24 @@ impl<'a> ExpressionCompiler<'a> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Slice(item_target) => match &type_cast._type._type {
-                TypeType::Builtin(builtin_dest) => match builtin_dest {
-                    TypeBuiltin::String => {
-                        if *item_target != *UINT8 {
+            ir::TypeType::Slice(item_target) => match &type_cast._type._type {
+                ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    ir::TypeBuiltin::String => {
+                        if *item_target != *ir::UINT8 {
                             return Err(anyhow!(
                                 "compile_type_cast: can only cast string to uint8[]"
                             ));
                         }
                     }
-                    TypeBuiltin::Ptr => {
+                    ir::TypeBuiltin::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
                     }
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            TypeType::Variadic(item_target) => match &type_cast._type._type {
-                TypeType::Slice(item_dest) => {
+            ir::TypeType::Variadic(item_target) => match &type_cast._type._type {
+                ir::TypeType::Slice(item_dest) => {
                     if item_target != *item_dest {
                         return Err(anyhow!(
                             "compile_type_cast: cant cast variadic into slice different types"
@@ -2050,66 +1399,13 @@ impl<'a> ExpressionCompiler<'a> {
         Ok(type_cast._type.clone())
     }
 
-    fn resolve_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
-        ExpressionCompiler::new(
-            &mut self.instructions.clone(),
-            &mut self.closures.clone(),
-            self.type_resolver.clone(),
-            self.function_declarations.clone(),
-            self.static_memory.clone(),
-        )
-        .compile_expression(expression)
-    }
-
-    fn check_function_call_argument_count(&mut self, call: &FunctionCall) -> Result<()> {
-        let arguments = match &call.declaration {
-            Some(declaration) => declaration
-                .arguments
-                .iter()
-                .map(|v| self.resolve_type(&v._type))
-                .collect::<Result<Vec<_>, anyhow::Error>>()?,
-            None => self
-                .resolve_expression(&call.call.expression)?
-                ._type
-                .closure_err()?
-                .arguments
-                .into_iter()
-                .map(|v| v.1)
-                .collect(),
-        };
-
-        // todo: refactor this arguments check somehow
-        if let Some(last) = arguments.last() {
-            if let TypeType::Variadic(_type) = &last._type {
-                // -1 because variadic can be empty
-                if call.call.arguments.len() < arguments.len() - 1 {
-                    return Err(anyhow!(
-                        "compile_function_call: variadic argument count mismatch"
-                    ));
-                }
-            } else {
-                if call.call.arguments.len() != arguments.len() {
-                    return Err(anyhow!("compile_function_call: argument count mismatch"));
-                }
-            }
-        } else {
-            if call.call.arguments.len() != arguments.len() {
-                return Err(anyhow!("compile_function_call: argument count mismatch"));
-            }
-        }
-
-        Ok(())
-    }
-
-    // append(slice Type, value Type) void
-    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<Type> {
+    // append(slice ir::Type, value ir::Type) void
+    fn compile_function_builtin_append(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let slice_arg = call
-            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("append: expected first argument"))?;
         let value_arg = call
-            .call
             .arguments
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
@@ -2118,7 +1414,7 @@ impl<'a> ExpressionCompiler<'a> {
         let slice_exp = self.compile_expression(slice_arg)?;
         let value_exp = self.compile_expression(value_arg)?;
 
-        let TypeType::Slice(slice_item) = &slice_exp._type else {
+        let ir::TypeType::Slice(slice_item) = &slice_exp._type else {
             return Err(anyhow!("append: provide a slice as the first argument"));
         };
 
@@ -2128,20 +1424,19 @@ impl<'a> ExpressionCompiler<'a> {
 
         self.instructions.instr_slice_append(value_exp.size);
 
-        Ok(VOID.clone())
+        Ok(ir::VOID.clone())
     }
 
-    // len(slice Type) int
-    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<Type> {
+    // len(slice ir::Type) int
+    fn compile_function_builtin_len(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let slice_arg = call
-            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("len: expected first argument"))?;
 
         // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
-        let TypeType::Slice(_) = &slice_exp._type else {
+        let ir::TypeType::Slice(_) = &slice_exp._type else {
             return Err(anyhow!(
                 "len: expected slice as the argument, got {:#?}",
                 slice_exp._type
@@ -2150,38 +1445,34 @@ impl<'a> ExpressionCompiler<'a> {
 
         self.instructions.instr_slice_len();
 
-        Ok(INT.clone())
+        Ok(ir::INT.clone())
     }
 
-    // new(_ Type, args Type...) Type
-    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<Type> {
+    // new(_ ir::Type, args ir::Type...) ir::Type
+    fn compile_function_builtin_new(&mut self, call: &FunctionCall) -> Result<ir::Type> {
         let type_arg = call
-            .call
             .arguments
             .get(0)
             .ok_or(anyhow!("new: expected first argument"))?;
 
-        let ast::Expression::Type(_type) = type_arg else {
+        let ir::Expression::Type(_type) = type_arg else {
             return Err(anyhow!("new: expected first argument to be type"));
         };
-        let _type = self.resolve_type(_type)?;
 
         match &_type._type {
-            TypeType::Slice(slice_item) => {
+            ir::TypeType::Slice(slice_item) => {
                 let def_val = call
-                    .call
                     .arguments
                     .get(1)
                     .ok_or(anyhow!("new: second argument expected"))?;
 
                 let len_val = call
-                    .call
                     .arguments
                     .get(2)
                     .ok_or(anyhow!("new: third argument expected"))?;
 
                 let len_exp = self.compile_expression(len_val)?;
-                if len_exp != *INT {
+                if len_exp != *ir::INT {
                     return Err(anyhow!("new: length should be of type int"));
                 }
 
@@ -2198,11 +1489,12 @@ impl<'a> ExpressionCompiler<'a> {
         }
     }
 
-    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<Type> {
-        self.check_function_call_argument_count(call)?;
+    fn compile_function_call(&mut self, call: &FunctionCall) -> Result<ir::Type> {
+        // todo: check these
+        // self.check_function_call_argument_count(call)?;
 
-        if let Some(declaration) = &call.declaration {
-            match declaration.identifier.as_str() {
+        if let FunctionCallType::Function(function) = &call.call_type {
+            match function.identifier.as_str() {
                 "append" => return self.compile_function_builtin_append(call),
                 "len" => return self.compile_function_builtin_len(call),
                 "new" => return self.compile_function_builtin_new(call),
@@ -2210,63 +1502,66 @@ impl<'a> ExpressionCompiler<'a> {
             }
         }
 
-        let (return_alignment, expected_arguments): (usize, Vec<Type>) = match &call.declaration {
-            Some(declaration) => (
-                self.resolve_type(&declaration.return_type)?.alignment,
-                declaration
-                    .arguments
-                    .iter()
-                    .map(|v| self.resolve_type(&v._type))
-                    .collect::<Result<_, anyhow::Error>>()?,
-            ),
-            None => (
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
+        let return_alignment = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.expect_function()?.return_type.alignment,
+            FunctionCallType::Method(v) => {
+                v.function._type.expect_function()?.return_type.alignment
+            }
+            FunctionCallType::Closure(v) => {
+                v._type(self.instructions)?
+                    .expect_closure()?
                     .return_type
-                    .alignment,
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .arguments
-                    .into_iter()
-                    .map(|v| v.1)
-                    .collect(),
-            ),
+                    .alignment
+            }
+        };
+
+        let expected_arguments = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.expect_function()?.arguments.clone(),
+            FunctionCallType::Method(v) => v.function._type.expect_function()?.arguments.clone(),
+            FunctionCallType::Closure(v) => v
+                ._type(self.instructions)?
+                .expect_closure()?
+                .arguments
+                .clone(),
         };
 
         self.instructions.push_alignment(return_alignment);
 
         let argument_size = {
             self.instructions.push_stack_frame();
-            for (i, expected_type) in expected_arguments.iter().enumerate() {
-                let arg = call.call.arguments.get(i);
+            for (i, expected_arg) in expected_arguments.iter().enumerate() {
+                let mut arg = call.arguments.get(i);
+                if i == 0 {
+                    if let FunctionCallType::Method(method) = &call.call_type {
+                        arg = Some(&method._self);
+                    }
+                }
 
                 let Some(arg) = arg else {
-                    if expected_type.extract_variadic().is_some() {
+                    // calling push(int...) -> like push()
+                    if expected_arg._type.extract_variadic().is_some() {
                         self.instructions.instr_push_slice();
                         continue;
                     }
                     return Err(anyhow!("compile_function_call: argument missing"));
                 };
 
-                let Some(inner) = expected_type.extract_variadic() else {
+                let Some(inner) = expected_arg._type.extract_variadic() else {
+                    // calling push(a int) -> like push(20)
                     let exp = self.compile_expression(arg)?;
-                    if exp != *expected_type {
-                        return Err(anyhow!("function call type mismatch"));
-                    }
+                    exp.must_equal(&expected_arg._type)?;
                     continue;
                 };
 
-                if let ast::Expression::Spread(_) = arg {
+                if let ir::Expression::Spread(_) = arg {
                     let exp = self.compile_expression(arg)?;
-                    if exp != *expected_type {
+                    if exp != expected_arg._type {
                         return Err(anyhow!("function call type mismatch"));
                     }
                     // this check is weird, because ast actually does not allow creating
                     // declarations where spread is not last, but this probably should be in
                     // compiler
-                    if expected_arguments.len() != call.call.arguments.len() {
+                    if expected_arguments.len() != call.arguments.len() {
                         return Err(anyhow!("spread must be last argument"));
                     }
 
@@ -2274,9 +1569,10 @@ impl<'a> ExpressionCompiler<'a> {
                 }
 
                 self.instructions.instr_push_slice();
-                for arg in call.call.arguments.iter().skip(i) {
-                    self.instructions.instr_increment(SLICE_SIZE);
-                    self.instructions.instr_copy(0, SLICE_SIZE, SLICE_SIZE);
+                for arg in call.arguments.iter().skip(i) {
+                    self.instructions.instr_increment(ir::SLICE_SIZE);
+                    self.instructions
+                        .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
                     let value_exp = self.compile_expression(arg)?;
                     if value_exp != *inner {
@@ -2289,24 +1585,24 @@ impl<'a> ExpressionCompiler<'a> {
             self.instructions.pop_stack_frame_size()
         };
 
-        if let Some(declaration) = &call.declaration {
-            match declaration.identifier.as_str() {
+        if let FunctionCallType::Function(function) = &call.call_type {
+            match function.identifier.as_str() {
                 "libc_write" => {
                     self.instructions.instr_libc_write();
-                    return Ok(INT.clone());
+                    return Ok(ir::INT.clone());
                 }
                 _ => {}
             }
         }
 
-        let return_type = match &call.declaration {
-            Some(declaration) => self.resolve_type(&declaration.return_type)?,
-            None => {
-                self.resolve_expression(&call.call.expression)?
-                    ._type
-                    .closure_err()?
-                    .return_type
-            }
+        let return_type = match &call.call_type {
+            FunctionCallType::Function(v) => v._type.expect_function()?.return_type.clone(),
+            FunctionCallType::Method(v) => v.function._type.expect_function()?.return_type.clone(),
+            FunctionCallType::Closure(v) => v
+                ._type(self.instructions)?
+                .expect_closure()?
+                .return_type
+                .clone(),
         };
         let return_size = return_type.size;
 
@@ -2323,15 +1619,19 @@ impl<'a> ExpressionCompiler<'a> {
         }
 
         // aligning for pushing of return address
-        reset_size += self.instructions.push_alignment(PTR_SIZE);
+        reset_size += self.instructions.push_alignment(ir::PTR_SIZE);
 
-        match &call.declaration {
-            Some(declaration) => {
+        match &call.call_type {
+            FunctionCallType::Function(function) => {
                 self.instructions
-                    .instr_jump_and_link(declaration.identifier.clone());
+                    .instr_jump_and_link(function.identifier.clone());
             }
-            None => {
-                self.compile_expression(&call.call.expression)?;
+            FunctionCallType::Method(method) => {
+                self.instructions
+                    .instr_jump_and_link(method.function.identifier.clone());
+            }
+            FunctionCallType::Closure(expression) => {
+                self.compile_expression(expression)?;
                 self.instructions.instr_jump_and_link_closure();
             }
         }
@@ -2341,78 +1641,72 @@ impl<'a> ExpressionCompiler<'a> {
         Ok(return_type)
     }
 
-    fn resolve_function_call(&self, call: &ast::Call) -> FunctionCall {
-        if let ast::Expression::Type(_type) = &call.expression {
-            if let ast::Type::Alias(identifier) = _type {
-                return FunctionCall {
-                    call: call.clone(),
-                    declaration: self
-                        .function_declarations
-                        .get(identifier)
-                        .map(|v| v.clone()),
-                };
-            }
-        };
-
-        FunctionCall {
-            call: call.clone(),
-            declaration: None,
+    fn compile_call(&mut self, call: &ir::Call) -> Result<ir::Type> {
+        match &call.call_type {
+            ir::CallType::Closure(expression) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Closure(expression),
+            }),
+            ir::CallType::Function(function) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Function(function),
+            }),
+            ir::CallType::TypeCast(_type) => self.compile_type_cast(&TypeCast {
+                expression: &call.arguments[0],
+                _type,
+            }),
+            ir::CallType::Method(method) => self.compile_function_call(&FunctionCall {
+                arguments: &call.arguments,
+                call_type: FunctionCallType::Method(method),
+            }),
         }
     }
 
-    fn compile_call(&mut self, call: &ast::Call) -> Result<Type> {
-        if let Ok(v) = self.resolve_type_cast(call) {
-            return self.compile_type_cast(&v);
-        }
-
-        self.compile_function_call(&self.resolve_function_call(call))
-    }
-
-    fn compile_arithmetic(&mut self, arithmetic: &ast::Arithmetic) -> Result<Type> {
+    fn compile_arithmetic(&mut self, arithmetic: &ir::Arithmetic) -> Result<ir::Type> {
         let a = self.compile_expression(&arithmetic.left)?;
         let b = self.compile_expression(&arithmetic.right)?;
 
         if a != b {
             return Err(anyhow!("can't add different types"));
         }
-        if a == *VOID {
+        if a == *ir::VOID {
             return Err(anyhow!("can't add void type"));
         }
 
         match arithmetic._type {
-            ast::ArithmeticType::Minus => {
-                if *INT == a {
+            ir::ArithmeticType::Minus => {
+                if *ir::INT == a {
                     self.instructions.instr_minus_int();
                     self.instructions.instr_add_i();
                 } else {
                     return Err(anyhow!("can only minus int"));
                 }
             }
-            ast::ArithmeticType::Plus => {
-                if *INT == a {
+            ir::ArithmeticType::Plus => {
+                if *ir::INT == a {
                     self.instructions.instr_add_i();
-                } else if a == *STRING {
+                } else if a == *ir::STRING {
                     self.instructions.instr_add_string();
                 } else {
                     return Err(anyhow!("can only plus int and string"));
                 }
             }
-            ast::ArithmeticType::Multiply => {
-                if *INT == a {
+            ir::ArithmeticType::Multiply => {
+                if *ir::INT == a {
                     self.instructions.instr_multiply_i();
                 } else {
                     return Err(anyhow!("can only multiply int"));
                 }
             }
-            ast::ArithmeticType::Divide => {
-                if *INT == a {
+            ir::ArithmeticType::Divide => {
+                if *ir::INT == a {
                     self.instructions.instr_divide_i();
                 } else {
                     return Err(anyhow!("can only divide int"));
                 }
             }
-            ast::ArithmeticType::Modulo => {
-                if *INT == a {
+            ir::ArithmeticType::Modulo => {
+                if *ir::INT == a {
                     self.instructions.instr_modulo_i();
                 } else {
                     return Err(anyhow!("can only modulo int"));
@@ -2423,25 +1717,19 @@ impl<'a> ExpressionCompiler<'a> {
         Ok(a)
     }
 
-    fn compile_literal(&mut self, literal: &ast::Literal) -> Result<Type> {
-        let literal_type = match literal.literal {
-            lexer::Literal::Int(_) => INT.clone(),
-            lexer::Literal::Bool(_) => BOOL.clone(),
-            lexer::Literal::String(_) => STRING.clone(),
-        };
-
-        match &literal.literal {
-            lexer::Literal::Int(int) => {
-                if literal_type == *UINT8 {
+    fn compile_literal(&mut self, literal: &ir::Literal) -> Result<ir::Type> {
+        match &literal.literal_type {
+            ir::LiteralType::Int(int) => {
+                if literal._type == *ir::UINT8 {
                     self.instructions.instr_push_u8(*int)?;
-                } else if literal_type == *INT {
+                } else if literal._type == *ir::INT {
                     self.instructions.instr_push_i(*int)?;
                 } else {
-                    return Err(anyhow!("can't cast int to {literal_type:#?}"));
+                    return Err(anyhow!("can't cast int to {:#?}", literal._type));
                 }
             }
-            lexer::Literal::Bool(bool) => {
-                if literal_type == *BOOL {
+            ir::LiteralType::Bool(bool) => {
+                if literal._type == *ir::BOOL {
                     self.instructions.instr_push_i({
                         if *bool {
                             1
@@ -2450,43 +1738,43 @@ impl<'a> ExpressionCompiler<'a> {
                         }
                     })?;
                 } else {
-                    return Err(anyhow!("can't cast bool to {literal_type:#?}"));
+                    return Err(anyhow!("can't cast bool to {:#?}", literal._type));
                 }
             }
-            lexer::Literal::String(string) => {
+            ir::LiteralType::String(string) => {
                 let index = self.static_memory.borrow_mut().push_string_slice(&string);
                 self.instructions
-                    .instr_push_static(index, SLICE_SIZE, SLICE_SIZE);
+                    .instr_push_static(index, ir::SLICE_SIZE, ir::SLICE_SIZE);
             }
         }
 
-        Ok(literal_type)
+        Ok(literal._type.clone())
     }
 
-    fn compile_andor(&mut self, andor: &ast::AndOr) -> Result<Type> {
+    fn compile_andor(&mut self, andor: &ir::AndOr) -> Result<ir::Type> {
         self.instructions.stack_instructions.jump();
 
         let left = self.compile_expression(&andor.left)?;
-        if left != *BOOL {
+        if left != *ir::BOOL {
             return Err(anyhow!("compile_andor: expected bool expression"));
         }
 
         match andor._type {
-            ast::AndOrType::Or => {
+            ir::AndOrType::Or => {
                 self.instructions.stack_instructions.back_if_true(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != *BOOL {
+                if right != *ir::BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
                 self.instructions.instr_or();
             }
-            ast::AndOrType::And => {
+            ir::AndOrType::And => {
                 self.instructions.stack_instructions.back_if_false(1);
 
                 let right = self.compile_expression(&andor.right)?;
-                if right != *BOOL {
+                if right != *ir::BOOL {
                     return Err(anyhow!("compile_andor: expected bool expression"));
                 }
 
@@ -2497,31 +1785,42 @@ impl<'a> ExpressionCompiler<'a> {
         self.instructions.stack_instructions.back(1);
         self.instructions.stack_instructions.pop_index();
 
-        Ok(BOOL.clone())
+        Ok(ir::BOOL.clone())
     }
 
-    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+    fn compile_to_closure(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
+        todo!();
+    }
+
+    fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         let old_stack_size = self.instructions.stack_total_size();
 
         let exp = match expression {
-            ast::Expression::AndOr(v) => self.compile_andor(v),
-            ast::Expression::Literal(v) => self.compile_literal(v),
-            ast::Expression::Arithmetic(v) => self.compile_arithmetic(v),
-            ast::Expression::Call(v) => self.compile_call(v),
-            ast::Expression::TypeInit(v) => self.compile_type_init(v),
-            ast::Expression::Compare(v) => self.compile_compare(v),
-            ast::Expression::Infix(v) => self.compile_infix(v),
-            ast::Expression::SliceInit(v) => self.compile_slice_init(v),
-            ast::Expression::Index(v) => self.compile_expression_index(v),
-            ast::Expression::Negate(v) => self.compile_negate(v),
-            ast::Expression::Spread(v) => self.compile_spread(v),
-            ast::Expression::StructInit(v) => self.compile_struct_init(v),
-            ast::Expression::DotAccess(v) => self.compile_dot_access(v),
-            ast::Expression::Deref(v) => self.compile_deref(v),
-            ast::Expression::Address(v) => self.compile_address(v),
-            ast::Expression::Type(v) => self.compile_type(v),
-            ast::Expression::Closure(v) => self.compile_closure(v),
-            ast::Expression::Nil => self.compile_nil(),
+            ir::Expression::AndOr(v) => self.compile_andor(v),
+            ir::Expression::Literal(v) => self.compile_literal(v),
+            ir::Expression::Arithmetic(v) => self.compile_arithmetic(v),
+            ir::Expression::Call(v) => self.compile_call(v),
+            ir::Expression::Compare(v) => self.compile_compare(v),
+            ir::Expression::Infix(v) => self.compile_infix(v),
+            ir::Expression::SliceInit(v) => self.compile_slice_init(v),
+            ir::Expression::Index(v) => self.compile_expression_index(v),
+            ir::Expression::Negate(v) => self.compile_negate(v),
+            ir::Expression::Spread(v) => self.compile_spread(v),
+            ir::Expression::StructInit(v) => self.compile_struct_init(v),
+            ir::Expression::DotAccess(v) => self.compile_dot_access(v),
+            ir::Expression::Deref(v) => self.compile_deref(v),
+            ir::Expression::Address(v) => self.compile_address(v),
+            ir::Expression::Closure(v) => self.compile_closure(v),
+            ir::Expression::Nil => self.compile_nil(),
+            ir::Expression::Variable(v) => self.compile_variable(v),
+            ir::Expression::Type(_type) => Ok(_type.clone()),
+            ir::Expression::ToClosure(v) => self.compile_to_closure(v),
+            ir::Expression::Function(_) => {
+                panic!("cant compile function expression, expected call expression")
+            }
+            ir::Expression::Method(_) => {
+                panic!("cant compile method, expected call expression")
+            }
         }?;
 
         if exp.alignment != 0 {
@@ -2540,34 +1839,17 @@ impl<'a> ExpressionCompiler<'a> {
 
 pub struct Compiled {
     pub functions: HashMap<String, Vec<ScopedInstruction>>,
-    pub static_instructions: Vec<ScopedInstruction>,
     pub static_memory: vm::StaticMemory,
 }
 
-pub fn compile(ast: ast::Ast) -> Result<Compiled> {
+pub fn compile(ir: ir::Ir) -> Result<Compiled> {
     let mut functions = HashMap::<String, Vec<ScopedInstruction>>::new();
     let static_memory = Rc::new(RefCell::new(vm::StaticMemory::new()));
 
-    let type_resolver = Rc::new(TypeResolver::new(ast.type_declarations));
-    let function_declarations = Rc::new(ast.function_declarations);
-
-    let (static_var_stack, static_instructions) = compile_static_vars(
-        ast.static_var_declarations,
-        type_resolver.clone(),
-        function_declarations.clone(),
-        static_memory.clone(),
-    )?;
-
-    for (identifier, declaration) in function_declarations.iter() {
-        let compiled = FunctionCompiler::new(
-            Function::from_declaration(&type_resolver, declaration).unwrap(),
-            static_var_stack.clone(),
-            static_memory.clone(),
-            type_resolver.clone(),
-            function_declarations.clone(),
-        )
-        .compile()
-        .unwrap();
+    for (identifier, declaration) in &ir.functions {
+        let compiled =
+            FunctionCompiler::new(Function::Function(declaration), static_memory.clone(), &ir)
+                .compile()?;
 
         functions.insert(
             identifier.clone(),
@@ -2579,55 +1861,14 @@ pub fn compile(ast: ast::Ast) -> Result<Compiled> {
     Ok(Compiled {
         static_memory,
         functions,
-        static_instructions,
     })
 }
 
-fn compile_static_vars(
-    vars: Vec<ast::StaticVarDeclaration>,
-    type_resolver: Rc<TypeResolver>,
-    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
-    static_memory: Rc<RefCell<vm::StaticMemory>>,
-) -> Result<(VarStack<VarStackItem>, Vec<ScopedInstruction>)> {
-    let mut instructions = Instructions::new(VarStack::new());
-    let mut closures = Vec::new();
-
-    for v in vars {
-        instructions.push_alignment(PTR_SIZE);
-
-        let exp = ExpressionCompiler::new(
-            &mut instructions,
-            &mut closures,
-            type_resolver.clone(),
-            function_declarations.clone(),
-            static_memory.clone(),
-        )
-        .compile_expression(&v.expression)?;
-        type_resolver.resolve(&v._type)?.equals(&exp)?;
-
-        instructions.instr_alloc(exp.size, exp.alignment);
-        instructions.var_mark(Variable {
-            _type: Type::create_escaped(exp),
-            identifier: v.identifier.clone(),
-        });
-    }
-
-    Ok((
-        instructions.var_stack.stack.clone(),
-        ScopedInstruction::from_compiled_instructions(&CompiledInstructions {
-            instructions: instructions.get_instructions(),
-            closures,
-        }),
-    ))
-}
-
-pub struct FunctionCompiler {
+pub struct FunctionCompiler<'a> {
     instructions: Instructions,
-    function: Function,
+    function: Function<'a>,
     closures: Vec<CompiledInstructions>,
-    current_body: Vec<CompilerBody>,
-    type_resolver: Rc<TypeResolver>,
-    function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+    ir: &'a ir::Ir<'a>,
     static_memory: Rc<RefCell<vm::StaticMemory>>,
 }
 
@@ -2637,61 +1878,37 @@ pub struct CompiledInstructions {
     pub closures: Vec<CompiledInstructions>,
 }
 
-impl FunctionCompiler {
+impl<'a> FunctionCompiler<'a> {
     fn new(
-        function: Function,
-        static_var_stack: VarStack<VarStackItem>,
+        function: Function<'a>,
         static_memory: Rc<RefCell<vm::StaticMemory>>,
-        type_resolver: Rc<TypeResolver>,
-        function_declarations: Rc<HashMap<String, ast::FunctionDeclaration>>,
+        ir: &'a ir::Ir<'a>,
     ) -> Self {
-        let mut current_body = Vec::new();
-        current_body.push(CompilerBody::new(function.body.clone()));
         Self {
-            function_declarations,
             static_memory,
             function,
             closures: Vec::new(),
-            instructions: Instructions::new(static_var_stack),
-            type_resolver,
-            current_body,
+            instructions: Instructions::new(),
+            ir,
         }
-    }
-
-    fn resolve_type(&self, _type: &ast::Type) -> Result<Type> {
-        self.type_resolver.resolve(_type)
-    }
-
-    fn resolve_variable(&self, _type: &ast::Type) -> Result<(usize, Variable)> {
-        let ast::Type::Alias(identifier) = _type else {
-            return Err(anyhow!("resolve_variable: cant resolve non alias"));
-        };
-
-        let variable = self
-            .instructions
-            .var_get_offset(identifier)
-            .ok_or(anyhow!("resolve_variable: variable {identifier} not found"))?;
-
-        Ok((variable.0, variable.1.clone()))
     }
 
     fn expression_compiler(&mut self) -> ExpressionCompiler {
         ExpressionCompiler::new(
             &mut self.instructions,
             &mut self.closures,
-            self.type_resolver.clone(),
-            self.function_declarations.clone(),
+            self.ir,
             self.static_memory.clone(),
         )
     }
 
-    fn compile_expression(&mut self, expression: &ast::Expression) -> Result<Type> {
+    fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
         self.expression_compiler().compile_expression(expression)
     }
 
     fn compile_dot_access_field_offset(
         &mut self,
-        dot_access: &ast::DotAccess,
+        dot_access: &ir::DotAccess,
     ) -> Result<DotAccessField> {
         self.expression_compiler()
             .compile_dot_access_field_offset(dot_access)
@@ -2699,52 +1916,48 @@ impl FunctionCompiler {
 
     fn compile_variable_declaration(
         &mut self,
-        declaration: &ast::VariableDeclaration,
+        declaration: &ir::VariableDeclaration,
     ) -> Result<()> {
-        let escaped = self
-            .current_body
-            .last()
-            .unwrap()
-            .does_variable_escape(&declaration.variable.identifier, 1);
+        let escaped = declaration.variable.borrow()._type._type.is_escaped();
         if escaped {
-            self.instructions.push_alignment(PTR_SIZE);
+            self.instructions.push_alignment(ir::PTR_SIZE);
         }
 
-        let mut exp = self.compile_expression(&declaration.expression)?;
-        if exp == *VOID {
+        let exp = self.compile_expression(&declaration.expression)?;
+        if exp == *ir::VOID {
             return Err(anyhow!("can't declare void variable"));
         }
 
-        self.resolve_type(&declaration.variable._type)?
-            .equals(&exp)?;
+        exp.must_equal(&declaration.variable.borrow()._type)?;
 
         if escaped {
             self.instructions.instr_alloc(exp.size, exp.alignment);
-            exp = Type::create_escaped(exp);
         }
 
-        self.instructions.var_mark(Variable {
-            identifier: declaration.variable.identifier.clone(),
-            _type: exp,
-        });
+        self.instructions
+            .var_mark(declaration.variable.borrow().clone());
 
         Ok(())
     }
 
-    fn compile_variable_assignment(&mut self, assignment: &ast::VariableAssignment) -> Result<()> {
+    fn compile_variable_assignment(&mut self, assignment: &ir::VariableAssignment) -> Result<()> {
         self.instructions.push_stack_frame();
 
         match &assignment.var {
-            ast::Expression::Type(_type) => {
-                let (offset, variable) = self.resolve_variable(_type)?;
+            ir::Expression::Variable(identifier) => {
+                let (offset, variable) = self.instructions.var_get_offset_err(identifier)?;
+                let variable = variable.clone();
 
-                if let TypeType::Escaped(_type) = &variable._type._type {
-                    let alignment = self.instructions.push_alignment(PTR_SIZE);
-                    self.instructions.instr_increment(PTR_SIZE);
-                    self.instructions
-                        .instr_copy(0, offset + alignment + PTR_SIZE, PTR_SIZE);
+                if let ir::TypeType::Escaped(_type) = &variable._type._type {
+                    let alignment = self.instructions.push_alignment(ir::PTR_SIZE);
+                    self.instructions.instr_increment(ir::PTR_SIZE);
+                    self.instructions.instr_copy(
+                        0,
+                        offset + alignment + ir::PTR_SIZE,
+                        ir::PTR_SIZE,
+                    );
 
-                    // no alignment because of PTR_SIZE align above
+                    // no alignment because of ir::PTR_SIZE align above
                     let exp = self.compile_expression(&assignment.expression)?;
                     if **_type != exp {
                         return Err(anyhow!("variable assignment type mismatch"));
@@ -2762,14 +1975,14 @@ impl FunctionCompiler {
                     self.instructions.instr_copy(offset + size, 0, exp.size);
                 }
             }
-            ast::Expression::Index(index) => {
+            ir::Expression::Index(index) => {
                 let slice = self.compile_expression(&index.var)?;
-                let TypeType::Slice(slice_item) = &slice._type else {
+                let ir::TypeType::Slice(slice_item) = &slice._type else {
                     return Err(anyhow!("can only index slices"));
                 };
 
                 let item_index = self.compile_expression(&index.expression)?;
-                if item_index != *INT {
+                if item_index != *ir::INT {
                     return Err(anyhow!("can only index with int type"));
                 }
 
@@ -2780,14 +1993,14 @@ impl FunctionCompiler {
 
                 self.instructions.instr_slice_index_set(item.size);
             }
-            ast::Expression::DotAccess(dot_access) => {
+            ir::Expression::DotAccess(dot_access) => {
                 let field = self.compile_dot_access_field_offset(dot_access)?;
 
                 self.instructions.push_stack_frame();
                 let exp = self.compile_expression(&assignment.expression)?;
                 let exp_size = self.instructions.pop_stack_frame_size();
 
-                exp.equals(field._type())?;
+                exp.must_equal(field._type())?;
 
                 match field {
                     DotAccessField::Heap(_type) => {
@@ -2798,9 +2011,9 @@ impl FunctionCompiler {
                     }
                 }
             }
-            ast::Expression::Deref(expression) => {
+            ir::Expression::Deref(expression) => {
                 let dst = self.compile_expression(expression)?;
-                let TypeType::Address(_type) = dst._type else {
+                let ir::TypeType::Address(_type) = dst._type else {
                     return Err(anyhow!("can not dereference non address"));
                 };
 
@@ -2819,34 +2032,38 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_if_block(&mut self, expression: &ast::Expression, body: &[ast::Node]) -> Result<()> {
+    fn compile_if_block(
+        &mut self,
+        expression: &ir::Expression,
+        actions: &[ir::Action],
+    ) -> Result<()> {
         let exp = self.compile_expression(expression)?;
-        if exp != *BOOL {
+        if exp != *ir::BOOL {
             return Err(anyhow!("compile_if_block: expected bool expression"));
         }
 
         self.instructions.stack_instructions.jump_if_true();
 
-        self.compile_body(body)?;
+        self.compile_actions(actions)?;
         self.instructions.stack_instructions.back(2);
         self.instructions.stack_instructions.pop_index();
 
         Ok(())
     }
 
-    fn compile_if(&mut self, _if: &ast::If) -> Result<()> {
+    fn compile_if(&mut self, _if: &ir::If) -> Result<()> {
         self.instructions.push_stack_frame();
 
         self.instructions.stack_instructions.jump();
 
-        self.compile_if_block(&_if.expression, &_if.body)?;
+        self.compile_if_block(&_if.expression, &_if.actions)?;
 
         for v in &_if.elseif {
-            self.compile_if_block(&v.expression, &v.body)?;
+            self.compile_if_block(&v.expression, &v.actions)?;
         }
 
         if let Some(v) = &_if._else {
-            self.compile_body(&v.body)?;
+            self.compile_actions(&v.actions)?;
         }
 
         self.instructions.stack_instructions.back(1);
@@ -2857,10 +2074,10 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_for(&mut self, _for: &ast::For) -> Result<()> {
+    fn compile_for(&mut self, _for: &ir::For) -> Result<()> {
         self.instructions.push_stack_frame();
         if let Some(v) = &_for.initializer {
-            self.compile_node(v)?;
+            self.compile_action(v)?;
         }
 
         self.instructions
@@ -2883,7 +2100,7 @@ impl FunctionCompiler {
             if let Some(v) = &_for.expression {
                 self.instructions.push_stack_frame();
                 let exp = self.compile_expression(v)?;
-                if exp != *BOOL {
+                if exp != *ir::BOOL {
                     return Err(anyhow!("compile_for: expected expression to return bool"));
                 }
                 let size = self.instructions.pop_stack_frame_size();
@@ -2897,7 +2114,7 @@ impl FunctionCompiler {
             }
         };
 
-        self.compile_body(&_for.body)?;
+        self.compile_actions(&_for.actions)?;
         self.instructions.pop_stack_frame();
 
         self.instructions.stack_instructions.back(1);
@@ -2905,7 +2122,7 @@ impl FunctionCompiler {
 
         // continue will jump here
         if let Some(v) = &_for.after_each {
-            self.compile_node(v)?;
+            self.compile_action(v)?;
         }
 
         self.instructions.stack_instructions.again();
@@ -2952,29 +2169,29 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_node(&mut self, node: &ast::Node) -> Result<()> {
-        match node {
-            ast::Node::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
-            ast::Node::Return(exp) => self.compile_return(exp.as_ref())?,
-            ast::Node::Expression(exp) => {
+    fn compile_action(&mut self, action: &ir::Action) -> Result<()> {
+        match action {
+            ir::Action::VariableDeclaration(var) => self.compile_variable_declaration(var)?,
+            ir::Action::Return(exp) => self.compile_return(exp.as_ref())?,
+            ir::Action::Expression(exp) => {
                 self.instructions.push_stack_frame();
                 self.compile_expression(exp)?;
                 self.instructions.pop_stack_frame();
             }
-            ast::Node::VariableAssignment(assignment) => {
+            ir::Action::VariableAssignment(assignment) => {
                 self.compile_variable_assignment(assignment)?;
             }
-            ast::Node::If(v) => {
+            ir::Action::If(v) => {
                 self.compile_if(v)?;
             }
-            ast::Node::Debug => {
+            ir::Action::Debug => {
                 self.instructions.instr_debug();
             }
-            ast::Node::For(v) => self.compile_for(v)?,
-            ast::Node::Break => {
+            ir::Action::For(v) => self.compile_for(v)?,
+            ir::Action::Break => {
                 self.compile_for_break()?;
             }
-            ast::Node::Continue => {
+            ir::Action::Continue => {
                 self.compile_for_continue()?;
             }
         };
@@ -2982,25 +2199,22 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    fn compile_body(&mut self, body: &[ast::Node]) -> Result<()> {
-        self.current_body.push(CompilerBody::new(body.to_vec()));
+    fn compile_actions(&mut self, actions: &[ir::Action]) -> Result<()> {
         self.instructions.push_stack_frame();
 
-        for node in body {
-            self.compile_node(node)?;
-            self.current_body.last_mut().unwrap().next();
+        for action in actions {
+            self.compile_action(action)?;
         }
 
-        self.current_body.pop();
         self.instructions.pop_stack_frame();
 
         Ok(())
     }
 
-    fn compile_return(&mut self, exp: Option<&ast::Expression>) -> Result<()> {
+    fn compile_return(&mut self, exp: Option<&ir::Expression>) -> Result<()> {
         if let Some(exp) = exp {
             let exp = self.compile_expression(exp)?;
-            if exp != self.function.return_type {
+            if exp != *self.function.return_type() {
                 return Err(anyhow!("incorrect type"));
             }
 
@@ -3021,7 +2235,7 @@ impl FunctionCompiler {
     pub fn compile(mut self) -> Result<CompiledInstructions> {
         self.instructions.init_function_prologue(&self.function)?;
 
-        self.compile_body(&self.function.body.clone())?;
+        self.compile_actions(&self.function.actions().to_vec())?;
 
         self.compile_return(None)?;
 
