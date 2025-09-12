@@ -2,14 +2,16 @@ use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::HashMap,
+    ffi::CString,
     mem, ptr, slice,
+    str::FromStr,
 };
 
 #[derive(Debug)]
 enum GcObjectData {
     Slice(*mut Slice),
     Alloced(*mut u8, Layout),
-    Cif(*mut libffi::middle::Cif),
+    Cif(*mut Cif),
 }
 
 #[derive(Debug)]
@@ -232,12 +234,17 @@ impl Slice {
         self.len += 1;
         self.data.extend_from_slice(val);
     }
+
+    fn string(&self) -> String {
+        String::from_utf8(self.data.clone()).unwrap()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    // argument type count
-    FfiCreate(usize),
+    FfiCreate,
+    FfiDllOpen,
+    FfiCall,
 
     SliceLen,
     SliceAppend(usize),
@@ -448,6 +455,38 @@ impl StaticMemory {
     fn index(&self, index: usize, len: usize) -> &[u8] {
         &self.data[index..(index + len)]
     }
+}
+
+enum FfiType {
+    Cint,
+    Cvoid,
+    Cpointer,
+}
+
+impl FfiType {
+    fn from_str(from: &str) -> Self {
+        match from {
+            "c_int" => Self::Cint,
+            "c_void" => Self::Cvoid,
+            "c_pointer" => Self::Cpointer,
+            other => panic!("{other}"),
+        }
+    }
+
+    fn to_ffi_type(&self) -> libffi::middle::Type {
+        match self {
+            Self::Cint => libffi::middle::Type::c_int(),
+            Self::Cvoid => libffi::middle::Type::void(),
+            Self::Cpointer => libffi::middle::Type::pointer(),
+        }
+    }
+}
+
+struct Cif {
+    arguments: Vec<FfiType>,
+    return_type: FfiType,
+    cif: libffi::middle::Cif,
+    fn_ptr: *mut libc::c_void,
 }
 
 pub struct Vm {
@@ -717,32 +756,70 @@ impl Vm {
 
                     continue;
                 }
-                Instruction::FfiCreate(argument_count) => {
-                    let return_type = unsafe { Type::from_u8(self.stack.pop()) };
+                Instruction::FfiCreate => {
+                    let return_index: usize = self.stack.pop();
 
-                    let mut args: Vec<Type> = Vec::with_capacity(argument_count);
-                    for _ in 0..argument_count {
-                        args.push(unsafe { Type::from_u8(self.stack.pop()) });
+                    // slice of strings
+                    let arguments: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let mut argument_types: Vec<FfiType> = Vec::new();
+
+                    for index in 0..arguments.len {
+                        let slice: &mut Slice = unsafe {
+                            &mut *arguments
+                                .data
+                                .as_mut_ptr()
+                                .byte_offset((index * size_of::<usize>()) as isize)
+                                .cast()
+                        };
+                        argument_types.push(FfiType::from_str(&slice.string()));
                     }
-                    args.reverse();
+
+                    let return_argument = unsafe {
+                        FfiType::from_str(&(&mut *self.stack.pop::<*mut Slice>()).string())
+                    };
+
+                    let function_iden = unsafe { (&mut *self.stack.pop::<*mut Slice>()).string() };
+
+                    let dll: *mut libc::c_void = self.stack.pop();
 
                     let mut builder = libffi::middle::Builder::new();
-
-                    for v in args {
-                        if let Type::Void = v {
-                            panic!("ffi: void argument");
-                        }
-                        let arg = v.to_ffi_type();
-                        builder = builder.arg(arg);
+                    for arg in &argument_types {
+                        builder = builder.arg(arg.to_ffi_type());
                     }
+                    builder = builder.res(return_argument.to_ffi_type());
 
-                    builder = builder.res(return_type.to_ffi_type());
-                    let cif = builder.into_cif();
-                    let raw_cif = Box::into_raw(Box::new(cif));
+                    let fn_ptr = unsafe {
+                        let name = CString::from_str(&function_iden).unwrap();
+                        libc::dlsym(dll, name.as_ptr())
+                    };
 
-                    self.gc
-                        .add_object(GcObject::new(GcObjectData::Cif(raw_cif)));
-                    self.stack.push(raw_cif);
+                    let cif = Box::into_raw(
+                        Cif {
+                            fn_ptr,
+                            arguments: argument_types,
+                            return_type: return_argument,
+                            cif: builder.into_cif(),
+                        }
+                        .into(),
+                    );
+
+                    self.gc.add_object(GcObject::new(GcObjectData::Cif(cif)));
+                    self.stack.push(cif);
+
+                    pc = return_index;
+                }
+                Instruction::FfiDllOpen => {
+                    let return_index: usize = self.stack.pop();
+                    let path: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    let handle = unsafe {
+                        let cpath = CString::from_vec_unchecked(path.data.clone());
+                        libc::dlopen(cpath.as_ptr(), libc::RTLD_LAZY)
+                    };
+
+                    self.stack.push(handle);
+
+                    pc = return_index;
                 }
             }
 
