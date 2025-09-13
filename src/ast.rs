@@ -121,7 +121,14 @@ pub struct Closure {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeCast {
+    pub _type: Type,
+    pub expression: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    TypeCast(Box<TypeCast>),
     AndOr(Box<AndOr>),
     Infix(Infix),
     Negate(Box<Expression>),
@@ -958,6 +965,15 @@ impl<'a> TokenParser<'a> {
 
             let token = self.iter.peek_err(0)?.clone();
             match token {
+                lexer::Token::As => {
+                    self.iter.next();
+                    let _type = self.parse_type()?;
+                    left = Expression::TypeCast(Box::new(TypeCast {
+                        _type,
+                        expression: left,
+                    }));
+                    continue;
+                }
                 lexer::Token::BOpen => {
                     self.iter.next();
                     left = Expression::Index(Index {

@@ -652,7 +652,6 @@ pub struct Compare {
 pub enum CallType {
     Function(ExpFunction),
     Closure(Expression),
-    TypeCast(Type),
     Method(Method),
 }
 
@@ -707,7 +706,14 @@ pub struct Method {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeCast {
+    pub _type: Type,
+    pub expression: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
+    TypeCast(Box<TypeCast>),
     Spread(Box<Expression>),
     Index(Box<Index>),
     Compare(Box<Compare>),
@@ -770,9 +776,6 @@ impl Expression {
                 let _type = match &call.call_type {
                     CallType::Closure(exp) => exp._type(variables)?,
                     CallType::Function(exp_function) => exp_function._type.clone(),
-                    CallType::TypeCast(_type_to) => {
-                        return Ok(_type_to.clone());
-                    }
                     CallType::Method(method) => method.function._type.clone(),
                 };
 
@@ -819,6 +822,8 @@ impl Expression {
             Self::Nil => Ok(NIL.clone()),
             Self::Closure(closure) => Ok(closure._type.clone()),
             Self::Method(method) => Ok(method.function._type.clone()),
+            Self::TypeCast(type_cast) => Ok(type_cast._type.clone()), // should I check if it is correct
+                                                                      // here?
         }
     }
 
@@ -1110,17 +1115,8 @@ impl<'a> IrParser<'a> {
             ast::Expression::Call(call) => {
                 let exp = self.get_expression(&call.expression, expected_type)?;
 
-                if let Expression::Type(_type) = exp {
-                    let arguments = call
-                        .arguments
-                        .iter()
-                        .map(|v| Ok(self.get_expression(v, None)?))
-                        .collect::<Result<_>>()?;
-
-                    return Ok(Expression::Call(Box::new(Call {
-                        arguments,
-                        call_type: CallType::TypeCast(_type.clone()),
-                    })));
+                if let Expression::Type(_) = exp {
+                    panic!("type casts are using 'as'");
                 }
 
                 let type_function = match &exp._type(&self.variables)?._type {
@@ -1290,6 +1286,12 @@ impl<'a> IrParser<'a> {
                     arguments,
                     escaped_variables: self.escaped_variables.clone(),
                 }));
+            }
+            ast::Expression::TypeCast(type_cast) => {
+                return Ok(Expression::TypeCast(Box::new(TypeCast {
+                    _type: self.type_resolver.resolve(&type_cast._type)?,
+                    expression: self.get_expression(&type_cast.expression, None)?,
+                })));
             }
         }
     }
