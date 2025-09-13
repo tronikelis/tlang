@@ -7,6 +7,15 @@ use std::{
     str::FromStr,
 };
 
+macro_rules! alloc_value {
+    ($v:expr) => {{
+        let layout = Layout::for_value(&$v);
+        let ptr = alloc(layout);
+        *ptr.cast() = $v;
+        (ptr, layout)
+    }};
+}
+
 #[derive(Debug)]
 enum GcObjectData {
     Slice(*mut Slice),
@@ -489,6 +498,32 @@ struct Cif {
     fn_ptr: *mut libc::c_void,
 }
 
+struct AnyVec {
+    values: Vec<(*mut u8, Layout)>,
+}
+
+impl AnyVec {
+    fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    fn push<T>(&mut self, value: T) -> *mut u8 {
+        let (ptr, layout) = unsafe { alloc_value!(value) };
+        self.values.push((ptr, layout));
+        ptr
+    }
+}
+
+impl Drop for AnyVec {
+    fn drop(&mut self) {
+        for v in &self.values {
+            unsafe {
+                dealloc(v.0, v.1);
+            };
+        }
+    }
+}
+
 pub struct Vm {
     stack: Stack,
     instructions: Vec<Instruction>,
@@ -818,6 +853,60 @@ impl Vm {
                     };
 
                     self.stack.push(handle);
+
+                    pc = return_index;
+                }
+                Instruction::FfiCall => {
+                    let return_index: usize = self.stack.pop();
+                    // slice of pointers to arguments
+                    let args: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let cif: &mut Cif = unsafe { &mut *self.stack.pop::<*mut Cif>() };
+
+                    let mut cif_args: Vec<libffi::middle::Arg> = Vec::new();
+                    let mut converted_args = AnyVec::new();
+
+                    let mut arg_ptr = args.data.as_mut_ptr();
+                    for arg in &cif.arguments {
+                        let ptr = match arg {
+                            FfiType::Cvoid => panic!("Cvoid in argument"),
+                            FfiType::Cint => {
+                                let as_isize: isize = unsafe {
+                                    let v: *mut isize = *arg_ptr.cast();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    *v
+                                };
+                                converted_args.push(as_isize as libc::c_int)
+                            }
+                            FfiType::Cpointer => {
+                                let ptr: *mut u8 = unsafe {
+                                    let v: *mut *mut u8 = *arg_ptr.cast();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    *v
+                                };
+                                converted_args.push(ptr)
+                            }
+                        };
+
+                        cif_args.push(libffi::middle::arg(unsafe { &*ptr }));
+                    }
+
+                    let result = unsafe {
+                        cif.cif
+                            .call::<*mut libc::c_void>(libffi::high::CodePtr(cif.fn_ptr), &cif_args)
+                    };
+
+                    let alloced = match cif.return_type {
+                        FfiType::Cint => unsafe {
+                            let result: isize = (*(&result).cast::<*mut libc::c_int>()) as isize;
+                            alloc_value!(result)
+                        },
+                        FfiType::Cvoid => (0 as *mut u8, Layout::new::<usize>()),
+                        FfiType::Cpointer => unsafe { alloc_value!(result) },
+                    };
+
+                    self.gc
+                        .add_object(GcObject::new(GcObjectData::Alloced(alloced.0, alloced.1)));
+                    self.stack.push(alloced.0);
 
                     pc = return_index;
                 }
