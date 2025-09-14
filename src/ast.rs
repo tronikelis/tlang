@@ -888,7 +888,7 @@ impl<'a> TokenParser<'a> {
         Ok(Closure { _type, body })
     }
 
-    fn pratt_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
+    fn pratt_infix_binding_power(token: &lexer::Token) -> Option<(usize, usize)> {
         match token {
             lexer::Token::Percent => Some((11, 12)),
 
@@ -903,6 +903,29 @@ impl<'a> TokenParser<'a> {
             lexer::Token::AmperAmper => Some((3, 4)),
             lexer::Token::PipePipe => Some((1, 2)),
 
+            _ => None,
+        }
+    }
+
+    fn pratt_prefix_binding_power(token: &lexer::Token) -> usize {
+        match token {
+            lexer::Token::Star
+            | lexer::Token::Plus
+            | lexer::Token::Minus
+            | lexer::Token::Bang
+            | lexer::Token::Amper => 100,
+            token => panic!("pratt prefix: {token:#?}"),
+        }
+    }
+
+    fn pratt_postfix_binding_power(token: &lexer::Token) -> Option<usize> {
+        match token {
+            lexer::Token::As => Some(50),
+            lexer::Token::BOpen
+            | lexer::Token::Dot3
+            | lexer::Token::POpen
+            | lexer::Token::COpen
+            | lexer::Token::Dot => Some(200),
             _ => None,
         }
     }
@@ -925,7 +948,9 @@ impl<'a> TokenParser<'a> {
                 lexer::Token::Plus | lexer::Token::Minus => {
                     self.iter.next();
                     Expression::Infix(Infix {
-                        expression: Box::new(self.parse_expression()?),
+                        expression: Box::new(
+                            self.parse_expression_pratt(Self::pratt_prefix_binding_power(&token))?,
+                        ),
                         _type: match token {
                             lexer::Token::Plus => InfixType::Plus,
                             lexer::Token::Minus => InfixType::Minus,
@@ -935,15 +960,21 @@ impl<'a> TokenParser<'a> {
                 }
                 lexer::Token::Bang => {
                     self.iter.next();
-                    Expression::Negate(Box::new(self.parse_expression()?))
+                    Expression::Negate(Box::new(
+                        self.parse_expression_pratt(Self::pratt_prefix_binding_power(&token))?,
+                    ))
                 }
                 lexer::Token::Star => {
                     self.iter.next();
-                    Expression::Deref(Box::new(self.parse_expression()?))
+                    Expression::Deref(Box::new(
+                        self.parse_expression_pratt(Self::pratt_prefix_binding_power(&token))?,
+                    ))
                 }
                 lexer::Token::Amper => {
                     self.iter.next();
-                    Expression::Address(Box::new(self.parse_expression()?))
+                    Expression::Address(Box::new(
+                        self.parse_expression_pratt(Self::pratt_prefix_binding_power(&token))?,
+                    ))
                 }
                 lexer::Token::Literal(_) => self.parse_expression_literal()?,
                 lexer::Token::Struct | lexer::Token::Identifier(_) => {
@@ -964,83 +995,89 @@ impl<'a> TokenParser<'a> {
             }
 
             let token = self.iter.peek_err(0)?.clone();
-            match token {
-                lexer::Token::As => {
-                    self.iter.next();
-                    let _type = self.parse_type()?;
-                    left = Expression::TypeCast(Box::new(TypeCast {
-                        _type,
-                        expression: left,
-                    }));
-                    continue;
+            if let Some(bp) = Self::pratt_postfix_binding_power(&token) {
+                if bp < min_bp {
+                    break;
                 }
-                lexer::Token::BOpen => {
-                    self.iter.next();
-                    left = Expression::Index(Index {
-                        var: Box::new(left),
-                        expression: Box::new(self.parse_expression()?),
-                    });
-                    self.iter.expect(lexer::Token::BClose)?;
-                    self.iter.next();
-                    continue;
-                }
-                lexer::Token::Dot3 => {
-                    left = Expression::Spread(Box::new(left));
-                    self.iter.next();
-                    continue;
-                }
-                lexer::Token::POpen => {
-                    left = Expression::Call(Box::new(self.parse_call(left)?));
-                    continue;
-                }
-                lexer::Token::COpen => {
-                    if let Expression::Type(_type) = left {
-                        // variants:
-                        // struct init
-                        // slice init
-                        // type init
-                        match self.iter.peek_err(1)? {
-                            lexer::Token::CClose => {
-                                left = Expression::TypeInit(TypeInit { _type });
-                                self.iter.next();
-                                self.iter.next();
-                            }
-                            lexer::Token::Identifier(_) | lexer::Token::Literal(_) => {
-                                match self.iter.peek_err(2)? {
-                                    lexer::Token::Colon => {
-                                        left =
-                                            Expression::StructInit(self.parse_struct_init(_type)?);
-                                    }
-                                    _ => {
-                                        left = Expression::SliceInit(self.parse_slice_init(_type)?);
+
+                match token {
+                    lexer::Token::As => {
+                        self.iter.next();
+                        let _type = self.parse_type()?;
+                        left = Expression::TypeCast(Box::new(TypeCast {
+                            _type,
+                            expression: left,
+                        }));
+                    }
+                    lexer::Token::BOpen => {
+                        self.iter.next();
+                        left = Expression::Index(Index {
+                            var: Box::new(left),
+                            expression: Box::new(self.parse_expression()?),
+                        });
+                        self.iter.expect(lexer::Token::BClose)?;
+                        self.iter.next();
+                    }
+                    lexer::Token::Dot3 => {
+                        left = Expression::Spread(Box::new(left));
+                        self.iter.next();
+                    }
+                    lexer::Token::POpen => {
+                        left = Expression::Call(Box::new(self.parse_call(left)?));
+                    }
+                    lexer::Token::COpen => {
+                        if let Expression::Type(_type) = left {
+                            // variants:
+                            // struct init
+                            // slice init
+                            // type init
+                            match self.iter.peek_err(1)? {
+                                lexer::Token::CClose => {
+                                    left = Expression::TypeInit(TypeInit { _type });
+                                    self.iter.next();
+                                    self.iter.next();
+                                }
+                                lexer::Token::Identifier(_) | lexer::Token::Literal(_) => {
+                                    match self.iter.peek_err(2)? {
+                                        lexer::Token::Colon => {
+                                            left = Expression::StructInit(
+                                                self.parse_struct_init(_type)?,
+                                            );
+                                        }
+                                        _ => {
+                                            left = Expression::SliceInit(
+                                                self.parse_slice_init(_type)?,
+                                            );
+                                        }
                                     }
                                 }
+                                token => {
+                                    return Err(anyhow!(
+                                        "parse_expression: COpen incorrect {token:#?}"
+                                    ))
+                                }
                             }
-                            token => {
-                                return Err(anyhow!("parse_expression: COpen incorrect {token:#?}"))
-                            }
-                        }
-                        continue;
-                    };
+                        };
+                    }
+                    lexer::Token::Dot => {
+                        self.iter.next();
+                        let lexer::Token::Identifier(identifier) = self.iter.peek_err(0)?.clone()
+                        else {
+                            return Err(anyhow!("dot access expected identifier"));
+                        };
+                        self.iter.next();
+                        left = Expression::DotAccess(Box::new(DotAccess {
+                            expression: left,
+                            identifier: identifier.clone(),
+                        }));
+                    }
+                    _ => unreachable!(),
                 }
-                lexer::Token::Dot => {
-                    self.iter.next();
-                    let lexer::Token::Identifier(identifier) = self.iter.peek_err(0)?.clone()
-                    else {
-                        return Err(anyhow!("dot access expected identifier"));
-                    };
-                    self.iter.next();
-                    left = Expression::DotAccess(Box::new(DotAccess {
-                        expression: left,
-                        identifier: identifier.clone(),
-                    }));
-                    continue;
-                }
-                _ => {}
+                continue;
             }
 
             let token = self.iter.peek_err(0)?.clone();
-            let (l_bp, r_bp) = match Self::pratt_binding_power(&token) {
+            let (l_bp, r_bp) = match Self::pratt_infix_binding_power(&token) {
                 Some(v) => v,
                 None => break,
             };

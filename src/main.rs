@@ -21,7 +21,7 @@ fn main() {
 
                 fn main() void {
                     let foo int = 25
-                    let foo_uint uint = *foo as *uint
+                    let foo_uint uint = *foo.nice.ok() as *uint
                     return
                 }
             ",
