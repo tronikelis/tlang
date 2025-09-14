@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::{ir, lexer, vm};
+use crate::{ir, vm};
 
 #[derive(Debug, Clone)]
 pub enum CompilerInstruction {
@@ -802,30 +802,6 @@ impl Instructions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum TypeBuiltin {
-    Uint,
-    Uint8,
-    Int,
-    String,
-    Bool,
-    Void,
-    CompilerType,
-    Ptr,
-    Nil,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct TypeClosure {
-    arguments: Vec<(String, ir::Type)>,
-    return_type: ir::Type,
-}
-
-struct TypeCast<'a> {
-    expression: &'a ir::Expression,
-    _type: &'a ir::Type,
-}
-
 enum FunctionCallType<'a> {
     Function(&'a ir::ExpFunction),
     Closure(&'a ir::Expression),
@@ -1320,7 +1296,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         Ok(ir::BOOL.clone())
     }
 
-    fn compile_type_cast(&mut self, type_cast: &TypeCast) -> Result<ir::Type> {
+    fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
         self.instructions.push_alignment(type_cast._type.alignment);
 
         let target = self.compile_expression(&type_cast.expression)?;
@@ -1651,10 +1627,6 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 arguments: &call.arguments,
                 call_type: FunctionCallType::Function(function),
             }),
-            ir::CallType::TypeCast(_type) => self.compile_type_cast(&TypeCast {
-                expression: &call.arguments[0],
-                _type,
-            }),
             ir::CallType::Method(method) => self.compile_function_call(&FunctionCall {
                 arguments: &call.arguments,
                 call_type: FunctionCallType::Method(method),
@@ -1815,6 +1787,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             ir::Expression::Variable(v) => self.compile_variable(v),
             ir::Expression::Type(_type) => Ok(_type.clone()),
             ir::Expression::ToClosure(v) => self.compile_to_closure(v),
+            ir::Expression::TypeCast(v) => self.compile_type_cast(v),
             ir::Expression::Function(_) => {
                 panic!("cant compile function expression, expected call expression")
             }

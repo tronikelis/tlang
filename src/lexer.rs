@@ -53,6 +53,7 @@ pub enum Token {
     Colon,
     Impl,
     NL,
+    As,
 }
 
 const CONTROL_CHAR: [char; 22] = [
@@ -157,6 +158,11 @@ impl Lexer {
                 }
                 "return" => {
                     tokens.push(Token::Return);
+                    self.read_next_word();
+                    continue;
+                }
+                "as" => {
+                    tokens.push(Token::As);
                     self.read_next_word();
                     continue;
                 }
