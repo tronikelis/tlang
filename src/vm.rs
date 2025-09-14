@@ -7,13 +7,11 @@ use std::{
     str::FromStr,
 };
 
-macro_rules! alloc_value {
-    ($v:expr) => {{
-        let layout = Layout::for_value(&$v);
-        let ptr = alloc(layout);
-        *ptr.cast() = $v;
-        (ptr, layout)
-    }};
+unsafe fn alloc_value<T>(value: T) -> (*mut u8, Layout) {
+    let layout = Layout::for_value(&value);
+    let ptr = alloc(layout);
+    *ptr.cast() = value;
+    (ptr, layout)
 }
 
 #[derive(Debug)]
@@ -508,7 +506,7 @@ impl AnyVec {
     }
 
     fn push<T>(&mut self, value: T) -> *mut u8 {
-        let (ptr, layout) = unsafe { alloc_value!(value) };
+        let (ptr, layout) = unsafe { alloc_value(value) };
         self.values.push((ptr, layout));
         ptr
     }
@@ -898,10 +896,10 @@ impl Vm {
                     let alloced = match cif.return_type {
                         FfiType::Cint => unsafe {
                             let result: isize = (*(&result).cast::<*mut libc::c_int>()) as isize;
-                            alloc_value!(result)
+                            alloc_value(result)
                         },
                         FfiType::Cvoid => (0 as *mut u8, Layout::new::<usize>()),
-                        FfiType::Cpointer => unsafe { alloc_value!(result) },
+                        FfiType::Cpointer => unsafe { alloc_value(result) },
                     };
 
                     self.gc

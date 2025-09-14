@@ -20,8 +20,8 @@ fn main() {
                 fn libc_write(fd int, slice uint8[]) int {}
 
                 fn dll_open(path string) ptr {}
-                fn ffi_create(dll ptr, function string, return_param string, args ...string) ptr {}
-                fn ffi_call(ffi ptr, args ...ptr) ptr {}
+                fn ffi_create(dll ptr, function string, return_param string, args string...) ptr {}
+                fn ffi_call(ffi ptr, args ptr...) ptr {}
 
                 fn write(fd int, data uint8[]) int {
                     let dll ptr = dll_open(\"libc.so.6\")
