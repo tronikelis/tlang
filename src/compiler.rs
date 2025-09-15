@@ -1551,9 +1551,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
                     let value_exp = self.compile_expression(arg)?;
-                    if value_exp != *inner {
-                        return Err(anyhow!("variadic argument type mismatch"));
-                    }
+                    value_exp.must_equal(inner)?;
 
                     self.instructions.instr_slice_append(value_exp.size);
                 }

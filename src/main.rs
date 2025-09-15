@@ -17,7 +17,10 @@ fn main() {
                 type uint8 _
                 type void _
                 type Type _
+
                 fn libc_write(fd int, slice uint8[]) int {}
+                fn len(slice Type) int {}
+                fn append(slice Type, value Type) void {}
 
                 fn dll_open(path string) ptr {}
                 fn ffi_create(dll ptr, function string, return_param string, args string...) ptr {}

@@ -450,6 +450,13 @@ impl TypeType {
             _ => false,
         }
     }
+
+    pub fn is_closure(&self) -> bool {
+        match self {
+            Self::Closure(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1004,10 +1011,14 @@ impl<'a> IrParser<'a> {
                     _type: resolved_type_function.to_function(),
                 });
 
-                return match expected_type {
-                    None => Ok(result_expression),
-                    Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
-                };
+                if expected_type
+                    .map(|v| v._type.is_closure())
+                    .is_some_and(|v| v)
+                {
+                    return Ok(Expression::ToClosure(Box::new(result_expression)));
+                }
+
+                return Ok(result_expression);
             }
             ast::Expression::Arithmetic(arithmetic) => {
                 let left_exp = self.get_expression(&arithmetic.left, expected_type)?;
@@ -1135,9 +1146,20 @@ impl<'a> IrParser<'a> {
                 }
 
                 for (i, arg) in call.arguments.iter().enumerate() {
+                    let i = i + is_method;
+
+                    if i + 1 >= type_function.arguments.len() {
+                        if let TypeType::Variadic(_type) =
+                            &type_function.arguments.last().unwrap()._type._type
+                        {
+                            arguments.push(self.get_expression(&arg, Some(_type))?);
+                            continue;
+                        }
+                    }
+
                     let fn_arg = type_function
                         .arguments
-                        .get(i + is_method)
+                        .get(i)
                         .ok_or(anyhow!("type_function argument not found"))?;
 
                     arguments.push(self.get_expression(&arg, Some(&fn_arg._type))?);
@@ -1190,10 +1212,14 @@ impl<'a> IrParser<'a> {
                         },
                     }));
 
-                    return match expected_type {
-                        None => Ok(result_expression),
-                        Some(_) => Ok(Expression::ToClosure(Box::new(result_expression))),
-                    };
+                    if expected_type
+                        .map(|v| v._type.is_closure())
+                        .is_some_and(|v| v)
+                    {
+                        return Ok(Expression::ToClosure(Box::new(result_expression)));
+                    }
+
+                    return Ok(result_expression);
                 }
 
                 return Ok(Expression::DotAccess(Box::new(DotAccess {
