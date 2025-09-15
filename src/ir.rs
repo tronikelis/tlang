@@ -53,7 +53,7 @@ impl<'a> TypeResolver<'a> {
     }
 
     fn resolve(&self, _type: &ast::Type) -> Result<Type> {
-        self.resolve_with_alias(_type, None, None)
+        self.resolve_with_alias(_type, None)
     }
 
     fn resolve_type_function(
@@ -83,12 +83,7 @@ impl<'a> TypeResolver<'a> {
         })
     }
 
-    fn resolve_with_alias(
-        &self,
-        _type: &ast::Type,
-        initial_alias: Option<&str>,
-        alias: Option<&str>,
-    ) -> Result<Type> {
+    fn resolve_with_alias(&self, _type: &ast::Type, alias: Option<&str>) -> Result<Type> {
         match _type {
             ast::Type::Alias(inner_alias) => {
                 let builtin = match inner_alias.as_str() {
@@ -103,7 +98,7 @@ impl<'a> TypeResolver<'a> {
                     _ => None,
                 };
                 if let Some(mut builtin) = builtin {
-                    builtin.alias = initial_alias.map(|v| v.to_string()).or(builtin.alias);
+                    builtin.alias = alias.map(|v| v.to_string()).or(builtin.alias);
                     return Ok(builtin);
                 }
 
@@ -128,25 +123,21 @@ impl<'a> TypeResolver<'a> {
                     }
                 }
 
-                self.resolve_with_alias(
-                    &inner,
-                    initial_alias.or(Some(inner_alias)),
-                    Some(inner_alias),
-                )
+                self.resolve_with_alias(&inner, Some(inner_alias))
             }
             ast::Type::Slice(_type) => {
-                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
+                let nested = self.resolve_with_alias(_type, None)?;
                 Ok(Type {
-                    alias: nested.alias.clone(),
+                    alias: alias.map(|v| v.to_string()),
                     size: SLICE_SIZE,
                     alignment: SLICE_SIZE,
                     _type: TypeType::Slice(Box::new(nested)),
                 })
             }
             ast::Type::Variadic(_type) => {
-                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
+                let nested = self.resolve_with_alias(_type, None)?;
                 Ok(Type {
-                    alias: nested.alias.clone(),
+                    alias: alias.map(|v| v.to_string()),
                     size: size_of::<usize>(),
                     alignment: size_of::<usize>(),
                     _type: TypeType::Variadic(Box::new(nested)),
@@ -158,7 +149,7 @@ impl<'a> TypeResolver<'a> {
                 let mut highest_alignment: usize = 0;
 
                 for var in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(&var._type, None, alias)?;
+                    let resolved = self.resolve_with_alias(&var._type, None)?;
                     if resolved.alignment > highest_alignment {
                         highest_alignment = resolved.alignment;
                     }
@@ -176,16 +167,16 @@ impl<'a> TypeResolver<'a> {
 
                 let type_struct = TypeStruct { fields };
                 Ok(Type {
-                    alias: initial_alias.map(|v| v.to_string()),
+                    alias: alias.map(|v| v.to_string()),
                     size,
                     alignment: highest_alignment,
                     _type: TypeType::Struct(type_struct),
                 })
             }
             ast::Type::Address(_type) => {
-                let nested = self.resolve_with_alias(_type, initial_alias, alias)?;
+                let nested = self.resolve_with_alias(_type, None)?;
                 Ok(Type {
-                    alias: nested.alias.clone(),
+                    alias: alias.map(|v| v.to_string()),
                     size: PTR_SIZE,
                     alignment: PTR_SIZE,
                     _type: TypeType::Address(Box::new(nested)),
@@ -195,7 +186,7 @@ impl<'a> TypeResolver<'a> {
                 let type_function =
                     self.resolve_type_function(&type_closure.arguments, &type_closure.return_type)?;
 
-                Ok(type_function.to_closure(initial_alias.map(|v| v.to_string())))
+                Ok(type_function.to_closure(alias.map(|v| v.to_string())))
             }
         }
     }
@@ -481,10 +472,10 @@ impl Type {
     fn id(&self) -> String {
         let suffix = match &self._type {
             TypeType::Escaped(_type) => return _type.id(), // dont like this single return here
+            TypeType::Builtin(_) => return self.alias.clone().unwrap(),
 
             TypeType::Lazy(v) => v.clone(),
             TypeType::Slice(_type) => _type.id() + "[]",
-            TypeType::Builtin(_) => self.alias.clone().expect("builtin alias"),
             TypeType::Address(_type) => _type.id() + "&",
             TypeType::Struct(type_struct) => {
                 let mut str = String::from("{");
@@ -543,7 +534,7 @@ impl Type {
 
     pub fn create_variadic(item: Self) -> Self {
         Self {
-            alias: item.alias.clone(),
+            alias: None,
             size: SLICE_SIZE,
             alignment: SLICE_SIZE,
             _type: TypeType::Variadic(Box::new(item)),
@@ -552,7 +543,7 @@ impl Type {
 
     pub fn create_address(item: Self) -> Self {
         Self {
-            alias: item.alias.clone(),
+            alias: None,
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             _type: TypeType::Address(Box::new(item)),
@@ -561,7 +552,7 @@ impl Type {
 
     pub fn create_escaped(item: Self) -> Self {
         Self {
-            alias: item.alias.clone(),
+            alias: None,
             size: PTR_SIZE,
             alignment: PTR_SIZE,
             _type: TypeType::Escaped(Box::new(item)),
