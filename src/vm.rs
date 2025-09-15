@@ -184,10 +184,6 @@ impl Gc {
     }
 }
 
-fn layout(size: usize) -> Layout {
-    Layout::from_size_align(size, size_of::<usize>()).unwrap()
-}
-
 #[derive(Debug)]
 pub struct Slice {
     data: Vec<u8>,
@@ -326,30 +322,31 @@ impl Instruction {
 pub struct Stack {
     data: *mut u8,
     sp: *mut u8,
-    size: usize,
+    layout: Layout,
 }
 
 impl Drop for Stack {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.data, layout(self.size));
+            dealloc(self.data, self.layout);
         };
     }
 }
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let data = unsafe { alloc(layout(size)) };
+        let layout = Layout::from_size_align(size, 8).unwrap();
+        let data = unsafe { alloc(layout) };
 
         Self {
             sp: unsafe { data.byte_offset(size as isize) },
             data,
-            size,
+            layout,
         }
     }
 
     fn sp_end(&self) -> *mut u8 {
-        unsafe { self.data.byte_offset(self.size as isize) }
+        unsafe { self.data.byte_offset(self.layout.size() as isize) }
     }
 
     fn pop_size(&mut self, size: usize) -> &[u8] {
@@ -410,7 +407,7 @@ impl Stack {
 
     fn debug_print(&self) {
         unsafe {
-            let mut data_end = self.data.byte_offset(self.size as isize);
+            let mut data_end = self.data.byte_offset(self.layout.size() as isize);
             while data_end > self.sp {
                 data_end = data_end.byte_offset(-8);
                 let value: usize = *data_end.cast();
@@ -505,10 +502,16 @@ impl AnyVec {
         Self { values: Vec::new() }
     }
 
-    fn push<T>(&mut self, value: T) -> *mut u8 {
-        let (ptr, layout) = unsafe { alloc_value(value) };
-        self.values.push((ptr, layout));
-        ptr
+    fn push<T>(&mut self, value: T) {
+        self.values.push(unsafe { alloc_value(value) });
+    }
+
+    fn pointers(&self) -> Vec<*mut u8> {
+        let mut vec = Vec::new();
+        for value in &self.values {
+            vec.push(value.0);
+        }
+        vec
     }
 }
 
@@ -860,12 +863,11 @@ impl Vm {
                     let args: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     let cif: &mut Cif = unsafe { &mut *self.stack.pop::<*mut Cif>() };
 
-                    let mut cif_args: Vec<libffi::middle::Arg> = Vec::new();
                     let mut converted_args = AnyVec::new();
 
                     let mut arg_ptr = args.data.as_mut_ptr();
                     for arg in &cif.arguments {
-                        let ptr = match arg {
+                        match arg {
                             FfiType::Cvoid => panic!("Cvoid in argument"),
                             FfiType::Cint => {
                                 let as_isize: isize = unsafe {
@@ -884,27 +886,56 @@ impl Vm {
                                 converted_args.push(ptr)
                             }
                         };
-
-                        cif_args.push(libffi::middle::arg(unsafe { &*ptr }));
                     }
 
-                    let result = unsafe {
-                        cif.cif
-                            .call::<*mut libc::c_void>(libffi::high::CodePtr(cif.fn_ptr), &cif_args)
+                    // will hold the result value in here,
+                    // size has to be at least 8 bytes
+                    let result_ptr = unsafe {
+                        match &cif.return_type {
+                            FfiType::Cint | FfiType::Cpointer => {
+                                let layout = Layout::from_size_align(8, 8).unwrap();
+                                Some((alloc(layout), layout))
+                            }
+                            FfiType::Cvoid => None,
+                        }
                     };
 
-                    let alloced = match cif.return_type {
+                    unsafe {
+                        libffi::raw::ffi_call(
+                            cif.cif.as_raw_ptr(),
+                            Some(mem::transmute(cif.fn_ptr)),
+                            result_ptr
+                                .map(|v| v.0 as *mut libc::c_void)
+                                .unwrap_or(0 as *mut libc::c_void),
+                            converted_args.pointers().as_mut_ptr().cast(),
+                        );
+                    };
+
+                    let result_converted = match cif.return_type {
+                        // c_int -> isize -> alloc
                         FfiType::Cint => unsafe {
-                            let result: isize = (*(&result).cast::<*mut libc::c_int>()) as isize;
-                            alloc_value(result)
+                            let result: isize =
+                                (*(result_ptr.unwrap().0).cast::<*mut libc::c_int>()) as isize;
+                            Some(alloc_value(result))
                         },
-                        FfiType::Cvoid => (0 as *mut u8, Layout::new::<usize>()),
-                        FfiType::Cpointer => unsafe { alloc_value(result) },
+                        // ptr -> alloc
+                        FfiType::Cpointer => unsafe {
+                            Some(alloc_value::<*mut u8>(*result_ptr.unwrap().0.cast()))
+                        },
+                        FfiType::Cvoid => None,
                     };
 
-                    self.gc
-                        .add_object(GcObject::new(GcObjectData::Alloced(alloced.0, alloced.1)));
-                    self.stack.push(alloced.0);
+                    if let Some((ptr, layout)) = result_ptr {
+                        unsafe {
+                            dealloc(ptr, layout);
+                        };
+                    }
+
+                    if let Some((ptr, layout)) = result_converted {
+                        self.gc
+                            .add_object(GcObject::new(GcObjectData::Alloced(ptr, layout)));
+                        self.stack.push(ptr);
+                    }
 
                     pc = return_index;
                 }
