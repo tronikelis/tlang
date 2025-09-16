@@ -574,10 +574,26 @@ impl Type {
     }
 
     pub fn must_equal(&self, other: &Self) -> Result<()> {
-        // todo: do this the other way around
+        // todo: need a better way to do this, also the other way around
         if let TypeType::Builtin(builtin) = &self._type {
             if let TypeBuiltin::Nil = builtin {
                 if let TypeType::Address(_) = &other._type {
+                    return Ok(());
+                }
+            }
+        }
+
+        // todo: need a better way to do this
+        if let TypeType::Builtin(builtin) = &self._type {
+            if let TypeBuiltin::Ptr = builtin {
+                if let TypeType::Address(_) = &other._type {
+                    return Ok(());
+                }
+            }
+        }
+        if let TypeType::Address(_) = &self._type {
+            if let TypeType::Builtin(builtin) = &other._type {
+                if let TypeBuiltin::Ptr = builtin {
                     return Ok(());
                 }
             }

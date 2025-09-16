@@ -28,7 +28,7 @@ fn main() {
 
                 fn write(fd int, data uint8[]) int {
                     let dll ptr = dll_open(\"libc.so.6\")
-                    let ffi ptr = ffi_create(dll, \"write\", \"c_int\", \"c_int\", \"c_void\", \"c_int\")
+                    let ffi ptr = ffi_create(dll, \"write\", \"c_int\", \"c_int\", \"c_pointer\", \"c_int\")
                     return *(ffi_call(ffi, &fd, data as ptr, &len(data)) as *int)
                 }
 

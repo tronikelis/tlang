@@ -1299,9 +1299,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
         self.instructions.push_alignment(type_cast._type.alignment);
 
-        let target = self.compile_expression(&type_cast.expression)?;
+        let from = self.compile_expression(&type_cast.expression)?;
 
-        match target._type {
+        // there should be a better way to do this
+        match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
                 ir::TypeBuiltin::Int => match &type_cast._type._type {
                     ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
@@ -1329,7 +1330,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         ir::TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    ir::TypeType::Address(_) => {}
+                    _type => {
+                        return Err(anyhow!(
+                            "compile_type_cast: cant cast from: {from:#?}, to: {:#?}",
+                            _type,
+                        ))
+                    }
                 },
                 ir::TypeBuiltin::String => match &type_cast._type._type {
                     ir::TypeType::Slice(item) => {
