@@ -644,6 +644,35 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::INT.size));
     }
 
+    fn instr_dll_open(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiDllOpen));
+        // will pop 1 argument
+        // will push 1 argument so no further instructions needed
+    }
+
+    fn instr_ffi_create(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiCreate));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::PTR_SIZE * 4));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
+    }
+
+    fn instr_ffi_call(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiCall));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::PTR_SIZE * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
+    }
+
     fn push_alignment(&mut self, alignment: usize) -> usize {
         let alignment = ir::align(alignment, self.var_stack.total_size());
         if alignment != 0 {
@@ -1571,6 +1600,18 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 "libc_write" => {
                     self.instructions.instr_libc_write();
                     return Ok(ir::INT.clone());
+                }
+                "dll_open" => {
+                    self.instructions.instr_dll_open();
+                    return Ok(ir::PTR.clone());
+                }
+                "ffi_create" => {
+                    self.instructions.instr_ffi_create();
+                    return Ok(ir::PTR.clone());
+                }
+                "ffi_call" => {
+                    self.instructions.instr_ffi_call();
+                    return Ok(ir::PTR.clone());
                 }
                 _ => {}
             }

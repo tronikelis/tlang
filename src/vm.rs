@@ -335,7 +335,7 @@ impl Drop for Stack {
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let layout = Layout::from_size_align(size, 8).unwrap();
+        let layout = Layout::from_size_align(size, 32).unwrap();
         let data = unsafe { alloc(layout) };
 
         Self {
@@ -461,6 +461,7 @@ impl StaticMemory {
     }
 }
 
+#[derive(Debug)]
 enum FfiType {
     Cint,
     Cvoid,
@@ -535,7 +536,7 @@ pub struct Vm {
 impl Vm {
     pub fn new(instructions: Vec<Instruction>, static_memory: StaticMemory) -> Self {
         return Self {
-            stack: Stack::new(4096),
+            stack: Stack::new(65536),
             instructions,
             static_memory,
             gc: Gc::new(),
@@ -793,19 +794,17 @@ impl Vm {
                     continue;
                 }
                 Instruction::FfiCreate => {
-                    let return_index: usize = self.stack.pop();
-
                     // slice of strings
                     let arguments: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     let mut argument_types: Vec<FfiType> = Vec::new();
 
                     for index in 0..arguments.len {
                         let slice: &mut Slice = unsafe {
-                            &mut *arguments
+                            &mut **arguments
                                 .data
                                 .as_mut_ptr()
                                 .byte_offset((index * size_of::<usize>()) as isize)
-                                .cast()
+                                .cast::<*mut Slice>()
                         };
                         argument_types.push(FfiType::from_str(&slice.string()));
                     }
@@ -841,11 +840,8 @@ impl Vm {
 
                     self.gc.add_object(GcObject::new(GcObjectData::Cif(cif)));
                     self.stack.push(cif);
-
-                    pc = return_index;
                 }
                 Instruction::FfiDllOpen => {
-                    let return_index: usize = self.stack.pop();
                     let path: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     let handle = unsafe {
@@ -854,11 +850,8 @@ impl Vm {
                     };
 
                     self.stack.push(handle);
-
-                    pc = return_index;
                 }
                 Instruction::FfiCall => {
-                    let return_index: usize = self.stack.pop();
                     // slice of pointers to arguments
                     let args: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     let cif: &mut Cif = unsafe { &mut *self.stack.pop::<*mut Cif>() };
@@ -936,8 +929,6 @@ impl Vm {
                             .add_object(GcObject::new(GcObjectData::Alloced(ptr, layout)));
                         self.stack.push(ptr);
                     }
-
-                    pc = return_index;
                 }
             }
 
