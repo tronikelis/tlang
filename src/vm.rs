@@ -921,12 +921,11 @@ impl Vm {
                     }
 
                     // will hold the result value in here,
-                    // size has to be at least 8 bytes
+                    // size has to be at least register size
                     let result_ptr = unsafe {
                         match &cif.return_type {
                             FfiType::Cint | FfiType::Cpointer | FfiType::Cstring => {
-                                let layout = Layout::from_size_align(8, 8).unwrap();
-                                Some((alloc(layout), layout))
+                                Some(alloc_value(0 as usize))
                             }
                             FfiType::Cvoid => None,
                         }
@@ -943,26 +942,40 @@ impl Vm {
                         );
                     };
 
-                    let result_converted = match cif.return_type {
-                        // c_int -> isize -> alloc
-                        FfiType::Cint => unsafe {
-                            let result: isize =
-                                (*(result_ptr.unwrap().0).cast::<*mut libc::c_int>()) as isize;
-                            Some(alloc_value(result))
+                    #[cfg(debug_assertions)]
+                    if let Some((ptr, _)) = result_ptr {
+                        if unsafe { *ptr.cast::<usize>() } == 0 {
+                            println!("FfiCall, got null return");
+                        }
+                    }
+
+                    let result_converted = match result_ptr {
+                        Some((ptr, _)) => unsafe {
+                            let is_null = *ptr.cast::<usize>() == 0;
+
+                            match cif.return_type {
+                                FfiType::Cvoid => unreachable!(),
+                                FfiType::Cint => {
+                                    let result: isize = *ptr.cast::<libc::c_int>() as isize;
+                                    Some(alloc_value(result))
+                                }
+                                FfiType::Cpointer => match is_null {
+                                    false => Some(alloc_value::<*mut u8>(*ptr.cast())),
+                                    true => None,
+                                },
+                                FfiType::Cstring => match is_null {
+                                    false => {
+                                        let cstring = CStr::from_ptr(*ptr.cast());
+                                        let slice = Slice::from_string(cstring.to_str().unwrap());
+                                        self.gc
+                                            .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                                        Some(alloc_value(slice))
+                                    }
+                                    true => None,
+                                },
+                            }
                         },
-                        // ptr -> alloc
-                        FfiType::Cpointer => unsafe {
-                            Some(alloc_value::<*mut u8>(*result_ptr.unwrap().0.cast()))
-                        },
-                        // *char -> string slice -> alloc
-                        FfiType::Cstring => unsafe {
-                            let cstring = CStr::from_ptr(*result_ptr.unwrap().0.cast());
-                            let slice = Slice::from_string(cstring.to_str().unwrap());
-                            self.gc
-                                .add_object(GcObject::new(GcObjectData::Slice(slice)));
-                            Some(alloc_value(slice))
-                        },
-                        FfiType::Cvoid => None,
+                        None => None,
                     };
 
                     if let Some((ptr, layout)) = result_ptr {
@@ -975,6 +988,8 @@ impl Vm {
                         self.gc
                             .add_object(GcObject::new(GcObjectData::Alloced(ptr, layout)));
                         self.stack.push(ptr);
+                    } else {
+                        self.stack.push(0 as usize);
                     }
                 }
             }

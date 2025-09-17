@@ -39,8 +39,8 @@ fn main() {
                 }
 
                 fn main() void {
-                    write(1, \"FULLY FFI CALL LETS GOOOOO!!!!!\n\" as uint8[])
-                    write(1, getenv(\"TLANG\") as uint8[])
+                    write(1, \"$HOME:\n\" as uint8[])
+                    write(1, (getenv(\"HOME\") + \"\n\") as uint8[])
                     return
                 }
             ",
