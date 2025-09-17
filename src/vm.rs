@@ -2,7 +2,7 @@ use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::HashMap,
-    ffi::CString,
+    ffi::{CStr, CString},
     mem, ptr, slice,
     str::FromStr,
 };
@@ -466,6 +466,7 @@ enum FfiType {
     Cint,
     Cvoid,
     Cpointer,
+    Cstring,
 }
 
 impl FfiType {
@@ -474,6 +475,7 @@ impl FfiType {
             "c_int" => Self::Cint,
             "c_void" => Self::Cvoid,
             "c_pointer" => Self::Cpointer,
+            "c_string" => Self::Cstring,
             other => panic!("{other}"),
         }
     }
@@ -482,11 +484,12 @@ impl FfiType {
         match self {
             Self::Cint => libffi::middle::Type::c_int(),
             Self::Cvoid => libffi::middle::Type::void(),
-            Self::Cpointer => libffi::middle::Type::pointer(),
+            Self::Cpointer | Self::Cstring => libffi::middle::Type::pointer(),
         }
     }
 }
 
+#[derive(Debug)]
 struct Cif {
     arguments: Vec<FfiType>,
     return_type: FfiType,
@@ -494,8 +497,13 @@ struct Cif {
     fn_ptr: *mut libc::c_void,
 }
 
+enum AnyVecItem {
+    Value(*mut u8, Layout),
+    Slice(*mut u8, Layout, Layout),
+}
+
 struct AnyVec {
-    values: Vec<(*mut u8, Layout)>,
+    values: Vec<AnyVecItem>,
 }
 
 impl AnyVec {
@@ -504,13 +512,29 @@ impl AnyVec {
     }
 
     fn push<T>(&mut self, value: T) {
-        self.values.push(unsafe { alloc_value(value) });
+        let (ptr, layout) = unsafe { alloc_value(value) };
+        self.values.push(AnyVecItem::Value(ptr, layout));
+    }
+
+    fn push_slice(&mut self, slice: &[u8]) {
+        let slice_layout = Layout::from_size_align(slice.len(), size_of::<usize>()).unwrap();
+        let slice_ptr = unsafe { alloc(slice_layout) };
+        unsafe {
+            ptr::copy_nonoverlapping(slice.as_ptr(), slice_ptr, slice.len());
+        };
+
+        let (ptr, layout) = unsafe { alloc_value(slice_ptr) };
+        self.values
+            .push(AnyVecItem::Slice(ptr, layout, slice_layout));
     }
 
     fn pointers(&self) -> Vec<*mut u8> {
         let mut vec = Vec::new();
         for value in &self.values {
-            vec.push(value.0);
+            vec.push(match *value {
+                AnyVecItem::Value(v, _) => v,
+                AnyVecItem::Slice(v, _, _) => v,
+            });
         }
         vec
     }
@@ -520,7 +544,14 @@ impl Drop for AnyVec {
     fn drop(&mut self) {
         for v in &self.values {
             unsafe {
-                dealloc(v.0, v.1);
+                match *v {
+                    AnyVecItem::Value(v, layout) => dealloc(v, layout),
+                    AnyVecItem::Slice(v, v_layout, slice_layout) => {
+                        let slice_ptr: *mut u8 = *v.cast();
+                        dealloc(v, v_layout);
+                        dealloc(slice_ptr, slice_layout);
+                    }
+                }
             };
         }
     }
@@ -845,7 +876,7 @@ impl Vm {
                     let path: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
                     let handle = unsafe {
-                        let cpath = CString::from_vec_unchecked(path.data.clone());
+                        let cpath = CString::from_str(&path.string()).unwrap();
                         libc::dlopen(cpath.as_ptr(), libc::RTLD_LAZY)
                     };
 
@@ -878,6 +909,14 @@ impl Vm {
                                 };
                                 converted_args.push(ptr)
                             }
+                            FfiType::Cstring => {
+                                let cstring: CString = unsafe {
+                                    let v: &mut Slice = &mut ***arg_ptr.cast::<*mut *mut Slice>();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    CString::from_str(&v.string()).unwrap()
+                                };
+                                converted_args.push_slice(cstring.as_bytes_with_nul());
+                            }
                         };
                     }
 
@@ -885,7 +924,7 @@ impl Vm {
                     // size has to be at least 8 bytes
                     let result_ptr = unsafe {
                         match &cif.return_type {
-                            FfiType::Cint | FfiType::Cpointer => {
+                            FfiType::Cint | FfiType::Cpointer | FfiType::Cstring => {
                                 let layout = Layout::from_size_align(8, 8).unwrap();
                                 Some((alloc(layout), layout))
                             }
@@ -914,6 +953,14 @@ impl Vm {
                         // ptr -> alloc
                         FfiType::Cpointer => unsafe {
                             Some(alloc_value::<*mut u8>(*result_ptr.unwrap().0.cast()))
+                        },
+                        // *char -> string slice -> alloc
+                        FfiType::Cstring => unsafe {
+                            let cstring = CStr::from_ptr(*result_ptr.unwrap().0.cast());
+                            let slice = Slice::from_string(cstring.to_str().unwrap());
+                            self.gc
+                                .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                            Some(alloc_value(slice))
                         },
                         FfiType::Cvoid => None,
                     };

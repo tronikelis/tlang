@@ -32,8 +32,15 @@ fn main() {
                     return *(ffi_call(ffi, &fd, &(data as ptr), &len(data)) as *int)
                 }
 
+                fn getenv(name string) string {
+                    let dll ptr = dll_open(\"libc.so.6\")
+                    let ffi ptr = ffi_create(dll, \"getenv\" \"c_string\", \"c_string\")
+                    return *(ffi_call(ffi, &name) as *string)
+                }
+
                 fn main() void {
-                    write(1, \"FULLY FFI CALL LETS GOOOOO!!!!!\" as uint8[])
+                    write(1, \"FULLY FFI CALL LETS GOOOOO!!!!!\n\" as uint8[])
+                    write(1, getenv(\"TLANG\") as uint8[])
                     return
                 }
             ",
