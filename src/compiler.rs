@@ -644,6 +644,35 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::INT.size));
     }
 
+    fn instr_dll_open(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiDllOpen));
+        // will pop 1 argument
+        // will push 1 argument so no further instructions needed
+    }
+
+    fn instr_ffi_create(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiCreate));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::PTR_SIZE * 4));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
+    }
+
+    fn instr_ffi_call(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::FfiCall));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::PTR_SIZE * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::PTR_SIZE));
+    }
+
     fn push_alignment(&mut self, alignment: usize) -> usize {
         let alignment = ir::align(alignment, self.var_stack.total_size());
         if alignment != 0 {
@@ -1299,9 +1328,10 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
         self.instructions.push_alignment(type_cast._type.alignment);
 
-        let target = self.compile_expression(&type_cast.expression)?;
+        let from = self.compile_expression(&type_cast.expression)?;
 
-        match target._type {
+        // there should be a better way to do this
+        match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
                 ir::TypeBuiltin::Int => match &type_cast._type._type {
                     ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
@@ -1329,7 +1359,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         ir::TypeBuiltin::Uint => {}
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    ir::TypeType::Address(_) => {}
+                    _type => {
+                        return Err(anyhow!(
+                            "compile_type_cast: cant cast from: {from:#?}, to: {:#?}",
+                            _type,
+                        ))
+                    }
                 },
                 ir::TypeBuiltin::String => match &type_cast._type._type {
                     ir::TypeType::Slice(item) => {
@@ -1551,9 +1587,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
                     let value_exp = self.compile_expression(arg)?;
-                    if value_exp != *inner {
-                        return Err(anyhow!("variadic argument type mismatch"));
-                    }
+                    value_exp.must_equal(inner)?;
 
                     self.instructions.instr_slice_append(value_exp.size);
                 }
@@ -1566,6 +1600,18 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 "libc_write" => {
                     self.instructions.instr_libc_write();
                     return Ok(ir::INT.clone());
+                }
+                "dll_open" => {
+                    self.instructions.instr_dll_open();
+                    return Ok(ir::PTR.clone());
+                }
+                "ffi_create" => {
+                    self.instructions.instr_ffi_create();
+                    return Ok(ir::PTR.clone());
+                }
+                "ffi_call" => {
+                    self.instructions.instr_ffi_call();
+                    return Ok(ir::PTR.clone());
                 }
                 _ => {}
             }

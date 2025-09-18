@@ -2,13 +2,23 @@ use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::HashMap,
+    ffi::{CStr, CString},
     mem, ptr, slice,
+    str::FromStr,
 };
+
+unsafe fn alloc_value<T>(value: T) -> (*mut u8, Layout) {
+    let layout = Layout::for_value(&value);
+    let ptr = alloc(layout);
+    *ptr.cast() = value;
+    (ptr, layout)
+}
 
 #[derive(Debug)]
 enum GcObjectData {
     Slice(*mut Slice),
     Alloced(*mut u8, Layout),
+    Cif(*mut Cif),
 }
 
 #[derive(Debug)]
@@ -82,6 +92,7 @@ impl Gc {
         let addr: *const u8 = match object.data {
             GcObjectData::Slice(slice) => slice.cast(),
             GcObjectData::Alloced(ptr, _) => ptr,
+            GcObjectData::Cif(v) => v.cast(),
         };
         self.objects.insert(addr, RefCell::new(object));
     }
@@ -118,6 +129,9 @@ impl Gc {
             GcObjectData::Alloced(ptr, layout) => {
                 self.mark_ptr(ptr, layout.size());
             }
+            GcObjectData::Cif(_) => {
+                // Cifs cant contain nested pointers
+            }
         }
     }
 
@@ -146,8 +160,11 @@ impl Gc {
         for (addr, obj) in &self.objects {
             if !obj.borrow().marked {
                 match obj.borrow().data {
-                    GcObjectData::Slice(slice) => {
-                        let _ = unsafe { Box::from_raw(slice) };
+                    GcObjectData::Slice(v) => {
+                        let _ = unsafe { Box::from_raw(v) };
+                    }
+                    GcObjectData::Cif(v) => {
+                        let _ = unsafe { Box::from_raw(v) };
                     }
                     GcObjectData::Alloced(ptr, layout) => unsafe { dealloc(ptr, layout) },
                 }
@@ -165,10 +182,6 @@ impl Gc {
         self.mark(sp, sp_end);
         self.sweep();
     }
-}
-
-fn layout(size: usize) -> Layout {
-    Layout::from_size_align(size, size_of::<usize>()).unwrap()
 }
 
 #[derive(Debug)]
@@ -224,10 +237,18 @@ impl Slice {
         self.len += 1;
         self.data.extend_from_slice(val);
     }
+
+    fn string(&self) -> String {
+        String::from_utf8(self.data.clone()).unwrap()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    FfiCreate,
+    FfiDllOpen,
+    FfiCall,
+
     SliceLen,
     SliceAppend(usize),
     SliceIndexGet(usize),
@@ -301,30 +322,31 @@ impl Instruction {
 pub struct Stack {
     data: *mut u8,
     sp: *mut u8,
-    size: usize,
+    layout: Layout,
 }
 
 impl Drop for Stack {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.data, layout(self.size));
+            dealloc(self.data, self.layout);
         };
     }
 }
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let data = unsafe { alloc(layout(size)) };
+        let layout = Layout::from_size_align(size, 32).unwrap();
+        let data = unsafe { alloc(layout) };
 
         Self {
             sp: unsafe { data.byte_offset(size as isize) },
             data,
-            size,
+            layout,
         }
     }
 
     fn sp_end(&self) -> *mut u8 {
-        unsafe { self.data.byte_offset(self.size as isize) }
+        unsafe { self.data.byte_offset(self.layout.size() as isize) }
     }
 
     fn pop_size(&mut self, size: usize) -> &[u8] {
@@ -385,7 +407,7 @@ impl Stack {
 
     fn debug_print(&self) {
         unsafe {
-            let mut data_end = self.data.byte_offset(self.size as isize);
+            let mut data_end = self.data.byte_offset(self.layout.size() as isize);
             while data_end > self.sp {
                 data_end = data_end.byte_offset(-8);
                 let value: usize = *data_end.cast();
@@ -439,6 +461,102 @@ impl StaticMemory {
     }
 }
 
+#[derive(Debug)]
+enum FfiType {
+    Cint,
+    Cvoid,
+    Cpointer,
+    Cstring,
+}
+
+impl FfiType {
+    fn from_str(from: &str) -> Self {
+        match from {
+            "c_int" => Self::Cint,
+            "c_void" => Self::Cvoid,
+            "c_pointer" => Self::Cpointer,
+            "c_string" => Self::Cstring,
+            other => panic!("{other}"),
+        }
+    }
+
+    fn to_ffi_type(&self) -> libffi::middle::Type {
+        match self {
+            Self::Cint => libffi::middle::Type::c_int(),
+            Self::Cvoid => libffi::middle::Type::void(),
+            Self::Cpointer | Self::Cstring => libffi::middle::Type::pointer(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Cif {
+    arguments: Vec<FfiType>,
+    return_type: FfiType,
+    cif: libffi::middle::Cif,
+    fn_ptr: *mut libc::c_void,
+}
+
+enum AnyVecItem {
+    Value(*mut u8, Layout),
+    Slice(*mut u8, Layout, Layout),
+}
+
+struct AnyVec {
+    values: Vec<AnyVecItem>,
+}
+
+impl AnyVec {
+    fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    fn push<T>(&mut self, value: T) {
+        let (ptr, layout) = unsafe { alloc_value(value) };
+        self.values.push(AnyVecItem::Value(ptr, layout));
+    }
+
+    fn push_slice(&mut self, slice: &[u8]) {
+        let slice_layout = Layout::from_size_align(slice.len(), size_of::<usize>()).unwrap();
+        let slice_ptr = unsafe { alloc(slice_layout) };
+        unsafe {
+            ptr::copy_nonoverlapping(slice.as_ptr(), slice_ptr, slice.len());
+        };
+
+        let (ptr, layout) = unsafe { alloc_value(slice_ptr) };
+        self.values
+            .push(AnyVecItem::Slice(ptr, layout, slice_layout));
+    }
+
+    fn pointers(&self) -> Vec<*mut u8> {
+        let mut vec = Vec::new();
+        for value in &self.values {
+            vec.push(match *value {
+                AnyVecItem::Value(v, _) => v,
+                AnyVecItem::Slice(v, _, _) => v,
+            });
+        }
+        vec
+    }
+}
+
+impl Drop for AnyVec {
+    fn drop(&mut self) {
+        for v in &self.values {
+            unsafe {
+                match *v {
+                    AnyVecItem::Value(v, layout) => dealloc(v, layout),
+                    AnyVecItem::Slice(v, v_layout, slice_layout) => {
+                        let slice_ptr: *mut u8 = *v.cast();
+                        dealloc(v, v_layout);
+                        dealloc(slice_ptr, slice_layout);
+                    }
+                }
+            };
+        }
+    }
+}
+
 pub struct Vm {
     stack: Stack,
     instructions: Vec<Instruction>,
@@ -449,7 +567,7 @@ pub struct Vm {
 impl Vm {
     pub fn new(instructions: Vec<Instruction>, static_memory: StaticMemory) -> Self {
         return Self {
-            stack: Stack::new(4096),
+            stack: Stack::new(65536),
             instructions,
             static_memory,
             gc: Gc::new(),
@@ -705,6 +823,174 @@ impl Vm {
                     }
 
                     continue;
+                }
+                Instruction::FfiCreate => {
+                    // slice of strings
+                    let arguments: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let mut argument_types: Vec<FfiType> = Vec::new();
+
+                    for index in 0..arguments.len {
+                        let slice: &mut Slice = unsafe {
+                            &mut **arguments
+                                .data
+                                .as_mut_ptr()
+                                .byte_offset((index * size_of::<usize>()) as isize)
+                                .cast::<*mut Slice>()
+                        };
+                        argument_types.push(FfiType::from_str(&slice.string()));
+                    }
+
+                    let return_argument = unsafe {
+                        FfiType::from_str(&(&mut *self.stack.pop::<*mut Slice>()).string())
+                    };
+
+                    let function_iden = unsafe { (&mut *self.stack.pop::<*mut Slice>()).string() };
+
+                    let dll: *mut libc::c_void = self.stack.pop();
+
+                    let mut builder = libffi::middle::Builder::new();
+                    for arg in &argument_types {
+                        builder = builder.arg(arg.to_ffi_type());
+                    }
+                    builder = builder.res(return_argument.to_ffi_type());
+
+                    let fn_ptr = unsafe {
+                        let name = CString::from_str(&function_iden).unwrap();
+                        libc::dlsym(dll, name.as_ptr())
+                    };
+
+                    let cif = Box::into_raw(
+                        Cif {
+                            fn_ptr,
+                            arguments: argument_types,
+                            return_type: return_argument,
+                            cif: builder.into_cif(),
+                        }
+                        .into(),
+                    );
+
+                    self.gc.add_object(GcObject::new(GcObjectData::Cif(cif)));
+                    self.stack.push(cif);
+                }
+                Instruction::FfiDllOpen => {
+                    let path: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    let handle = unsafe {
+                        let cpath = CString::from_str(&path.string()).unwrap();
+                        libc::dlopen(cpath.as_ptr(), libc::RTLD_LAZY)
+                    };
+
+                    self.stack.push(handle);
+                }
+                Instruction::FfiCall => {
+                    // slice of pointers to arguments
+                    let args: &mut Slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let cif: &mut Cif = unsafe { &mut *self.stack.pop::<*mut Cif>() };
+
+                    let mut converted_args = AnyVec::new();
+
+                    let mut arg_ptr = args.data.as_mut_ptr();
+                    for arg in &cif.arguments {
+                        match arg {
+                            FfiType::Cvoid => panic!("Cvoid in argument"),
+                            FfiType::Cint => {
+                                let as_isize: isize = unsafe {
+                                    let v: *mut isize = *arg_ptr.cast();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    *v
+                                };
+                                converted_args.push(as_isize as libc::c_int)
+                            }
+                            FfiType::Cpointer => {
+                                let ptr: *mut u8 = unsafe {
+                                    let v: *mut *mut u8 = *arg_ptr.cast();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    *v
+                                };
+                                converted_args.push(ptr)
+                            }
+                            FfiType::Cstring => {
+                                let cstring: CString = unsafe {
+                                    let v: &mut Slice = &mut ***arg_ptr.cast::<*mut *mut Slice>();
+                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
+                                    CString::from_str(&v.string()).unwrap()
+                                };
+                                converted_args.push_slice(cstring.as_bytes_with_nul());
+                            }
+                        };
+                    }
+
+                    // will hold the result value in here,
+                    // size has to be at least register size
+                    let result_ptr = unsafe {
+                        match &cif.return_type {
+                            FfiType::Cint | FfiType::Cpointer | FfiType::Cstring => {
+                                Some(alloc_value(0 as usize))
+                            }
+                            FfiType::Cvoid => None,
+                        }
+                    };
+
+                    unsafe {
+                        libffi::raw::ffi_call(
+                            cif.cif.as_raw_ptr(),
+                            Some(mem::transmute(cif.fn_ptr)),
+                            result_ptr
+                                .map(|v| v.0 as *mut libc::c_void)
+                                .unwrap_or(0 as *mut libc::c_void),
+                            converted_args.pointers().as_mut_ptr().cast(),
+                        );
+                    };
+
+                    #[cfg(debug_assertions)]
+                    if let Some((ptr, _)) = result_ptr {
+                        if unsafe { *ptr.cast::<usize>() } == 0 {
+                            println!("FfiCall, got null return");
+                        }
+                    }
+
+                    let result_converted = match result_ptr {
+                        Some((ptr, _)) => unsafe {
+                            let is_null = *ptr.cast::<usize>() == 0;
+
+                            match cif.return_type {
+                                FfiType::Cvoid => unreachable!(),
+                                FfiType::Cint => {
+                                    let result: isize = *ptr.cast::<libc::c_int>() as isize;
+                                    Some(alloc_value(result))
+                                }
+                                FfiType::Cpointer => match is_null {
+                                    false => Some(alloc_value::<*mut u8>(*ptr.cast())),
+                                    true => None,
+                                },
+                                FfiType::Cstring => match is_null {
+                                    false => {
+                                        let cstring = CStr::from_ptr(*ptr.cast());
+                                        let slice = Slice::from_string(cstring.to_str().unwrap());
+                                        self.gc
+                                            .add_object(GcObject::new(GcObjectData::Slice(slice)));
+                                        Some(alloc_value(slice))
+                                    }
+                                    true => None,
+                                },
+                            }
+                        },
+                        None => None,
+                    };
+
+                    if let Some((ptr, layout)) = result_ptr {
+                        unsafe {
+                            dealloc(ptr, layout);
+                        };
+                    }
+
+                    if let Some((ptr, layout)) = result_converted {
+                        self.gc
+                            .add_object(GcObject::new(GcObjectData::Alloced(ptr, layout)));
+                        self.stack.push(ptr);
+                    } else {
+                        self.stack.push(0 as usize);
+                    }
                 }
             }
 
