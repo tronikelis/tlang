@@ -8,6 +8,10 @@ use std::{
     str::FromStr,
 };
 
+fn is_debug() -> bool {
+    env::var("DEBUG").is_ok()
+}
+
 unsafe fn alloc_value<T>(value: T) -> (*mut u8, Layout) {
     let layout = Layout::for_value(&value);
     let ptr = alloc(layout);
@@ -594,7 +598,7 @@ impl Vm {
 
         loop {
             #[cfg(debug_assertions)]
-            if env::var("DEBUG").is_ok() {
+            if is_debug() {
                 println!("executing instruction: {:#?}", self.instructions[pc]);
             }
 
@@ -967,9 +971,11 @@ impl Vm {
                     };
 
                     #[cfg(debug_assertions)]
-                    if let Some((ptr, _)) = result_ptr {
-                        let v = unsafe { *ptr.cast::<usize>() };
-                        println!("FfiCall returned usize({})", v);
+                    if is_debug() {
+                        if let Some((ptr, _)) = result_ptr {
+                            let v = unsafe { *ptr.cast::<usize>() };
+                            println!("FfiCall returned usize({})", v);
+                        }
                     }
 
                     let result_converted = match result_ptr {
