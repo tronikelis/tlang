@@ -261,6 +261,7 @@ impl StackInstructions {
     }
 }
 
+#[derive(Debug)]
 enum Function<'a> {
     Function(&'a ir::Function),
     Closure(&'a ir::Closure),
@@ -487,6 +488,32 @@ impl Instructions {
         Ok(())
     }
 
+    fn instr_push_u16(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT16.alignment);
+        let uint16: u16 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU16(uint16)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT16.size));
+
+        Ok(())
+    }
+
+    fn instr_push_u32(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT32.alignment);
+        let uint32: u32 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU32(uint32)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT32.size));
+
+        Ok(())
+    }
+
     fn instr_push_i(&mut self, int: usize) -> Result<()> {
         self.push_alignment(ir::INT.alignment);
         let int: isize = int.try_into()?;
@@ -496,6 +523,32 @@ impl Instructions {
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::INT.size));
+
+        Ok(())
+    }
+
+    fn instr_push_i16(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT16.alignment);
+        let int16: i16 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushI16(int16)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT16.size));
+
+        Ok(())
+    }
+
+    fn instr_push_i32(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT32.alignment);
+        let int32: i32 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushI32(int32)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT32.size));
 
         Ok(())
     }
@@ -606,6 +659,16 @@ impl Instructions {
     fn instr_cast_int_uint(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CastIntUint));
+    }
+
+    fn instr_cast_int_int32(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CastIntInt32));
+
+        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT32.size));
     }
 
     fn instr_debug(&mut self) {
@@ -721,6 +784,8 @@ impl Instructions {
                 .collect(),
         };
 
+        // function calls are aligned on ptr size
+
         // arguments are pushed into the stack
         for arg in &arguments {
             // skipping escape here, because at this point,
@@ -730,10 +795,8 @@ impl Instructions {
 
             argument_size += arg._type.size;
 
-            let alignment = ir::align(
-                arg._type.alignment,
-                self.var_stack.total_size() + return_type.size,
-            );
+            let alignment = ir::align(arg._type.alignment, self.var_stack.total_size());
+            argument_size += alignment;
 
             if alignment != 0 {
                 self.var_stack
@@ -1341,6 +1404,9 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                         ir::TypeBuiltin::Uint => {
                             self.instructions.instr_cast_int_uint();
                         }
+                        ir::TypeBuiltin::Int32 => {
+                            self.instructions.instr_cast_int_int32();
+                        }
                         _ => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
@@ -1514,19 +1580,6 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
         }
 
-        let return_alignment = match &call.call_type {
-            FunctionCallType::Function(v) => v._type.expect_function()?.return_type.alignment,
-            FunctionCallType::Method(v) => {
-                v.function._type.expect_function()?.return_type.alignment
-            }
-            FunctionCallType::Closure(v) => {
-                v._type(self.instructions)?
-                    .expect_closure()?
-                    .return_type
-                    .alignment
-            }
-        };
-
         let expected_arguments = match &call.call_type {
             FunctionCallType::Function(v) => v._type.expect_function()?.arguments.clone(),
             FunctionCallType::Method(v) => v.function._type.expect_function()?.arguments.clone(),
@@ -1537,7 +1590,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 .clone(),
         };
 
-        self.instructions.push_alignment(return_alignment);
+        self.instructions.push_alignment(ir::PTR_SIZE);
 
         let argument_size = {
             self.instructions.push_stack_frame();
@@ -1742,6 +1795,14 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     self.instructions.instr_push_u8(*int)?;
                 } else if literal._type == *ir::INT {
                     self.instructions.instr_push_i(*int)?;
+                } else if literal._type == *ir::UINT16 {
+                    self.instructions.instr_push_u16(*int)?;
+                } else if literal._type == *ir::UINT32 {
+                    self.instructions.instr_push_u32(*int)?;
+                } else if literal._type == *ir::INT16 {
+                    self.instructions.instr_push_i16(*int)?;
+                } else if literal._type == *ir::INT32 {
+                    self.instructions.instr_push_i32(*int)?;
                 } else {
                     return Err(anyhow!("can't cast int to {:#?}", literal._type));
                 }

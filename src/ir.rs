@@ -89,6 +89,10 @@ impl<'a> TypeResolver<'a> {
                 let builtin = match inner_alias.as_str() {
                     "uint" => Some(UINT.clone()),
                     "uint8" => Some(UINT8.clone()),
+                    "uint16" => Some(UINT16.clone()),
+                    "uint32" => Some(UINT32.clone()),
+                    "int16" => Some(INT16.clone()),
+                    "int32" => Some(INT32.clone()),
                     "int" => Some(INT.clone()),
                     "bool" => Some(BOOL.clone()),
                     "string" => Some(STRING.clone()),
@@ -211,11 +215,35 @@ lazy_static::lazy_static! {
         alignment: 1,
         _type: TypeType::Builtin(TypeBuiltin::Uint8),
     };
+    pub static ref UINT16: Type = Type {
+        alias: Some("uint16".to_string()),
+        size: 2,
+        alignment: 2,
+        _type: TypeType::Builtin(TypeBuiltin::Uint16),
+    };
+    pub static ref UINT32: Type = Type {
+        alias: Some("uint32".to_string()),
+        size: 4,
+        alignment: 4,
+        _type: TypeType::Builtin(TypeBuiltin::Uint32),
+    };
     pub static ref INT: Type = Type {
         alias: Some("int".to_string()),
         size: size_of::<isize>(),
         alignment: size_of::<isize>(),
         _type: TypeType::Builtin(TypeBuiltin::Int),
+    };
+    pub static ref INT16: Type = Type {
+        alias: Some("int16".to_string()),
+        size: 2,
+        alignment: 2,
+        _type: TypeType::Builtin(TypeBuiltin::Int16),
+    };
+    pub static ref INT32: Type = Type {
+        alias: Some("int32".to_string()),
+        size: 4,
+        alignment: 4,
+        _type: TypeType::Builtin(TypeBuiltin::Int32),
     };
     pub static ref BOOL: Type = Type {
         alias: Some("bool".to_string()),
@@ -412,6 +440,10 @@ impl Variable {
 pub enum TypeBuiltin {
     Uint,
     Uint8,
+    Uint16,
+    Uint32,
+    Int32,
+    Int16,
     Int,
     String,
     Bool,
@@ -1103,6 +1135,10 @@ impl<'a> IrParser<'a> {
                             TypeBuiltin::Int => INT.clone(),
                             TypeBuiltin::Uint => UINT.clone(),
                             TypeBuiltin::Uint8 => UINT8.clone(),
+                            TypeBuiltin::Uint16 => UINT16.clone(),
+                            TypeBuiltin::Uint32 => UINT32.clone(),
+                            TypeBuiltin::Int16 => INT16.clone(),
+                            TypeBuiltin::Int32 => INT32.clone(),
                             _type => return Err(anyhow!("literal wrong type {_type:#?}")),
                         },
                         _type => return Err(anyhow!("literal wrong type {_type:#?}")),
@@ -1182,8 +1218,8 @@ impl<'a> IrParser<'a> {
                 })));
             }
             ast::Expression::Index(index) => {
-                let var_exp = self.get_expression(&index.var, expected_type)?;
-                let expression_exp = self.get_expression(&index.expression, expected_type)?;
+                let var_exp = self.get_expression(&index.var, None)?;
+                let expression_exp = self.get_expression(&index.expression, None)?;
 
                 return Ok(Expression::Index(Box::new(Index {
                     var: var_exp,

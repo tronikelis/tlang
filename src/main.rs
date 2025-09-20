@@ -11,10 +11,14 @@ fn main() {
         "
                 type bool _
                 type int _
+                type int32 _
+                type int16 _
                 type ptr _
                 type string _
                 type uint _
                 type uint8 _
+                type uint16 _
+                type uint32 _
                 type void _
                 type Type _
 
@@ -26,10 +30,10 @@ fn main() {
                 fn ffi_create(dll ptr, function string, return_param string, args string...) ptr {}
                 fn ffi_call(ffi ptr, args ptr...) ptr {}
 
-                fn write(fd int, data uint8[]) int {
+                fn write(fd int32, data uint8[]) int32 {
                     let dll ptr = dll_open(\"libc.so.6\")
-                    let ffi ptr = ffi_create(dll, \"write\", \"c_int\", \"c_int\", \"c_pointer\", \"c_int\")
-                    return *(ffi_call(ffi, &fd, &(data as ptr), &len(data)) as *int)
+                    let ffi ptr = ffi_create(dll, \"write\", \"i32\", \"i32\", \"pointer\", \"i32\")
+                    return *(ffi_call(ffi, &fd, &(data as ptr), &(len(data) as int32)) as *int32)
                 }
 
                 fn getenv(name string) string {
@@ -39,8 +43,10 @@ fn main() {
                 }
 
                 fn main() void {
-                    write(1, \"$HOME:\n\" as uint8[])
-                    write(1, (getenv(\"HOME\") + \"\n\") as uint8[])
+                    let f int32 = write(1, \"\n\" as uint8[])
+                    let n int32 = write(1, (getenv(\"HOME\") + \"\n\") as uint8[])
+
+                    write(f, \"NICENICE\n\" as uint8[])
                     return
                 }
             ",

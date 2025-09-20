@@ -2,6 +2,7 @@ use core::{cell::RefCell, str};
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::HashMap,
+    env,
     ffi::{CStr, CString},
     mem, ptr, slice,
     str::FromStr,
@@ -261,7 +262,11 @@ pub enum Instruction {
     Shift(usize, usize),
     Reset(usize),
     PushI(isize),
+    PushI16(i16),
+    PushI32(i32),
     PushU8(u8),
+    PushU16(u16),
+    PushU32(u32),
     PushSlice,
     PushSliceNewLen(usize),
     // var count, function index
@@ -294,6 +299,7 @@ pub enum Instruction {
     Or,
 
     CastIntUint,
+    CastIntInt32,
     CastIntUint8,
     CastUint8Int,
     CastSlicePtr,
@@ -335,7 +341,7 @@ impl Drop for Stack {
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let layout = Layout::from_size_align(size, 32).unwrap();
+        let layout = Layout::from_size_align(size, 8).unwrap();
         let data = unsafe { alloc(layout) };
 
         Self {
@@ -463,28 +469,37 @@ impl StaticMemory {
 
 #[derive(Debug)]
 enum FfiType {
-    Cint,
-    Cvoid,
-    Cpointer,
+    Void,
+    Pointer,
     Cstring,
+    U32,
+    U16,
+    I32,
+    I16,
 }
 
 impl FfiType {
     fn from_str(from: &str) -> Self {
         match from {
-            "c_int" => Self::Cint,
-            "c_void" => Self::Cvoid,
-            "c_pointer" => Self::Cpointer,
+            "void" => Self::Void,
+            "pointer" => Self::Pointer,
             "c_string" => Self::Cstring,
+            "u16" => Self::U16,
+            "u32" => Self::U32,
+            "i16" => Self::I16,
+            "i32" => Self::I32,
             other => panic!("{other}"),
         }
     }
 
     fn to_ffi_type(&self) -> libffi::middle::Type {
         match self {
-            Self::Cint => libffi::middle::Type::c_int(),
-            Self::Cvoid => libffi::middle::Type::void(),
-            Self::Cpointer | Self::Cstring => libffi::middle::Type::pointer(),
+            Self::I32 => libffi::middle::Type::i32(),
+            Self::I16 => libffi::middle::Type::i16(),
+            Self::Void => libffi::middle::Type::void(),
+            Self::Pointer | Self::Cstring => libffi::middle::Type::pointer(),
+            Self::U16 => libffi::middle::Type::u16(),
+            Self::U32 => libffi::middle::Type::u32(),
         }
     }
 }
@@ -578,6 +593,11 @@ impl Vm {
         let mut pc = 0;
 
         loop {
+            #[cfg(debug_assertions)]
+            if env::var("DEBUG").is_ok() {
+                println!("executing instruction: {:#?}", self.instructions[pc]);
+            }
+
             match self.instructions[pc] {
                 Instruction::AddI => {
                     let a = self.stack.pop::<isize>();
@@ -712,15 +732,21 @@ impl Vm {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     self.stack.push(slice.len as isize);
                 }
-                Instruction::PushU8(v) => {
-                    self.stack.push(v);
-                }
+                Instruction::PushU8(v) => self.stack.push(v),
+                Instruction::PushU16(v) => self.stack.push(v),
+                Instruction::PushU32(v) => self.stack.push(v),
+                Instruction::PushI16(v) => self.stack.push(v),
+                Instruction::PushI32(v) => self.stack.push(v),
                 Instruction::PushStatic(index, len) => {
                     self.stack.push_size(self.static_memory.index(index, len));
                 }
                 Instruction::CastIntUint => {
                     let target = self.stack.pop::<isize>();
                     self.stack.push::<usize>(target as usize);
+                }
+                Instruction::CastIntInt32 => {
+                    let target: isize = self.stack.pop();
+                    self.stack.push::<i32>(target as i32);
                 }
                 Instruction::CastIntUint8 => {
                     let target = self.stack.pop::<isize>();
@@ -892,31 +918,26 @@ impl Vm {
                     let mut arg_ptr = args.data.as_mut_ptr();
                     for arg in &cif.arguments {
                         match arg {
-                            FfiType::Cvoid => panic!("Cvoid in argument"),
-                            FfiType::Cint => {
-                                let as_isize: isize = unsafe {
-                                    let v: *mut isize = *arg_ptr.cast();
-                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
-                                    *v
-                                };
-                                converted_args.push(as_isize as libc::c_int)
+                            FfiType::Void => panic!("Cvoid in argument"),
+                            FfiType::I32 | FfiType::U32 => {
+                                converted_args.push::<u32>(unsafe { **arg_ptr.cast::<*mut u32>() })
                             }
-                            FfiType::Cpointer => {
-                                let ptr: *mut u8 = unsafe {
-                                    let v: *mut *mut u8 = *arg_ptr.cast();
-                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
-                                    *v
-                                };
-                                converted_args.push(ptr)
+                            FfiType::U16 | FfiType::I16 => {
+                                converted_args.push::<u16>(unsafe { **arg_ptr.cast::<*mut u16>() })
                             }
+                            FfiType::Pointer => converted_args
+                                .push::<*mut u8>(unsafe { **arg_ptr.cast::<*mut *mut u8>() }),
                             FfiType::Cstring => {
                                 let cstring: CString = unsafe {
                                     let v: &mut Slice = &mut ***arg_ptr.cast::<*mut *mut Slice>();
-                                    arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
                                     CString::from_str(&v.string()).unwrap()
                                 };
                                 converted_args.push_slice(cstring.as_bytes_with_nul());
                             }
+                        };
+
+                        unsafe {
+                            arg_ptr = arg_ptr.byte_offset(size_of::<usize>() as isize);
                         };
                     }
 
@@ -924,10 +945,13 @@ impl Vm {
                     // size has to be at least register size
                     let result_ptr = unsafe {
                         match &cif.return_type {
-                            FfiType::Cint | FfiType::Cpointer | FfiType::Cstring => {
-                                Some(alloc_value(0 as usize))
-                            }
-                            FfiType::Cvoid => None,
+                            FfiType::Pointer
+                            | FfiType::Cstring
+                            | FfiType::U32
+                            | FfiType::U16
+                            | FfiType::I16
+                            | FfiType::I32 => Some(alloc_value(0 as usize)),
+                            FfiType::Void => None,
                         }
                     };
 
@@ -944,9 +968,8 @@ impl Vm {
 
                     #[cfg(debug_assertions)]
                     if let Some((ptr, _)) = result_ptr {
-                        if unsafe { *ptr.cast::<usize>() } == 0 {
-                            println!("FfiCall, got null return");
-                        }
+                        let v = unsafe { *ptr.cast::<usize>() };
+                        println!("FfiCall returned usize({})", v);
                     }
 
                     let result_converted = match result_ptr {
@@ -954,15 +977,14 @@ impl Vm {
                             let is_null = *ptr.cast::<usize>() == 0;
 
                             match cif.return_type {
-                                FfiType::Cvoid => unreachable!(),
-                                FfiType::Cint => {
-                                    let result: isize = *ptr.cast::<libc::c_int>() as isize;
-                                    Some(alloc_value(result))
+                                FfiType::Void => unreachable!(),
+                                FfiType::U32 | FfiType::I32 => {
+                                    Some(alloc_value(*ptr.cast::<u32>()))
                                 }
-                                FfiType::Cpointer => match is_null {
-                                    false => Some(alloc_value::<*mut u8>(*ptr.cast())),
-                                    true => None,
-                                },
+                                FfiType::U16 | FfiType::I16 => {
+                                    Some(alloc_value(*ptr.cast::<u16>()))
+                                }
+                                FfiType::Pointer => Some(alloc_value(*ptr.cast::<*mut u8>())),
                                 FfiType::Cstring => match is_null {
                                     false => {
                                         let cstring = CStr::from_ptr(*ptr.cast());
