@@ -1145,6 +1145,12 @@ impl<'a> IrParser<'a> {
                             TypeBuiltin::Uint32 => UINT32.clone(),
                             TypeBuiltin::Int16 => INT16.clone(),
                             TypeBuiltin::Int32 => INT32.clone(),
+                            TypeBuiltin::CompilerType => {
+                                return Ok(Expression::Literal(Literal {
+                                    _type: INT.clone(),
+                                    literal_type: LiteralType::Int(*int),
+                                }));
+                            }
                             _type => return Err(anyhow!("literal wrong type {_type:#?}")),
                         },
                         _type => return Err(anyhow!("literal wrong type {_type:#?}")),

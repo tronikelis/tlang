@@ -25,34 +25,54 @@ fn main() {
                 fn libc_write(fd int, slice uint8[]) int {}
                 fn len(slice Type) int {}
                 fn append(slice Type, value Type) void {}
+                fn new(typ Type, args Type...) Type {}
 
                 fn dll_open(path string) ptr {}
                 fn ffi_create(dll ptr, function string, return_param string, args string...) ptr {}
                 fn ffi_call(ffi ptr, args ptr...) ptr {}
 
-                fn write(fd int32, data uint8[]) int32 {
-                    let dll ptr = dll_open(\"libc.so.6\")
-                    let ffi ptr = ffi_create(dll, \"write\", \"i32\", \"i32\", \"pointer\", \"i32\")
+                fn std_read(fd int32, data uint8[]) int32 {
+                    let dll ptr = dll_open(\"std/main.so\")
+                    let ffi ptr = ffi_create(dll, \"std_read\", \"i32\", \"i32\", \"pointer\", \"i32\")
                     return *(ffi_call(ffi, &fd, &(data as ptr), &(len(data) as int32)) as *int32)
                 }
 
-                fn getenv(name string) string {
-                    let dll ptr = dll_open(\"libc.so.6\")
-                    let ffi ptr = ffi_create(dll, \"getenv\" \"c_string\", \"c_string\")
+                fn std_write(fd int32, data uint8[]) int32 {
+                    let dll ptr = dll_open(\"std/main.so\")
+                    let ffi ptr = ffi_create(dll, \"std_write\", \"i32\", \"i32\", \"pointer\", \"i32\")
+                    return *(ffi_call(ffi, &fd, &(data as ptr), &(len(data) as int32)) as *int32)
+                }
+
+                fn std_getenv(name string) string {
+                    let dll ptr = dll_open(\"std/main.so\")
+                    let ffi ptr = ffi_create(dll, \"std_getenv\" \"c_string\", \"c_string\")
                     return *(ffi_call(ffi, &name) as *string)
                 }
 
-                type User struct {
-                    nice int32
-                    foo int
+                fn std_tcp_listen(addr string, port int32) int32 {
+                    let dll ptr = dll_open(\"std/main.so\")
+                    let ffi ptr = ffi_create(dll, \"std_tcp_listen\" \"i32\", \"c_string\", \"i32\")
+                    return *(ffi_call(ffi, &addr, &port) as *int32)
+                }
+
+                fn std_tcp_accept(fd int32) int32 {
+                    let dll ptr = dll_open(\"std/main.so\")
+                    let ffi ptr = ffi_create(dll, \"std_tcp_accept\" \"i32\", \"i32\")
+                    return *(ffi_call(ffi, &fd) as *int32)
                 }
 
                 fn main() void {
-                    let user22 User = User{
-                        nice: 25,
-                        foo: 20,
+                    let f int32 = std_write(1, \"\n\" as uint8[])
+                    let n int32 = std_write(1, (std_getenv(\"HOME\") + \"\n\") as uint8[])
+
+                    let socket int32 = std_tcp_listen(\"127.0.0.1\", 8080)
+                    let fd int32 = std_tcp_accept(socket)
+                    for {
+                        let buf uint8[] = new(uint8[], 0 as uint8, 64)
+                        std_read(fd, buf)
+                        std_write(fd, buf)
+                        std_write(1, buf)
                     }
-                    let fu *int = &user22.foo
 
                     return
                 }
