@@ -345,7 +345,7 @@ impl Drop for Stack {
 
 impl Stack {
     fn new(size: usize) -> Self {
-        let layout = Layout::from_size_align(size, 8).unwrap();
+        let layout = Layout::from_size_align(size, size_of::<usize>()).unwrap();
         let data = unsafe { alloc(layout) };
 
         Self {

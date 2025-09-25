@@ -42,11 +42,18 @@ fn main() {
                     return *(ffi_call(ffi, &name) as *string)
                 }
 
-                fn main() void {
-                    let f int32 = write(1, \"\n\" as uint8[])
-                    let n int32 = write(1, (getenv(\"HOME\") + \"\n\") as uint8[])
+                type User struct {
+                    nice int32
+                    foo int
+                }
 
-                    write(f, \"NICENICE\n\" as uint8[])
+                fn main() void {
+                    let user22 User = User{
+                        nice: 25,
+                        foo: 20,
+                    }
+                    let fu *int = &user22.foo
+
                     return
                 }
             ",
