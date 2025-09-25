@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,19 +42,35 @@ int32_t std_tcp_listen(char* addr, int32_t port) {
 }
 
 typedef struct {
-    int32_t addr;
+    uint32_t addr;
     int32_t fd;
+    uint16_t port;
 } TcpConn;
 
-int32_t std_tcp_accept(int32_t fd) {
+TcpConn TcpConn_err() {
+    TcpConn v = {
+        .fd = -1,
+        .addr = 0,
+        .port = 0,
+    };
+    return v;
+}
+
+TcpConn std_tcp_accept(int32_t fd) {
     struct sockaddr_in client_addr;
     socklen_t client_addr_size = sizeof(client_addr);
 
     int32_t client_fd;
     if ((client_fd = accept(fd, (struct sockaddr*)&client_addr,
                             &client_addr_size)) == -1) {
-        return -1;
+        return TcpConn_err();
     }
 
-    return client_fd;
+    TcpConn tcp_conn = {
+        .addr = ntohl(client_addr.sin_addr.s_addr),
+        .fd = client_fd,
+        .port = ntohs(client_addr.sin_port),
+    };
+
+    return tcp_conn;
 }
