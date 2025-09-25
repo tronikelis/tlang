@@ -1113,7 +1113,26 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
         }
 
-        let exp = self.compile_expression(&dot_access.expression)?;
+        let exp = match &dot_access.expression {
+            // compile expression derefs escaped vars automatically,
+            // however we don't want this here
+            ir::Expression::Variable(iden) => {
+                let (offset, variable) = self.instructions.var_get_offset_err(iden)?;
+                let variable = variable.clone();
+
+                let alignment = self.instructions.push_alignment(variable._type.alignment);
+
+                self.instructions.instr_increment(variable._type.size);
+                self.instructions.instr_copy(
+                    0,
+                    offset + alignment + variable._type.size,
+                    variable._type.size,
+                );
+
+                variable._type
+            }
+            exp => self.compile_expression(exp)?,
+        };
 
         if let ir::TypeType::Escaped(_type) = exp._type {
             match _type._type {
@@ -1241,7 +1260,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             ));
         }
 
-        for field in &type_struct.fields {
+        for field in type_struct.fields.iter().rev() {
             match field {
                 ir::TypeStructField::Padding(padding) => {
                     self.instructions.instr_increment(*padding);

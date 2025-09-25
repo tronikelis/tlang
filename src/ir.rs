@@ -375,7 +375,7 @@ impl TypeStruct {
     pub fn get_field_offset(&self, identifier: &str) -> Option<(usize, &Type)> {
         let mut offset = 0;
 
-        for field in self.fields.iter().rev() {
+        for field in self.fields.iter() {
             match field {
                 TypeStructField::Padding(padding) => offset += padding,
                 TypeStructField::Type(iden, _type) => {
@@ -1028,6 +1028,12 @@ impl<'a> IrParser<'a> {
                 };
 
                 if let Some(var) = self.variables.get(&identifier) {
+                    if let Some(_type) = &expected_type {
+                        if let TypeType::Address(_) = &_type._type {
+                            var.borrow_mut().escape();
+                        }
+                    }
+
                     if var.borrow()._type._type.is_escaped() {
                         self.escaped_variables.push(var.clone());
                     }
@@ -1285,13 +1291,32 @@ impl<'a> IrParser<'a> {
                 }));
             }
             ast::Expression::StructInit(struct_init) => {
+                let _type = self.type_resolver.resolve(&struct_init._type)?;
+
+                let TypeType::Struct(type_struct) = &_type._type else {
+                    panic!("StructInit not a struct type");
+                };
+
                 let fields = struct_init
                     .fields
                     .iter()
-                    .map(|v| Ok((v.0.clone(), self.get_expression(v.1, expected_type)?)))
-                    .collect::<Result<HashMap<_, _>>>()?;
+                    .map(|v| {
+                        let expected_type = type_struct
+                            .fields
+                            .iter()
+                            .find(|field| match field {
+                                TypeStructField::Type(iden, _) => iden == v.0,
+                                _ => false,
+                            })
+                            .map(|v| match v {
+                                TypeStructField::Type(_, _type) => _type,
+                                _ => unreachable!(),
+                            })
+                            .ok_or(anyhow!("struct init with unknown field {}", v.0))?;
 
-                let _type = self.type_resolver.resolve(&struct_init._type)?;
+                        Ok((v.0.clone(), self.get_expression(v.1, Some(expected_type))?))
+                    })
+                    .collect::<Result<HashMap<_, _>>>()?;
 
                 return Ok(Expression::StructInit(StructInit { fields, _type }));
             }
