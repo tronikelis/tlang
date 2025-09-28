@@ -1518,7 +1518,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             return Err(anyhow!("append: provide a slice as the first argument"));
         };
 
-        let value_exp = self.compile_expression_compact(value_arg, &slice_item)?;
+        let value_exp = self.compile_expression_compact(value_arg, slice_item.alignment)?;
 
         if **slice_item != value_exp {
             return Err(anyhow!("append: value type does not match slice type"));
@@ -1578,7 +1578,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     return Err(anyhow!("new: length should be of type int"));
                 }
 
-                let def_exp = self.compile_expression_compact(def_val, &slice_item)?;
+                let def_exp = self.compile_expression_compact(def_val, slice_item.alignment)?;
                 if def_exp != **slice_item {
                     return Err(anyhow!("new: expression does not match slice type"));
                 }
@@ -1637,13 +1637,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
                 let Some(inner) = expected_arg._type.extract_variadic() else {
                     // calling push(a int) -> like push(20)
-                    let exp = self.compile_expression_compact(arg, &expected_arg._type)?;
+                    let exp = self.compile_expression_compact(arg, expected_arg._type.alignment)?;
                     exp.must_equal(&expected_arg._type)?;
                     continue;
                 };
 
                 if let ir::Expression::Spread(_) = arg {
-                    let exp = self.compile_expression_compact(arg, &expected_arg._type)?;
+                    let exp = self.compile_expression_compact(arg, expected_arg._type.alignment)?;
                     if exp != expected_arg._type {
                         return Err(anyhow!("function call type mismatch"));
                     }
@@ -1663,7 +1663,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     self.instructions
                         .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
-                    let value_exp = self.compile_expression_compact(arg, &inner)?;
+                    let value_exp = self.compile_expression_compact(arg, inner.alignment)?;
                     value_exp.must_equal(inner)?;
 
                     self.instructions.instr_slice_append(value_exp.size);
@@ -1898,14 +1898,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn compile_expression_compact(
         &mut self,
         expression: &ir::Expression,
-        _type: &ir::Type,
+        base_alignment: usize,
     ) -> Result<ir::Type> {
-        self.instructions.push_alignment(_type.alignment);
+        self.instructions.push_alignment(base_alignment);
 
         let old_stack_size = self.instructions.stack_total_size();
 
         let exp = self.compile_expression(expression)?;
-        exp.must_equal(_type)?;
 
         let new_stack_size = self.instructions.stack_total_size();
         let delta_stack_size = new_stack_size - old_stack_size;
@@ -2022,10 +2021,10 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_expression_compact(
         &mut self,
         expression: &ir::Expression,
-        _type: &ir::Type,
+        base_alignment: usize,
     ) -> Result<ir::Type> {
         self.expression_compiler()
-            .compile_expression_compact(expression, _type)
+            .compile_expression_compact(expression, base_alignment)
     }
 
     fn compile_dot_access_field_offset(
@@ -2047,7 +2046,7 @@ impl<'a> FunctionCompiler<'a> {
 
         let exp = self.compile_expression_compact(
             &declaration.expression,
-            &declaration.variable.borrow()._type,
+            declaration.variable.borrow()._type.alignment,
         )?;
         if exp == *ir::VOID {
             return Err(anyhow!("can't declare void variable"));
