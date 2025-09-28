@@ -1,0 +1,316 @@
+use anyhow::Result;
+use pretty_assertions::assert_eq;
+
+use super::*;
+use crate::{ast, lexer, linker, vm};
+use vm::Instruction;
+
+const BUILTIN: &str = r"
+    type bool _
+    type int _
+    type int32 _
+    type int16 _
+    type ptr _
+    type string _
+    type uint _
+    type uint8 _
+    type uint16 _
+    type uint32 _
+    type void _
+    type Type _
+
+    fn libc_write(fd int, slice uint8[]) int {}
+    fn len(slice Type) int {}
+    fn append(slice Type, value Type) void {}
+    fn new(typ Type, args Type...) Type {}
+
+    fn dll_open(path string) ptr {}
+    fn ffi_create(dll ptr, function string, return_param string, args string...) ptr {}
+    fn ffi_call(ffi ptr, args ptr...) ptr {}
+
+";
+
+fn compile_test_code(code: &str) -> Result<Vec<vm::Instruction>> {
+    let tokens = lexer::Lexer::new(&code).run()?;
+    let ast = ast::Ast::new(&tokens)?;
+    let ir = ir::Ir::new(&ast)?;
+
+    let compiled = compile(ir)?;
+    let linked = linker::link(compiled.functions)?;
+
+    Ok(linked)
+}
+
+fn get_test_code(code: &str) -> String {
+    BUILTIN.to_string() + code
+}
+
+#[test]
+fn simple_fn() -> Result<()> {
+    let code = get_test_code(
+        r"
+            fn simple(a int, b int) int {
+                return a + b
+            }
+            fn main() void {
+                simple(25, 20)
+            }
+        ",
+    );
+
+    assert_eq!(
+        vec![
+            Instruction::PushI(25),
+            Instruction::PushI(20),
+            Instruction::JumpAndLink(13),
+            Instruction::Reset(8),
+            Instruction::Reset(8),
+            Instruction::Exit,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Increment(8),
+            Instruction::Copy(0, 24, 8),
+            Instruction::Increment(8),
+            Instruction::Copy(0, 24, 8),
+            Instruction::AddI,
+            Instruction::Copy(24, 0, 8),
+            Instruction::Reset(8),
+            Instruction::Return,
+            Instruction::Reset(8),
+            Instruction::Return
+        ],
+        compile_test_code(&code)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn dot_access() -> Result<()> {
+    let code = get_test_code(
+        r"
+        type TcpConn struct {
+            addr uint32
+            fd int32
+            port uint16
+        }
+
+        fn main() void {
+            let conn TcpConn = TcpConn{
+                addr: 1,
+                fd: 2,
+                port: 3,
+            }
+
+            let fd int32 = conn.fd
+            __debug__
+        }
+    ",
+    );
+
+    assert_eq!(
+        vec![
+            // bottom padding
+            Instruction::Increment(2,),
+            Instruction::PushU16(3,),
+            Instruction::PushI32(2,),
+            Instruction::PushU32(1,),
+            Instruction::Increment(12,),
+            Instruction::Copy(0, 12, 12,),
+            Instruction::Increment(4,),
+            Instruction::Copy(0, 8, 4,),
+            Instruction::Shift(4, 12,),
+            Instruction::Debug,
+            // total var stack size 12 for struct, 4 for int32 fd
+            Instruction::Reset(16,),
+            Instruction::Exit,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+        ],
+        compile_test_code(&code)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn fn_call() -> Result<()> {
+    let code = get_test_code(
+        r"
+            fn foo(a int32, b uint8, b int) void {
+
+            }
+
+            fn main() void {
+                foo(1, 2, 3)
+                __debug__
+            }
+        ",
+    );
+
+    assert_eq!(
+        vec![
+            Instruction::PushI32(1,),
+            Instruction::PushU8(2,),
+            Instruction::Increment(3,),
+            Instruction::PushI(3,),
+            Instruction::JumpAndLink(11,),
+            Instruction::Reset(16,),
+            Instruction::Debug,
+            Instruction::Exit,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+        ],
+        compile_test_code(&code)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn fn_call_dot_access() -> Result<()> {
+    let code = get_test_code(
+        r"
+        type TcpConn struct {
+            addr uint32
+            fd int32
+            port uint16
+        }
+
+        fn foobar(a int32, b uint32) int32 {
+            return 32 as int32
+        }
+
+        fn main() void {
+            let conn TcpConn = TcpConn{
+                addr: 1,
+                fd: 2,
+                port: 3,
+            }
+
+            foobar(conn.fd, conn.addr)
+            __debug__
+        }
+    ",
+    );
+
+    assert_eq!(
+        vec![
+            Instruction::Increment(2,),
+            Instruction::PushU16(3,),
+            Instruction::PushI32(2,),
+            Instruction::PushU32(1,),
+            Instruction::Increment(4,),
+            Instruction::Increment(12,),
+            Instruction::Copy(0, 16, 12,),
+            Instruction::Increment(4,),
+            Instruction::Copy(0, 8, 4,),
+            Instruction::Shift(4, 12,),
+            Instruction::Increment(12,),
+            Instruction::Copy(0, 20, 12,),
+            Instruction::Increment(4,),
+            Instruction::Copy(0, 4, 4,),
+            Instruction::Shift(4, 12,),
+            Instruction::JumpAndLink(24,),
+            Instruction::Reset(4,),
+            Instruction::Reset(8,),
+            Instruction::Debug,
+            Instruction::Reset(12,),
+            Instruction::Exit,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::PushI(32,),
+            Instruction::CastIntInt32,
+            Instruction::Copy(16, 0, 4,),
+            Instruction::Reset(4,),
+            Instruction::Return,
+            Instruction::Reset(4,),
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+        ],
+        compile_test_code(&code)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn builtin_slice_new() -> Result<()> {
+    let code = get_test_code(
+        r"
+            type TcpConn struct {
+                addr uint32
+                fd int32
+                port uint16
+            }
+
+            fn main() void {
+                let conn TcpConn = TcpConn{
+                    addr: 1,
+                    fd: 2,
+                    port: 3,
+                }
+                let buf uint8[] = new(uint8[], 0 as uint8, 10)
+                let f int32 = conn.fd
+                let b int = len(buf)
+                __debug__
+            }
+        ",
+    );
+
+    assert_eq!(
+        vec![
+            Instruction::Increment(2,),
+            Instruction::PushU16(3,),
+            Instruction::PushI32(2,),
+            Instruction::PushU32(1,),
+            Instruction::Increment(4,),
+            Instruction::PushI(10,),
+            Instruction::PushI(0,),
+            Instruction::CastIntUint8,
+            Instruction::PushSliceNewLen(1,),
+            Instruction::Increment(12,),
+            Instruction::Copy(0, 24, 12,),
+            Instruction::Increment(4,),
+            Instruction::Copy(0, 8, 4,),
+            Instruction::Shift(4, 12,),
+            Instruction::Increment(4,),
+            Instruction::Increment(8,),
+            Instruction::Copy(0, 16, 8,),
+            Instruction::SliceLen,
+            Instruction::Debug,
+            Instruction::Reset(40,),
+            Instruction::Exit,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+            Instruction::Return,
+        ],
+        compile_test_code(&code)?
+    );
+
+    Ok(())
+}

@@ -56,25 +56,22 @@ fn main() {
                 }
 
                 type TcpConn struct {
-                    addr uint32,
-                    fd int32,
+                    addr uint32
+                    fd int32
                     port uint16
                 }
 
                 fn std_tcp_accept(fd int32) TcpConn {
                     let dll ptr = dll_open(\"std/main.so\")
-                    let ffi ptr = ffi_create(dll, \"std_tcp_accept\" \"i32\", \"i32\")
+                    let ffi ptr = ffi_create(dll, \"std_tcp_accept\" \"{u32,i32,u16}\", \"i32\")
                     return *(ffi_call(ffi, &fd) as *TcpConn)
                 }
 
                 fn main() void {
-                    let f int32 = std_write(1, \"\n\" as uint8[])
-                    let n int32 = std_write(1, (std_getenv(\"HOME\") + \"\n\") as uint8[])
-
                     let socket int32 = std_tcp_listen(\"127.0.0.1\", 8080)
                     let conn TcpConn = std_tcp_accept(socket)
                     for {
-                        let buf uint8[] = new(uint8[], 0 as uint8, 64)
+                        let buf uint8[] = new(uint8[], 0 as uint8, 10)
                         std_read(conn.fd, buf)
                         std_write(conn.fd, buf)
                         std_write(1, buf)

@@ -248,7 +248,7 @@ impl Slice {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     FfiCreate,
     FfiDllOpen,
@@ -403,14 +403,12 @@ impl Stack {
 
     fn shift(&mut self, len: usize, count: usize) {
         unsafe {
-            for i in 0..count {
-                let len = len + count - i;
-                self.reset(len + 1);
-                for _ in 0..len {
-                    self.increment(1);
-                    let prev: u8 = *self.sp.byte_offset(-1);
-                    *self.sp.cast() = prev;
+            for _ in 0..count {
+                self.reset(len);
+                for i in 0..len {
+                    *self.sp.byte_offset(-(i as isize)) = *self.sp.byte_offset(-(i as isize) - 1);
                 }
+                self.increment(len - 1);
             }
         }
     }
@@ -480,18 +478,44 @@ enum FfiType {
     U16,
     I32,
     I16,
+    Struct(Vec<FfiType>),
 }
 
 impl FfiType {
-    fn from_str(from: &str) -> Self {
-        match from {
-            "void" => Self::Void,
-            "pointer" => Self::Pointer,
-            "c_string" => Self::Cstring,
-            "u16" => Self::U16,
-            "u32" => Self::U32,
-            "i16" => Self::I16,
-            "i32" => Self::I32,
+    fn from_str(from: &mut &str) -> Self {
+        match from.to_string().trim() {
+            v if v.starts_with("void") => Self::Void,
+            v if v.starts_with("pointer") => Self::Pointer,
+            v if v.starts_with("c_string") => Self::Cstring,
+            v if v.starts_with("u16") => Self::U16,
+            v if v.starts_with("u32") => Self::U32,
+            v if v.starts_with("i16") => Self::I16,
+            v if v.starts_with("i32") => Self::I32,
+            // {u32, u32,{i32,},}
+            v if v.starts_with("{") => {
+                let mut fields = Vec::new();
+                *from = &from[1..];
+                loop {
+                    let first = from.chars().next();
+                    let Some(ch) = first else {
+                        break;
+                    };
+                    if ch == '}' {
+                        break;
+                    }
+
+                    fields.push(Self::from_str(from));
+
+                    let comma_index = from.chars().position(|v| v == ',');
+                    let Some(index) = comma_index else {
+                        break;
+                    };
+
+                    *from = &from[(index + 1)..];
+                }
+
+                Self::Struct(fields)
+            }
             other => panic!("{other}"),
         }
     }
@@ -504,6 +528,9 @@ impl FfiType {
             Self::Pointer | Self::Cstring => libffi::middle::Type::pointer(),
             Self::U16 => libffi::middle::Type::u16(),
             Self::U32 => libffi::middle::Type::u32(),
+            Self::Struct(types) => libffi::middle::Type::structure(
+                types.iter().map(|v| v.to_ffi_type()).collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -517,8 +544,8 @@ struct Cif {
 }
 
 enum AnyVecItem {
-    Value(*mut u8, Layout),
     Slice(*mut u8, Layout, Layout),
+    Ptr(*mut u8),
 }
 
 struct AnyVec {
@@ -530,9 +557,8 @@ impl AnyVec {
         Self { values: Vec::new() }
     }
 
-    fn push<T>(&mut self, value: T) {
-        let (ptr, layout) = unsafe { alloc_value(value) };
-        self.values.push(AnyVecItem::Value(ptr, layout));
+    fn push_ptr(&mut self, ptr: *mut u8) {
+        self.values.push(AnyVecItem::Ptr(ptr));
     }
 
     fn push_slice(&mut self, slice: &[u8]) {
@@ -551,8 +577,8 @@ impl AnyVec {
         let mut vec = Vec::new();
         for value in &self.values {
             vec.push(match *value {
-                AnyVecItem::Value(v, _) => v,
                 AnyVecItem::Slice(v, _, _) => v,
+                AnyVecItem::Ptr(v) => v,
             });
         }
         vec
@@ -564,12 +590,12 @@ impl Drop for AnyVec {
         for v in &self.values {
             unsafe {
                 match *v {
-                    AnyVecItem::Value(v, layout) => dealloc(v, layout),
                     AnyVecItem::Slice(v, v_layout, slice_layout) => {
                         let slice_ptr: *mut u8 = *v.cast();
                         dealloc(v, v_layout);
                         dealloc(slice_ptr, slice_layout);
                     }
+                    AnyVecItem::Ptr(_) => {}
                 }
             };
         }
@@ -867,11 +893,13 @@ impl Vm {
                                 .byte_offset((index * size_of::<usize>()) as isize)
                                 .cast::<*mut Slice>()
                         };
-                        argument_types.push(FfiType::from_str(&slice.string()));
+                        argument_types.push(FfiType::from_str(&mut slice.string().as_str()));
                     }
 
                     let return_argument = unsafe {
-                        FfiType::from_str(&(&mut *self.stack.pop::<*mut Slice>()).string())
+                        FfiType::from_str(
+                            &mut (&mut *self.stack.pop::<*mut Slice>()).string().as_str(),
+                        )
                     };
 
                     let function_iden = unsafe { (&mut *self.stack.pop::<*mut Slice>()).string() };
@@ -923,14 +951,14 @@ impl Vm {
                     for arg in &cif.arguments {
                         match arg {
                             FfiType::Void => panic!("Cvoid in argument"),
-                            FfiType::I32 | FfiType::U32 => {
-                                converted_args.push::<u32>(unsafe { **arg_ptr.cast::<*mut u32>() })
+                            FfiType::I32
+                            | FfiType::U32
+                            | FfiType::U16
+                            | FfiType::I16
+                            | FfiType::Pointer
+                            | FfiType::Struct(_) => {
+                                converted_args.push_ptr(unsafe { *arg_ptr.cast::<*mut u8>() })
                             }
-                            FfiType::U16 | FfiType::I16 => {
-                                converted_args.push::<u16>(unsafe { **arg_ptr.cast::<*mut u16>() })
-                            }
-                            FfiType::Pointer => converted_args
-                                .push::<*mut u8>(unsafe { **arg_ptr.cast::<*mut *mut u8>() }),
                             FfiType::Cstring => {
                                 let cstring: CString = unsafe {
                                     let v: &mut Slice = &mut ***arg_ptr.cast::<*mut *mut Slice>();
@@ -955,6 +983,13 @@ impl Vm {
                             | FfiType::U16
                             | FfiType::I16
                             | FfiType::I32 => Some(alloc_value(0 as usize)),
+                            FfiType::Struct(_) => {
+                                // right now just allocate enough for most structs
+                                // will pass size / alignment somehow later
+                                let layout =
+                                    Layout::from_size_align(256, size_of::<usize>()).unwrap();
+                                Some((alloc(layout), layout))
+                            }
                             FfiType::Void => None,
                         }
                     };
@@ -989,6 +1024,13 @@ impl Vm {
                                 }
                                 FfiType::U16 | FfiType::I16 => {
                                     Some(alloc_value(*ptr.cast::<u16>()))
+                                }
+                                FfiType::Struct(_) => {
+                                    let layout =
+                                        Layout::from_size_align(256, size_of::<usize>()).unwrap();
+                                    let ret_ptr = alloc(layout);
+                                    ptr::copy_nonoverlapping(ptr, ret_ptr, 256);
+                                    Some((ret_ptr, layout))
                                 }
                                 FfiType::Pointer => Some(alloc_value(*ptr.cast::<*mut u8>())),
                                 FfiType::Cstring => match is_null {
@@ -1025,5 +1067,23 @@ impl Vm {
             self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn stack_shift_works() {
+        let mut stack = Stack::new(256);
+        stack.increment(4);
+        let old_sp = stack.sp;
+        stack.push(0xFFFFFFFF as u32);
+        stack.shift(4, 4);
+
+        assert_eq!(old_sp, stack.sp);
+        assert_eq!(stack.pop::<u32>(), 0xFFFFFFFF);
     }
 }

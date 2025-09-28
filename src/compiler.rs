@@ -3,6 +3,9 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ir, vm};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone)]
 pub enum CompilerInstruction {
     Real(vm::Instruction),
@@ -322,10 +325,7 @@ impl Instructions {
     }
 
     fn var_reset_label(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::Reset(
-                self.var_stack.get_label_offset().unwrap(),
-            )));
+        self.instr_reset_dangerous_not_synced(self.var_stack.get_label_offset().unwrap());
     }
 
     fn instr_offset(&mut self, size: usize) {
@@ -425,17 +425,26 @@ impl Instructions {
     }
 
     fn instr_increment(&mut self, size: usize) {
+        if size == 0 {
+            return;
+        }
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::Increment(size)));
         self.var_stack.stack.push(VarStackItem::Increment(size));
     }
 
     fn instr_reset_dangerous_not_synced(&mut self, size: usize) {
+        if size == 0 {
+            return;
+        }
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::Reset(size)));
     }
 
     fn instr_reset(&mut self, size: usize) {
+        if size == 0 {
+            return;
+        }
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::Reset(size)));
         self.var_stack.stack.push(VarStackItem::Reset(size));
@@ -754,10 +763,7 @@ impl Instructions {
 
     fn pop_stack_frame(&mut self) {
         let frame = self.var_stack.stack.pop_frame().unwrap();
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::Reset(
-                CompilerVarStack::size_for(frame.iter()),
-            )));
+        self.instr_reset_dangerous_not_synced(CompilerVarStack::size_for(frame.iter()));
     }
 
     fn pop_stack_frame_size(&mut self) -> usize {
@@ -870,10 +876,9 @@ impl Instructions {
     }
 
     fn init_function_epilogue(&mut self, function: &Function) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::Reset(
-                self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
-            )));
+        self.instr_reset_dangerous_not_synced(
+            self.var_stack.total_size() - self.var_stack.arg_size.unwrap(),
+        );
 
         let is_main = match function {
             Function::Function(function) => function.identifier == "main",
@@ -1507,13 +1512,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             .get(1)
             .ok_or(anyhow!("append: expected second argument"))?;
 
-        // cleanup align here?
         let slice_exp = self.compile_expression(slice_arg)?;
-        let value_exp = self.compile_expression(value_arg)?;
 
         let ir::TypeType::Slice(slice_item) = &slice_exp._type else {
             return Err(anyhow!("append: provide a slice as the first argument"));
         };
+
+        let value_exp = self.compile_expression_compact(value_arg, &slice_item)?;
 
         if **slice_item != value_exp {
             return Err(anyhow!("append: value type does not match slice type"));
@@ -1573,7 +1578,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     return Err(anyhow!("new: length should be of type int"));
                 }
 
-                let def_exp = self.compile_expression(def_val)?;
+                let def_exp = self.compile_expression_compact(def_val, &slice_item)?;
                 if def_exp != **slice_item {
                     return Err(anyhow!("new: expression does not match slice type"));
                 }
@@ -1632,13 +1637,13 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
                 let Some(inner) = expected_arg._type.extract_variadic() else {
                     // calling push(a int) -> like push(20)
-                    let exp = self.compile_expression(arg)?;
+                    let exp = self.compile_expression_compact(arg, &expected_arg._type)?;
                     exp.must_equal(&expected_arg._type)?;
                     continue;
                 };
 
                 if let ir::Expression::Spread(_) = arg {
-                    let exp = self.compile_expression(arg)?;
+                    let exp = self.compile_expression_compact(arg, &expected_arg._type)?;
                     if exp != expected_arg._type {
                         return Err(anyhow!("function call type mismatch"));
                     }
@@ -1658,7 +1663,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     self.instructions
                         .instr_copy(0, ir::SLICE_SIZE, ir::SLICE_SIZE);
 
-                    let value_exp = self.compile_expression(arg)?;
+                    let value_exp = self.compile_expression_compact(arg, &inner)?;
                     value_exp.must_equal(inner)?;
 
                     self.instructions.instr_slice_append(value_exp.size);
@@ -1890,10 +1895,31 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         todo!();
     }
 
-    fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
+    fn compile_expression_compact(
+        &mut self,
+        expression: &ir::Expression,
+        _type: &ir::Type,
+    ) -> Result<ir::Type> {
+        self.instructions.push_alignment(_type.alignment);
+
         let old_stack_size = self.instructions.stack_total_size();
 
-        let exp = match expression {
+        let exp = self.compile_expression(expression)?;
+        exp.must_equal(_type)?;
+
+        let new_stack_size = self.instructions.stack_total_size();
+        let delta_stack_size = new_stack_size - old_stack_size;
+
+        if delta_stack_size > exp.size {
+            self.instructions
+                .instr_shift(exp.size, delta_stack_size - exp.size);
+        }
+
+        Ok(exp)
+    }
+
+    fn compile_expression(&mut self, expression: &ir::Expression) -> Result<ir::Type> {
+        Ok(match expression {
             ir::Expression::AndOr(v) => self.compile_andor(v),
             ir::Expression::Literal(v) => self.compile_literal(v),
             ir::Expression::Arithmetic(v) => self.compile_arithmetic(v),
@@ -1920,19 +1946,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             ir::Expression::Method(_) => {
                 panic!("cant compile method, expected call expression")
             }
-        }?;
-
-        if exp.alignment != 0 {
-            let new_stack_size = self.instructions.stack_total_size();
-            let delta_stack_size = new_stack_size - old_stack_size;
-
-            if old_stack_size % exp.alignment == 0 && delta_stack_size > exp.size {
-                self.instructions
-                    .instr_shift(exp.size, delta_stack_size - exp.size);
-            }
-        }
-
-        Ok(exp)
+        }?)
     }
 }
 
@@ -2005,6 +2019,15 @@ impl<'a> FunctionCompiler<'a> {
         self.expression_compiler().compile_expression(expression)
     }
 
+    fn compile_expression_compact(
+        &mut self,
+        expression: &ir::Expression,
+        _type: &ir::Type,
+    ) -> Result<ir::Type> {
+        self.expression_compiler()
+            .compile_expression_compact(expression, _type)
+    }
+
     fn compile_dot_access_field_offset(
         &mut self,
         dot_access: &ir::DotAccess,
@@ -2022,7 +2045,10 @@ impl<'a> FunctionCompiler<'a> {
             self.instructions.push_alignment(ir::PTR_SIZE);
         }
 
-        let exp = self.compile_expression(&declaration.expression)?;
+        let exp = self.compile_expression_compact(
+            &declaration.expression,
+            &declaration.variable.borrow()._type,
+        )?;
         if exp == *ir::VOID {
             return Err(anyhow!("can't declare void variable"));
         }
@@ -2344,38 +2370,3 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::ast::Ast;
-//
-//     #[test]
-//     fn simple() {
-//         let code = String::from(
-//             "
-//                 fn add(a int, b int) int {
-//                     return a + b
-//                 }
-//                 fn main() void {
-//                     let a int = 0
-//                     let b int = 1
-//                     let c int = a + b + 37 + 200
-//                     let d int = b + add(a, b)
-//                 }
-//                 fn add3(a int, b int, c int) int {
-//                     let abc int = a + b + c
-//                     return abc
-//                 }
-//             ",
-//         );
-//
-//         let tokens = lexer::Lexer::new(&code).run().unwrap();
-//         let ast = Ast::new(&tokens).unwrap();
-//
-//         for v in &ast.functions {
-//             println!("{}", v.identifier);
-//             println!("{:#?}", FunctionCompiler::compile_fn(v).unwrap());
-//         }
-//     }
-// }
