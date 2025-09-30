@@ -298,15 +298,17 @@ pub enum Instruction {
 
     ToBoolI,
     NegateBool,
-    CompareI,
     And,
     Or,
 
-    CastIntUint,
-    CastIntInt32,
-    CastIntUint8,
-    CastUint8Int,
+    Compare(u8),
+
     CastSlicePtr,
+
+    // from, to size
+    CastUint(u8, u8),
+    // from, to size
+    CastInt(u8, u8),
 
     LibcWrite,
 
@@ -695,9 +697,9 @@ impl Vm {
                     let int = self.stack.pop::<isize>();
                     self.stack.push(-int);
                 }
-                Instruction::CompareI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                Instruction::Compare(size) => {
+                    let a = self.stack.pop_size(size as usize).to_vec();
+                    let b = self.stack.pop_size(size as usize).to_vec();
                     if a == b {
                         self.stack.push::<isize>(1);
                     } else {
@@ -769,22 +771,6 @@ impl Vm {
                 Instruction::PushI32(v) => self.stack.push(v),
                 Instruction::PushStatic(index, len) => {
                     self.stack.push_size(self.static_memory.index(index, len));
-                }
-                Instruction::CastIntUint => {
-                    let target = self.stack.pop::<isize>();
-                    self.stack.push::<usize>(target as usize);
-                }
-                Instruction::CastIntInt32 => {
-                    let target: isize = self.stack.pop();
-                    self.stack.push::<i32>(target as i32);
-                }
-                Instruction::CastIntUint8 => {
-                    let target = self.stack.pop::<isize>();
-                    self.stack.push::<u8>(target as u8);
-                }
-                Instruction::CastUint8Int => {
-                    let target = self.stack.pop::<u8>();
-                    self.stack.push::<isize>(target as isize);
                 }
                 Instruction::CastSlicePtr => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
@@ -1060,6 +1046,58 @@ impl Vm {
                         self.stack.push(ptr);
                     } else {
                         self.stack.push(0 as usize);
+                    }
+                }
+                Instruction::CastUint(mut from, mut to) => {
+                    if from == to {
+                        continue;
+                    }
+
+                    if from == 0 {
+                        from = size_of::<usize>() as u8;
+                    }
+                    if to == 0 {
+                        to = size_of::<usize>() as u8;
+                    }
+
+                    let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+                    if from > to {
+                        self.stack.push_size(&slice[0..(to as usize)]);
+                    } else {
+                        for _ in 0..(to - from) {
+                            slice.push(0);
+                        }
+                        self.stack.push_size(&slice);
+                    }
+                }
+                Instruction::CastInt(mut from, mut to) => {
+                    if from == to {
+                        continue;
+                    }
+
+                    if from == 0 {
+                        from = size_of::<usize>() as u8;
+                    }
+                    if to == 0 {
+                        to = size_of::<usize>() as u8;
+                    }
+
+                    let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+                    let sign_mask = slice.last().unwrap() | 0x7F;
+
+                    if from > to {
+                        let mut cast = (&slice[0..(to as usize)]).to_vec();
+                        let msb = *cast.last().unwrap();
+                        *cast.last_mut().unwrap() = msb & sign_mask;
+                        self.stack.push_size(&cast);
+                    } else {
+                        let msb = if sign_mask == 0xFF { 0xFF } else { 0 };
+                        for _ in 0..(to - from) {
+                            slice.push(msb);
+                        }
+                        self.stack.push_size(&slice);
                     }
                 }
             }
