@@ -1048,18 +1048,7 @@ impl Vm {
                         self.stack.push(0 as usize);
                     }
                 }
-                Instruction::CastUint(mut from, mut to) => {
-                    if from == to {
-                        continue;
-                    }
-
-                    if from == 0 {
-                        from = size_of::<usize>() as u8;
-                    }
-                    if to == 0 {
-                        to = size_of::<usize>() as u8;
-                    }
-
+                Instruction::CastUint(from, to) => {
                     let mut slice = self.stack.pop_size(from as usize).to_vec();
 
                     if from > to {
@@ -1071,18 +1060,7 @@ impl Vm {
                         self.stack.push_size(&slice);
                     }
                 }
-                Instruction::CastInt(mut from, mut to) => {
-                    if from == to {
-                        continue;
-                    }
-
-                    if from == 0 {
-                        from = size_of::<usize>() as u8;
-                    }
-                    if to == 0 {
-                        to = size_of::<usize>() as u8;
-                    }
-
+                Instruction::CastInt(from, to) => {
                     let mut slice = self.stack.pop_size(from as usize).to_vec();
 
                     let sign_mask = slice.last().unwrap() | 0x7F;

@@ -600,15 +600,61 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
-    fn instr_compare_i(&mut self) {
+    fn instr_compare(&mut self, size: u8) {
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CompareI));
+            .push(CompilerInstruction::Real(vm::Instruction::Compare(size)));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(ir::INT.size * 2));
+            .push(VarStackItem::Reset(size as usize * 2));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_cast_int(&mut self, mut from: u8, mut to: u8) {
+        if from == to {
+            return;
+        }
+        if from == 0 {
+            from = size_of::<usize>() as u8;
+        }
+        if to == 0 {
+            to = size_of::<usize>() as u8;
+        }
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CastInt(
+                from, to,
+            )));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(from as usize));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(to as usize));
+    }
+
+    fn instr_cast_uint(&mut self, mut from: u8, mut to: u8) {
+        if from == to {
+            return;
+        }
+        if from == 0 {
+            from = size_of::<usize>() as u8;
+        }
+        if to == 0 {
+            to = size_of::<usize>() as u8;
+        }
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CastUint(
+                from, to,
+            )));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(from as usize));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(to as usize));
     }
 
     fn instr_add_string(&mut self) {
@@ -636,48 +682,9 @@ impl Instructions {
             )));
     }
 
-    // align before calling this
-    fn instr_cast_int_uint8(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint8));
-
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::UINT8.size));
-    }
-
-    // align before calling this
-    fn instr_cast_uint8_int(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastUint8Int));
-
-        self.var_stack
-            .stack
-            .push(VarStackItem::Reset(ir::UINT8.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT.size));
-    }
-
     fn instr_cast_slice_ptr(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CastSlicePtr));
-    }
-
-    fn instr_cast_int_uint(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint));
-    }
-
-    fn instr_cast_int_int32(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntInt32));
-
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT32.size));
     }
 
     fn instr_debug(&mut self) {
@@ -1413,89 +1420,164 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
-        self.instructions.push_alignment(type_cast._type.alignment);
+        let from = self.compile_expression_compact(&type_cast.expression, 8)?;
 
-        let from = self.compile_expression(&type_cast.expression)?;
-
-        // there should be a better way to do this
         match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
-                ir::TypeBuiltin::Int => match &type_cast._type._type {
-                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Uint8 => {
-                            self.instructions.instr_cast_int_uint8();
-                        }
-                        ir::TypeBuiltin::Uint => {
-                            self.instructions.instr_cast_int_uint();
-                        }
-                        ir::TypeBuiltin::Int32 => {
-                            self.instructions.instr_cast_int_int32();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
                 ir::TypeBuiltin::Uint8 => match &type_cast._type._type {
                     ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Int => {
-                            self.instructions.instr_cast_uint8_int();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(1, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(1, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(1, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(1, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(1, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(1, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(1, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(1, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(1, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                ir::TypeBuiltin::Ptr => match &type_cast._type._type {
+                ir::TypeBuiltin::Uint16 => match &type_cast._type._type {
                     ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Uint => {}
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(2, 1),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(2, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(2, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(2, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(2, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(2, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(2, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(2, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(2, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
-                    ir::TypeType::Address(_) => {}
-                    _type => {
-                        return Err(anyhow!(
-                            "compile_type_cast: cant cast from: {from:#?}, to: {:#?}",
-                            _type,
-                        ))
-                    }
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                ir::TypeBuiltin::String => match &type_cast._type._type {
-                    ir::TypeType::Slice(item) => {
-                        if **item != *ir::UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                ir::TypeBuiltin::Uint32 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(4, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(4, 2),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(4, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(4, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(4, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(4, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(4, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(4, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(4, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
-            },
-            ir::TypeType::Slice(item_target) => match &type_cast._type._type {
-                ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                    ir::TypeBuiltin::String => {
-                        if *item_target != *ir::UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
-                    ir::TypeBuiltin::Ptr => {
-                        self.instructions.instr_cast_slice_ptr();
-                    }
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                ir::TypeBuiltin::Uint64 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(8, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(8, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(8, 4),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(8, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(8, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(8, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(8, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(8, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(8, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                ir::TypeBuiltin::Int8 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_int(1, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_int(1, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_int(1, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_int(1, 8),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(1, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(1, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(1, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(1, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_int(1, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int16 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_int(2, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_int(2, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_int(2, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_int(2, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(2, 1),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(2, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(2, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(2, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_int(2, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int32 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_int(4, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_int(4, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_int(4, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_int(4, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(4, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(4, 2),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(4, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(4, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_int(4, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int64 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_int(8, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_int(8, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_int(8, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_int(8, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(8, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(8, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(8, 4),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(8, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_int(8, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_int(0, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_int(0, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_int(0, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_int(0, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(0, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(0, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(0, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(0, 8),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_int(0, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Uint => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(0, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(0, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(0, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(0, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(0, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(0, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(0, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(0, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(0, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                // todo: uint8[] <-> string, variadic <-> slice
+                _ => {}
             },
-            ir::TypeType::Variadic(item_target) => match &type_cast._type._type {
-                ir::TypeType::Slice(item_dest) => {
-                    if item_target != *item_dest {
-                        return Err(anyhow!(
-                            "compile_type_cast: cant cast variadic into slice different types"
-                        ));
-                    }
-                }
-                _ => return Err(anyhow!("compile_type_cast: cant cast")),
-            },
-            _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            _ => {}
         }
 
         Ok(type_cast._type.clone())

@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+
+const from_exp = process.argv[2];
+const to_exp = process.argv[3];
+
+const types = [
+  "Uint8",
+  "Uint16",
+  "Uint32",
+  "Uint64",
+  "Int8",
+  "Int16",
+  "Int32",
+  "Int64",
+  "Int",
+  "Uint",
+];
+
+let str = `
+  match ${from_exp}._type.clone() {
+    ir::TypeType::Builtin(builtin) => match builtin {
+      ${gen_builtin_types()}
+    }
+  }
+`;
+
+function gen_cast_instructions(from_type) {
+  const cast_suffix = from_type[0].toLowerCase() === "u" ? "uint" : "int";
+
+  let str = "";
+  for (const type of types) {
+    if (type === from_type) {
+      continue;
+    }
+
+    str += `
+      ir::TypeBuiltin::${type} => {
+        self.instructions.instr_cast_${cast_suffix}(
+          ${type_to_size(from_type)}, ${type_to_size(type)}
+        )
+      }
+    `;
+  }
+
+  str += `
+    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+  `;
+
+  return str;
+}
+
+function gen_builtin_types() {
+  let str = "";
+  for (const type of types) {
+    str += `
+      ir::TypeBuiltin::${type} => match &${to_exp}._type._type {
+        ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+          ${gen_cast_instructions(type)}
+        }
+        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+      }
+    `;
+  }
+  return str;
+}
+
+function type_to_size(type) {
+  let num = type.match(/\d+/);
+  if (!num) return 0;
+  return Number(num[0]) / 8;
+}
+
+console.log(str);
