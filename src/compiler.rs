@@ -611,6 +611,17 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
+    fn instr_compare_string(&mut self) {
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareString));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(ir::SLICE_SIZE * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
     fn instr_cast_int(&mut self, mut from: u8, mut to: u8) {
         if from == to {
             return;
@@ -1375,25 +1386,39 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             // last item on the stack is smaller
             ir::CompareType::Gt => {
                 b = self.compile_expression(&compare.left)?;
-                a = self.compile_expression(&compare.right)?;
+                a = self.compile_expression_compact(&compare.right, b.alignment)?;
             }
             // last item on the stack is bigger
             ir::CompareType::Lt => {
                 b = self.compile_expression(&compare.right)?;
-                a = self.compile_expression(&compare.left)?;
+                a = self.compile_expression_compact(&compare.left, b.alignment)?;
             }
             // dont matter
             ir::CompareType::Equals | ir::CompareType::NotEquals => {
                 a = self.compile_expression(&compare.right)?;
-                b = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.left, a.alignment)?;
             }
         };
 
-        if a._type != b._type {
-            return Err(anyhow!("can't compare different types"));
-        }
-        if a != *ir::BOOL && a != *ir::INT {
-            return Err(anyhow!("can only compare int/bool"));
+        a.must_equal(&b)?;
+
+        match &a._type {
+            ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                ir::TypeBuiltin::Int
+                | ir::TypeBuiltin::Int8
+                | ir::TypeBuiltin::Int16
+                | ir::TypeBuiltin::Int32
+                | ir::TypeBuiltin::Int64
+                | ir::TypeBuiltin::Uint8
+                | ir::TypeBuiltin::Uint16
+                | ir::TypeBuiltin::Uint32
+                | ir::TypeBuiltin::Uint64
+                | ir::TypeBuiltin::Uint
+                | ir::TypeBuiltin::Bool
+                | ir::TypeBuiltin::String => {}
+                _type => return Err(anyhow!("cant compare {_type:#?}")),
+            },
+            _type => return Err(anyhow!("cant compare {_type:#?}")),
         }
 
         match compare.compare_type {
@@ -1407,11 +1432,25 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 // >0:1 <0:0
                 self.instructions.instr_to_bool();
             }
-            ir::CompareType::Equals => {
-                self.instructions.instr_compare_i();
-            }
+            ir::CompareType::Equals => match &a._type {
+                ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                    ir::TypeBuiltin::String => self.instructions.instr_compare_string(),
+                    _ => {
+                        self.instructions.instr_compare(a.size as u8);
+                    }
+                },
+                _ => unreachable!(),
+            },
             ir::CompareType::NotEquals => {
-                self.instructions.instr_compare_i();
+                match &a._type {
+                    ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                        ir::TypeBuiltin::String => self.instructions.instr_compare_string(),
+                        _ => {
+                            self.instructions.instr_compare(a.size as u8);
+                        }
+                    },
+                    _ => unreachable!(),
+                }
                 self.instructions.instr_negate_bool();
             }
         }
@@ -1420,7 +1459,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
-        let from = self.compile_expression_compact(&type_cast.expression, 8)?;
+        let from = self.compile_expression_compact(&type_cast.expression, size_of::<usize>())?;
 
         match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
@@ -1574,10 +1613,42 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     },
                     _type => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
-                // todo: uint8[] <-> string, variadic <-> slice
-                _ => {}
+                ir::TypeBuiltin::String => match &type_cast._type._type {
+                    ir::TypeType::Slice(slice_item) => {
+                        slice_item.must_equal(&ir::UINT8)?;
+                    }
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Ptr => match &type_cast._type._type {
+                    ir::TypeType::Address(_) => {}
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            _ => {}
+            ir::TypeType::Variadic(variadic_item) => match &type_cast._type._type {
+                ir::TypeType::Slice(slice_item) => {
+                    slice_item.must_equal(&variadic_item)?;
+                }
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ir::TypeType::Slice(slice_item) => match &type_cast._type._type {
+                ir::TypeType::Variadic(variadic_item) => {
+                    slice_item.must_equal(variadic_item)?;
+                }
+                ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    ir::TypeBuiltin::Uint8 => {}
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ir::TypeType::Address(_) => match &type_cast._type._type {
+                ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    ir::TypeBuiltin::Ptr => {}
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            _ => return Err(anyhow!("compile_type_cast: cant cast")),
         }
 
         Ok(type_cast._type.clone())

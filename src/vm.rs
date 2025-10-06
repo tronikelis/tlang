@@ -302,6 +302,7 @@ pub enum Instruction {
     Or,
 
     Compare(u8),
+    CompareString,
 
     CastSlicePtr,
 
@@ -706,6 +707,13 @@ impl Vm {
                         self.stack.push::<isize>(0)
                     }
                 }
+                Instruction::CompareString => {
+                    let a = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    self.stack
+                        .push::<isize>(if a.data == b.data { 1 } else { 0 });
+                }
                 Instruction::And => {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
@@ -1063,15 +1071,21 @@ impl Vm {
                 Instruction::CastInt(from, to) => {
                     let mut slice = self.stack.pop_size(from as usize).to_vec();
 
-                    let sign_mask = slice.last().unwrap() | 0x7F;
+                    let sign_mask = (slice.last().unwrap() & 0x80) >> 7;
 
                     if from > to {
                         let mut cast = (&slice[0..(to as usize)]).to_vec();
                         let msb = *cast.last().unwrap();
-                        *cast.last_mut().unwrap() = msb & sign_mask;
+                        *cast.last_mut().unwrap() = if sign_mask == 1 {
+                            // set last bit to 1
+                            msb | 0x80
+                        } else {
+                            // set last bit to 0
+                            msb & 0x7F
+                        };
                         self.stack.push_size(&cast);
                     } else {
-                        let msb = if sign_mask == 0xFF { 0xFF } else { 0 };
+                        let msb = if sign_mask == 1 { 0xFF } else { 0 };
                         for _ in 0..(to - from) {
                             slice.push(msb);
                         }
