@@ -614,35 +614,6 @@ impl Instructions {
         Ok(())
     }
 
-    fn instr_minus_int(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::MinusInt));
-    }
-
-    fn instr_add_i(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::AddI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-    }
-
-    fn instr_multiply_i(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::MultiplyI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-    }
-
-    fn instr_divide_i(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::DivideI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-    }
-
-    fn instr_modulo_i(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::ModuloI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-    }
-
     fn instr_to_bool(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::ToBoolI));

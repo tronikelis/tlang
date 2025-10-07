@@ -283,12 +283,18 @@ pub enum Instruction {
     // index, len
     PushStatic(usize, usize),
 
-    MinusInt,
-    AddI,
     AddString,
-    MultiplyI,
-    DivideI,
-    ModuloI,
+
+    AddI(u8),
+    MinusI(u8),
+    MulI(u8),
+    DivI(u8),
+    ModI(u8),
+    AddU(u8),
+    MinusU(u8),
+    MulU(u8),
+    DivU(u8),
+    ModU(u8),
 
     Exit,
     Debug,
@@ -646,11 +652,6 @@ impl Vm {
                 Instruction::PushU16(v) => self.push_u16(v),
                 Instruction::PushU32(v) => self.push_u32(v),
                 Instruction::PushU64(v) => self.push_u64(v),
-                Instruction::AddI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(a + b);
-                }
                 Instruction::Exit => return,
                 Instruction::Debug => {
                     self.stack.debug_print();
@@ -705,10 +706,6 @@ impl Vm {
                     let int = self.stack.pop::<isize>();
                     self.stack.push(int ^ 1);
                 }
-                Instruction::MinusInt => {
-                    let int = self.stack.pop::<isize>();
-                    self.stack.push(-int);
-                }
                 Instruction::Compare(size) => {
                     let a = self.stack.pop_size(size as usize).to_vec();
                     let b = self.stack.pop_size(size as usize).to_vec();
@@ -734,16 +731,6 @@ impl Vm {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     self.stack.push(a | b);
-                }
-                Instruction::DivideI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(b / a);
-                }
-                Instruction::MultiplyI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(a * b);
                 }
                 Instruction::PushSlice => {
                     let slice = Slice::new();
@@ -801,12 +788,6 @@ impl Vm {
                     self.gc
                         .add_object(GcObject::new(GcObjectData::Slice(slice)));
                     self.stack.push(slice);
-                }
-                Instruction::ModuloI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-
-                    self.stack.push(b % a);
                 }
                 Instruction::Shift(len, count) => {
                     self.stack.shift(len, count);
@@ -1064,6 +1045,16 @@ impl Vm {
                 }
                 Instruction::CastUint(from, to) => self.cast_uint(from, to),
                 Instruction::CastInt(from, to) => self.cast_int(from, to),
+                Instruction::AddI(v) => self.add_i(v),
+                Instruction::MinusI(v) => self.minus_i(v),
+                Instruction::MulI(v) => self.mul_i(v),
+                Instruction::DivI(v) => self.div_i(v),
+                Instruction::ModI(v) => self.mod_i(v),
+                Instruction::AddU(v) => self.add_u(v),
+                Instruction::MinusU(v) => self.minus_u(v),
+                Instruction::MulU(v) => self.mul_u(v),
+                Instruction::DivU(v) => self.div_u(v),
+                Instruction::ModU(v) => self.mod_u(v),
             }
 
             self.gc.run(self.stack.sp, self.stack.sp_end());
@@ -1147,6 +1138,86 @@ impl Vm {
 
     fn push_u64(&mut self, v: u64) {
         self.stack.push(v);
+    }
+
+    fn pop_cast_u(&mut self, size: u8) -> (usize, usize) {
+        self.cast_uint(size, size_of::<usize>() as u8);
+        let a: usize = self.stack.pop();
+
+        self.cast_uint(size, size_of::<usize>() as u8);
+        let b: usize = self.stack.pop();
+
+        (a, b)
+    }
+
+    fn pop_cast_i(&mut self, size: u8) -> (isize, isize) {
+        self.cast_int(size, size_of::<isize>() as u8);
+        let a: isize = self.stack.pop();
+
+        self.cast_int(size, size_of::<isize>() as u8);
+        let b: isize = self.stack.pop();
+
+        (a, b)
+    }
+
+    fn add_i(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_i(size);
+        self.stack.push::<isize>(a + b);
+        self.cast_int(size_of::<isize>() as u8, size);
+    }
+
+    fn add_u(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_u(size);
+        self.stack.push::<usize>(a + b);
+        self.cast_uint(size_of::<usize>() as u8, size);
+    }
+
+    fn minus_i(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_i(size);
+        self.stack.push::<isize>(a - b);
+        self.cast_int(size_of::<isize>() as u8, size);
+    }
+
+    fn minus_u(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_u(size);
+        self.stack.push::<usize>(a - b);
+        self.cast_uint(size_of::<usize>() as u8, size);
+    }
+
+    fn mul_i(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_i(size);
+        self.stack.push::<isize>(a * b);
+        self.cast_int(size_of::<isize>() as u8, size);
+    }
+
+    fn mul_u(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_u(size);
+        self.stack.push::<usize>(a * b);
+        self.cast_uint(size_of::<usize>() as u8, size);
+    }
+
+    fn div_i(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_i(size);
+        self.stack.push::<isize>(a / b);
+        self.cast_int(size_of::<isize>() as u8, size);
+    }
+
+    fn div_u(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_u(size);
+        self.stack.push::<usize>(a / b);
+        self.cast_uint(size_of::<usize>() as u8, size);
+    }
+
+    fn mod_i(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_i(size);
+        self.stack.push::<isize>(a % b);
+        self.cast_int(size_of::<isize>() as u8, size);
+    }
+
+    fn mod_u(&mut self, size: u8) {
+        let (a, b) = self.pop_cast_u(size);
+        self.stack.push::<usize>(a % b);
+        self.cast_uint(size_of::<usize>() as u8, size);
     }
 }
 
