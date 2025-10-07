@@ -25,12 +25,20 @@ let str = `
 `;
 
 function gen_cast_instructions(from_type) {
-  const cast_suffix = from_type[0].toLowerCase() === "u" ? "uint" : "int";
-
   let str = "";
   for (const type of types) {
     if (type === from_type) {
       continue;
+    }
+
+    const from_suffix = from_type[0].toLowerCase() === "u" ? "uint" : "int";
+    const to_suffix = type[0].toLowerCase() === "u" ? "uint" : "int";
+
+    let cast_suffix;
+    if (from_suffix === "int" && to_suffix === "int") {
+      cast_suffix = "int";
+    } else {
+      cast_suffix = "uint";
     }
 
     str += `
