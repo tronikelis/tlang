@@ -484,6 +484,19 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::SLICE_SIZE));
     }
 
+    fn instr_push_u(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT.alignment);
+        let uint: usize = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU(uint)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT.size));
+
+        Ok(())
+    }
+
     fn instr_push_u8(&mut self, int: usize) -> Result<()> {
         self.push_alignment(ir::UINT8.alignment);
         let uint8: u8 = int.try_into()?;
@@ -523,6 +536,19 @@ impl Instructions {
         Ok(())
     }
 
+    fn instr_push_u64(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT64.alignment);
+        let uint64: u64 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU64(uint64)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT64.size));
+
+        Ok(())
+    }
+
     fn instr_push_i(&mut self, int: usize) -> Result<()> {
         self.push_alignment(ir::INT.alignment);
         let int: isize = int.try_into()?;
@@ -532,6 +558,19 @@ impl Instructions {
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::INT.size));
+
+        Ok(())
+    }
+
+    fn instr_push_i8(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT8.alignment);
+        let int8: i8 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushI8(int8)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT8.size));
 
         Ok(())
     }
@@ -558,6 +597,19 @@ impl Instructions {
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::INT32.size));
+
+        Ok(())
+    }
+
+    fn instr_push_i64(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT64.alignment);
+        let int64: i64 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushI64(int64)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT64.size));
 
         Ok(())
     }
@@ -1969,18 +2021,26 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn compile_literal(&mut self, literal: &ir::Literal) -> Result<ir::Type> {
         match &literal.literal_type {
             ir::LiteralType::Int(int) => {
-                if literal._type == *ir::UINT8 {
-                    self.instructions.instr_push_u8(*int)?;
-                } else if literal._type == *ir::INT {
+                if literal._type == *ir::INT {
                     self.instructions.instr_push_i(*int)?;
-                } else if literal._type == *ir::UINT16 {
-                    self.instructions.instr_push_u16(*int)?;
-                } else if literal._type == *ir::UINT32 {
-                    self.instructions.instr_push_u32(*int)?;
+                } else if literal._type == *ir::INT8 {
+                    self.instructions.instr_push_i8(*int)?;
                 } else if literal._type == *ir::INT16 {
                     self.instructions.instr_push_i16(*int)?;
                 } else if literal._type == *ir::INT32 {
                     self.instructions.instr_push_i32(*int)?;
+                } else if literal._type == *ir::INT64 {
+                    self.instructions.instr_push_i64(*int)?;
+                } else if literal._type == *ir::UINT {
+                    self.instructions.instr_push_u(*int)?;
+                } else if literal._type == *ir::UINT8 {
+                    self.instructions.instr_push_u8(*int)?;
+                } else if literal._type == *ir::UINT16 {
+                    self.instructions.instr_push_u16(*int)?;
+                } else if literal._type == *ir::UINT32 {
+                    self.instructions.instr_push_u32(*int)?;
+                } else if literal._type == *ir::UINT64 {
+                    self.instructions.instr_push_u64(*int)?;
                 } else {
                     return Err(anyhow!("can't cast int to {:#?}", literal._type));
                 }

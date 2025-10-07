@@ -1162,13 +1162,16 @@ impl<'a> IrParser<'a> {
 
                     let _type = match &_type.skip_escaped()._type {
                         TypeType::Builtin(builtin) => match builtin {
-                            TypeBuiltin::Int => INT.clone(),
                             TypeBuiltin::Uint => UINT.clone(),
                             TypeBuiltin::Uint8 => UINT8.clone(),
                             TypeBuiltin::Uint16 => UINT16.clone(),
                             TypeBuiltin::Uint32 => UINT32.clone(),
+                            TypeBuiltin::Uint64 => UINT64.clone(),
+                            TypeBuiltin::Int => INT.clone(),
+                            TypeBuiltin::Int8 => INT8.clone(),
                             TypeBuiltin::Int16 => INT16.clone(),
                             TypeBuiltin::Int32 => INT32.clone(),
+                            TypeBuiltin::Int64 => INT64.clone(),
                             TypeBuiltin::CompilerType => {
                                 return Ok(Expression::Literal(Literal {
                                     _type: INT.clone(),

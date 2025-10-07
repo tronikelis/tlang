@@ -266,11 +266,15 @@ pub enum Instruction {
     Shift(usize, usize),
     Reset(usize),
     PushI(isize),
+    PushI8(i8),
     PushI16(i16),
     PushI32(i32),
+    PushI64(i64),
+    PushU(usize),
     PushU8(u8),
     PushU16(u16),
     PushU32(u32),
+    PushU64(u64),
     PushSlice,
     PushSliceNewLen(usize),
     // var count, function index
@@ -632,15 +636,22 @@ impl Vm {
             }
 
             match self.instructions[pc] {
+                Instruction::PushI(v) => self.push_i(v),
+                Instruction::PushI8(v) => self.push_i8(v),
+                Instruction::PushI16(v) => self.push_i16(v),
+                Instruction::PushI32(v) => self.push_i32(v),
+                Instruction::PushI64(v) => self.push_i64(v),
+                Instruction::PushU(v) => self.push_u(v),
+                Instruction::PushU8(v) => self.push_u8(v),
+                Instruction::PushU16(v) => self.push_u16(v),
+                Instruction::PushU32(v) => self.push_u32(v),
+                Instruction::PushU64(v) => self.push_u64(v),
                 Instruction::AddI => {
                     let a = self.stack.pop::<isize>();
                     let b = self.stack.pop::<isize>();
                     self.stack.push(a + b);
                 }
                 Instruction::Exit => return,
-                Instruction::PushI(v) => {
-                    self.stack.push(v);
-                }
                 Instruction::Debug => {
                     self.stack.debug_print();
                 }
@@ -772,11 +783,6 @@ impl Vm {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     self.stack.push(slice.len as isize);
                 }
-                Instruction::PushU8(v) => self.stack.push(v),
-                Instruction::PushU16(v) => self.stack.push(v),
-                Instruction::PushU32(v) => self.stack.push(v),
-                Instruction::PushI16(v) => self.stack.push(v),
-                Instruction::PushI32(v) => self.stack.push(v),
                 Instruction::PushStatic(index, len) => {
                     self.stack.push_size(self.static_memory.index(index, len));
                 }
@@ -1056,47 +1062,91 @@ impl Vm {
                         self.stack.push(0 as usize);
                     }
                 }
-                Instruction::CastUint(from, to) => {
-                    let mut slice = self.stack.pop_size(from as usize).to_vec();
-
-                    if from > to {
-                        self.stack.push_size(&slice[0..(to as usize)]);
-                    } else {
-                        for _ in 0..(to - from) {
-                            slice.push(0);
-                        }
-                        self.stack.push_size(&slice);
-                    }
-                }
-                Instruction::CastInt(from, to) => {
-                    let mut slice = self.stack.pop_size(from as usize).to_vec();
-
-                    let sign_mask = (slice.last().unwrap() & 0x80) >> 7;
-
-                    if from > to {
-                        let mut cast = (&slice[0..(to as usize)]).to_vec();
-                        let msb = *cast.last().unwrap();
-                        *cast.last_mut().unwrap() = if sign_mask == 1 {
-                            // set last bit to 1
-                            msb | 0x80
-                        } else {
-                            // set last bit to 0
-                            msb & 0x7F
-                        };
-                        self.stack.push_size(&cast);
-                    } else {
-                        let msb = if sign_mask == 1 { 0xFF } else { 0 };
-                        for _ in 0..(to - from) {
-                            slice.push(msb);
-                        }
-                        self.stack.push_size(&slice);
-                    }
-                }
+                Instruction::CastUint(from, to) => self.cast_uint(from, to),
+                Instruction::CastInt(from, to) => self.cast_int(from, to),
             }
 
             self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
+    }
+
+    fn cast_uint(&mut self, from: u8, to: u8) {
+        let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+        if from > to {
+            self.stack.push_size(&slice[0..(to as usize)]);
+        } else {
+            for _ in 0..(to - from) {
+                slice.push(0);
+            }
+            self.stack.push_size(&slice);
+        }
+    }
+
+    fn cast_int(&mut self, from: u8, to: u8) {
+        let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+        let sign_mask = (slice.last().unwrap() & 0x80) >> 7;
+
+        if from > to {
+            let mut cast = (&slice[0..(to as usize)]).to_vec();
+            let msb = *cast.last().unwrap();
+            *cast.last_mut().unwrap() = if sign_mask == 1 {
+                // set last bit to 1
+                msb | 0x80
+            } else {
+                // set last bit to 0
+                msb & 0x7F
+            };
+            self.stack.push_size(&cast);
+        } else {
+            let msb = if sign_mask == 1 { 0xFF } else { 0 };
+            for _ in 0..(to - from) {
+                slice.push(msb);
+            }
+            self.stack.push_size(&slice);
+        }
+    }
+
+    fn push_i(&mut self, v: isize) {
+        self.stack.push(v);
+    }
+
+    fn push_i8(&mut self, v: i8) {
+        self.stack.push(v);
+    }
+
+    fn push_i16(&mut self, v: i16) {
+        self.stack.push(v);
+    }
+
+    fn push_i32(&mut self, v: i32) {
+        self.stack.push(v);
+    }
+
+    fn push_i64(&mut self, v: i64) {
+        self.stack.push(v);
+    }
+
+    fn push_u(&mut self, v: usize) {
+        self.stack.push(v);
+    }
+
+    fn push_u8(&mut self, v: u8) {
+        self.stack.push(v);
+    }
+
+    fn push_u16(&mut self, v: u16) {
+        self.stack.push(v);
+    }
+
+    fn push_u32(&mut self, v: u32) {
+        self.stack.push(v);
+    }
+
+    fn push_u64(&mut self, v: u64) {
+        self.stack.push(v);
     }
 }
 
@@ -1115,5 +1165,21 @@ mod tests {
 
         assert_eq!(old_sp, stack.sp);
         assert_eq!(stack.pop::<u32>(), 0xFFFFFFFF);
+    }
+
+    #[test]
+    fn vm_cast_int() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+
+        vm.push_i8(-1);
+        vm.cast_int(1, 4);
+
+        let as32: u32 = vm.stack.pop();
+        assert_eq!(as32, 0xFFFFFFFF);
+
+        vm.push_u32(0x80_00_00_1F);
+        vm.cast_int(4, 1);
+        let as8: u8 = vm.stack.pop();
+        assert_eq!(as8, 0x9F);
     }
 }
