@@ -268,8 +268,8 @@ lazy_static::lazy_static! {
     };
     pub static ref BOOL: Type = Type {
         alias: Some("bool".to_string()),
-        size: size_of::<usize>(),      // for now
-        alignment: size_of::<usize>(), // for now
+        size: 1,
+        alignment: 1,
         _type: TypeType::Builtin(TypeBuiltin::Bool),
     };
     pub static ref STRING: Type = Type {

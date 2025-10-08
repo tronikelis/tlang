@@ -8,6 +8,19 @@ use std::{
     str::FromStr,
 };
 
+fn align(alignment: usize, stack_size: usize) -> usize {
+    if alignment == 0 || stack_size == 0 {
+        0
+    } else {
+        let modulo = stack_size % alignment;
+        if modulo == 0 {
+            0
+        } else {
+            alignment - modulo
+        }
+    }
+}
+
 fn is_debug() -> bool {
     env::var("DEBUG").is_ok()
 }
@@ -306,13 +319,16 @@ pub enum Instruction {
     JumpIfTrue(usize),
     JumpIfFalse(usize),
 
-    ToBoolI,
     NegateBool,
     And,
     Or,
 
-    Compare(u8),
-    CompareString,
+    CompareEq(u8),
+    CompareEqString,
+    CompareGtI(u8),
+    CompareLtI(u8),
+    CompareGtU(u8),
+    CompareLtU(u8),
 
     CastSlicePtr,
 
@@ -694,33 +710,24 @@ impl Vm {
                         continue;
                     }
                 }
-                Instruction::ToBoolI => {
-                    let int = self.stack.pop::<isize>();
-                    if int > 0 {
-                        self.stack.push::<isize>(1);
-                    } else {
-                        self.stack.push::<isize>(0);
-                    }
-                }
                 Instruction::NegateBool => {
-                    let int = self.stack.pop::<isize>();
-                    self.stack.push(int ^ 1);
+                    let int = self.stack.pop::<u8>();
+                    self.stack.push::<u8>(int ^ 1);
                 }
-                Instruction::Compare(size) => {
+                Instruction::CompareEq(size) => {
                     let a = self.stack.pop_size(size as usize).to_vec();
                     let b = self.stack.pop_size(size as usize).to_vec();
                     if a == b {
-                        self.stack.push::<isize>(1);
+                        self.stack.push::<u8>(1);
                     } else {
-                        self.stack.push::<isize>(0)
+                        self.stack.push::<u8>(0)
                     }
                 }
-                Instruction::CompareString => {
+                Instruction::CompareEqString => {
                     let a = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
 
-                    self.stack
-                        .push::<isize>(if a.data == b.data { 1 } else { 0 });
+                    self.stack.push::<u8>(if a.data == b.data { 1 } else { 0 });
                 }
                 Instruction::And => {
                     let a = self.stack.pop::<isize>();
@@ -1055,6 +1062,10 @@ impl Vm {
                 Instruction::MulU(v) => self.mul_u(v),
                 Instruction::DivU(v) => self.div_u(v),
                 Instruction::ModU(v) => self.mod_u(v),
+                Instruction::CompareGtI(v) => self.compare_gt_i(v),
+                Instruction::CompareLtI(v) => self.compare_lt_i(v),
+                Instruction::CompareGtU(v) => self.compare_gt_u(v),
+                Instruction::CompareLtU(v) => self.compare_lt_u(v),
             }
 
             self.gc.run(self.stack.sp, self.stack.sp_end());
@@ -1140,84 +1151,106 @@ impl Vm {
         self.stack.push(v);
     }
 
-    fn pop_cast_u(&mut self, size: u8) -> (usize, usize) {
-        self.cast_uint(size, size_of::<usize>() as u8);
-        let a: usize = self.stack.pop();
+    fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(isize, isize) -> isize) {
+        let increment = align(size_of::<isize>(), self.stack.sp as usize);
+        self.stack.increment(increment + size as usize);
+        self.stack.copy(0, increment + size as usize, size as usize);
 
-        self.cast_uint(size, size_of::<usize>() as u8);
-        let b: usize = self.stack.pop();
-
-        (a, b)
-    }
-
-    fn pop_cast_i(&mut self, size: u8) -> (isize, isize) {
         self.cast_int(size, size_of::<isize>() as u8);
         let a: isize = self.stack.pop();
 
+        self.stack.increment(size as usize);
+        self.stack
+            .copy(0, (size as usize) * 2 + increment, size as usize);
         self.cast_int(size, size_of::<isize>() as u8);
         let b: isize = self.stack.pop();
 
-        (a, b)
+        self.stack.push::<isize>(cb(a, b));
+
+        self.cast_int(size_of::<isize>() as u8, size);
+        self.stack
+            .shift(size as usize, increment + (size as usize) * 2);
+    }
+
+    fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(usize, usize) -> usize) {
+        let increment = align(size_of::<usize>(), self.stack.sp as usize);
+        self.stack.increment(increment + size as usize);
+        self.stack.copy(0, increment + size as usize, size as usize);
+
+        self.cast_int(size, size_of::<usize>() as u8);
+        let a: usize = self.stack.pop();
+
+        self.stack.increment(size as usize);
+        self.stack
+            .copy(0, (size as usize) * 2 + increment, size as usize);
+        self.cast_int(size, size_of::<usize>() as u8);
+        let b: usize = self.stack.pop();
+
+        self.stack.push::<usize>(cb(a, b));
+
+        self.cast_int(size_of::<usize>() as u8, size);
+        self.stack
+            .shift(size as usize, increment + (size as usize) * 2);
     }
 
     fn add_i(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_i(size);
-        self.stack.push::<isize>(a + b);
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.pop_cast_i(size, |a, b| a + b);
     }
 
     fn add_u(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_u(size);
-        self.stack.push::<usize>(a + b);
-        self.cast_uint(size_of::<usize>() as u8, size);
+        self.pop_cast_u(size, |a, b| a + b);
     }
 
     fn minus_i(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_i(size);
-        self.stack.push::<isize>(a - b);
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.pop_cast_i(size, |a, b| a - b);
     }
 
     fn minus_u(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_u(size);
-        self.stack.push::<usize>(a - b);
-        self.cast_uint(size_of::<usize>() as u8, size);
+        self.pop_cast_u(size, |a, b| a - b);
     }
 
     fn mul_i(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_i(size);
-        self.stack.push::<isize>(a * b);
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.pop_cast_i(size, |a, b| a * b);
     }
 
     fn mul_u(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_u(size);
-        self.stack.push::<usize>(a * b);
-        self.cast_uint(size_of::<usize>() as u8, size);
+        self.pop_cast_u(size, |a, b| a * b);
     }
 
     fn div_i(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_i(size);
-        self.stack.push::<isize>(a / b);
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.pop_cast_i(size, |a, b| a / b);
     }
 
     fn div_u(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_u(size);
-        self.stack.push::<usize>(a / b);
-        self.cast_uint(size_of::<usize>() as u8, size);
+        self.pop_cast_u(size, |a, b| a / b);
     }
 
     fn mod_i(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_i(size);
-        self.stack.push::<isize>(a % b);
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.pop_cast_i(size, |a, b| a % b);
     }
 
     fn mod_u(&mut self, size: u8) {
-        let (a, b) = self.pop_cast_u(size);
-        self.stack.push::<usize>(a % b);
-        self.cast_uint(size_of::<usize>() as u8, size);
+        self.pop_cast_u(size, |a, b| a % b);
+    }
+
+    fn compare_gt_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| if a > b { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_lt_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| if a < b { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_gt_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| if a > b { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_lt_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| if a < b { 1 } else { 0 });
+        self.cast_uint(size, 1);
     }
 }
 
@@ -1252,5 +1285,17 @@ mod tests {
         vm.cast_int(4, 1);
         let as8: u8 = vm.stack.pop();
         assert_eq!(as8, 0x9F);
+    }
+
+    fn vm_add_i() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i32(10);
+        vm.push_i32(25);
+        vm.add_i(4);
+
+        assert_eq!((old_sp as usize) + 4, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<u64>(), 35);
     }
 }

@@ -614,18 +614,120 @@ impl Instructions {
         Ok(())
     }
 
-    fn instr_to_bool(&mut self) {
+    fn instr_add_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::ToBoolI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::AddI(size)));
         self.var_stack
             .stack
-            .push(VarStackItem::Increment(ir::BOOL.size));
+            .push(VarStackItem::Reset(size as usize));
     }
 
-    fn instr_compare(&mut self, size: u8) {
+    fn instr_minus_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::Compare(size)));
+            .push(CompilerInstruction::Real(vm::Instruction::MinusI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mul_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::MulI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_div_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::DivI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mod_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::ModI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_add_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::AddU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_minus_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::MinusU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mul_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::MulU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_div_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::DivU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mod_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::ModU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_compare_eq(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareEq(size)));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(size as usize * 2));
@@ -634,12 +736,60 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
-    fn instr_compare_string(&mut self) {
+    fn instr_compare_eq_string(&mut self) {
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CompareString));
+            .push(CompilerInstruction::Real(vm::Instruction::CompareEqString));
         self.var_stack
             .stack
             .push(VarStackItem::Reset(ir::SLICE_SIZE * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_gt_i(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareGtI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_lt_i(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareLtI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_gt_u(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareGtU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_lt_u(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareLtU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::BOOL.size));
@@ -1394,10 +1544,54 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         let exp = self.compile_expression(&infix.expression)?;
         match infix._type {
             ir::InfixType::Plus => {}
-            ir::InfixType::Minus => {
-                self.instructions.instr_minus_int();
-            }
+            ir::InfixType::Minus => match &exp._type {
+                ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                    ir::TypeBuiltin::Uint => {
+                        self.instructions.instr_push_u(0)?;
+                        self.instructions.instr_minus_u(0);
+                    }
+                    ir::TypeBuiltin::Uint8 => {
+                        self.instructions.instr_push_u8(0)?;
+                        self.instructions.instr_minus_u(1);
+                    }
+                    ir::TypeBuiltin::Uint16 => {
+                        self.instructions.instr_push_u16(0)?;
+                        self.instructions.instr_minus_u(2);
+                    }
+                    ir::TypeBuiltin::Uint32 => {
+                        self.instructions.instr_push_u32(0)?;
+                        self.instructions.instr_minus_u(4);
+                    }
+                    ir::TypeBuiltin::Uint64 => {
+                        self.instructions.instr_push_u64(0)?;
+                        self.instructions.instr_minus_u(8);
+                    }
+                    ir::TypeBuiltin::Int => {
+                        self.instructions.instr_push_i(0)?;
+                        self.instructions.instr_minus_i(0);
+                    }
+                    ir::TypeBuiltin::Int8 => {
+                        self.instructions.instr_push_i8(0)?;
+                        self.instructions.instr_minus_i(1);
+                    }
+                    ir::TypeBuiltin::Int16 => {
+                        self.instructions.instr_push_i16(0)?;
+                        self.instructions.instr_minus_i(2);
+                    }
+                    ir::TypeBuiltin::Int32 => {
+                        self.instructions.instr_push_i32(0)?;
+                        self.instructions.instr_minus_i(4);
+                    }
+                    ir::TypeBuiltin::Int64 => {
+                        self.instructions.instr_push_i64(0)?;
+                        self.instructions.instr_minus_i(8);
+                    }
+                    _type => return Err(anyhow!("compile_infix: {_type:#?}")),
+                },
+                _type => return Err(anyhow!("compile_infix: {_type:#?}")),
+            },
         }
+
         Ok(exp)
     }
 
@@ -1406,24 +1600,24 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         let b: ir::Type;
 
         match compare.compare_type {
-            // last item on the stack is smaller
             ir::CompareType::Gt => {
-                b = self.compile_expression(&compare.left)?;
-                a = self.compile_expression_compact(&compare.right, b.alignment)?;
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
             }
-            // last item on the stack is bigger
             ir::CompareType::Lt => {
-                b = self.compile_expression(&compare.right)?;
-                a = self.compile_expression_compact(&compare.left, b.alignment)?;
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
             }
             // dont matter
             ir::CompareType::Equals | ir::CompareType::NotEquals => {
-                a = self.compile_expression(&compare.right)?;
-                b = self.compile_expression_compact(&compare.left, a.alignment)?;
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
             }
         };
 
         a.must_equal(&b)?;
+
+        let signed: Option<bool>;
 
         match &a._type {
             ir::TypeType::Builtin(type_builtin) => match type_builtin {
@@ -1431,35 +1625,38 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 | ir::TypeBuiltin::Int8
                 | ir::TypeBuiltin::Int16
                 | ir::TypeBuiltin::Int32
-                | ir::TypeBuiltin::Int64
-                | ir::TypeBuiltin::Uint8
+                | ir::TypeBuiltin::Int64 => {
+                    signed = Some(true);
+                }
+                ir::TypeBuiltin::Uint8
                 | ir::TypeBuiltin::Uint16
                 | ir::TypeBuiltin::Uint32
                 | ir::TypeBuiltin::Uint64
-                | ir::TypeBuiltin::Uint
-                | ir::TypeBuiltin::Bool
-                | ir::TypeBuiltin::String => {}
+                | ir::TypeBuiltin::Uint => {
+                    signed = Some(false);
+                }
+                ir::TypeBuiltin::Bool | ir::TypeBuiltin::String => {
+                    signed = None;
+                }
                 _type => return Err(anyhow!("cant compare {_type:#?}")),
             },
             _type => return Err(anyhow!("cant compare {_type:#?}")),
         }
 
         match compare.compare_type {
-            ir::CompareType::Gt | ir::CompareType::Lt => {
-                // a = -a
-                self.instructions.instr_minus_int();
-
-                // a + b
-                self.instructions.instr_add_i();
-
-                // >0:1 <0:0
-                self.instructions.instr_to_bool();
-            }
+            ir::CompareType::Lt => match signed.ok_or(anyhow!("cant compare non numbers"))? {
+                true => self.instructions.instr_compare_lt_i(a.size as u8),
+                false => self.instructions.instr_compare_lt_u(a.size as u8),
+            },
+            ir::CompareType::Gt => match signed.ok_or(anyhow!("cant compare non numbers"))? {
+                true => self.instructions.instr_compare_gt_i(a.size as u8),
+                false => self.instructions.instr_compare_gt_u(a.size as u8),
+            },
             ir::CompareType::Equals => match &a._type {
                 ir::TypeType::Builtin(type_builtin) => match type_builtin {
-                    ir::TypeBuiltin::String => self.instructions.instr_compare_string(),
+                    ir::TypeBuiltin::String => self.instructions.instr_compare_eq_string(),
                     _ => {
-                        self.instructions.instr_compare(a.size as u8);
+                        self.instructions.instr_compare_eq(a.size as u8);
                     }
                 },
                 _ => unreachable!(),
@@ -1467,9 +1664,9 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             ir::CompareType::NotEquals => {
                 match &a._type {
                     ir::TypeType::Builtin(type_builtin) => match type_builtin {
-                        ir::TypeBuiltin::String => self.instructions.instr_compare_string(),
+                        ir::TypeBuiltin::String => self.instructions.instr_compare_eq_string(),
                         _ => {
-                            self.instructions.instr_compare(a.size as u8);
+                            self.instructions.instr_compare_eq(a.size as u8);
                         }
                     },
                     _ => unreachable!(),
@@ -1661,6 +1858,9 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 }
                 ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
                     ir::TypeBuiltin::Uint8 => {}
+                    ir::TypeBuiltin::Ptr => {
+                        self.instructions.instr_cast_slice_ptr();
+                    }
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
@@ -1936,52 +2136,71 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
     fn compile_arithmetic(&mut self, arithmetic: &ir::Arithmetic) -> Result<ir::Type> {
         let a = self.compile_expression(&arithmetic.left)?;
-        let b = self.compile_expression(&arithmetic.right)?;
+        let b = self.compile_expression_compact(&arithmetic.right, a.alignment)?;
 
-        if a != b {
-            return Err(anyhow!("can't add different types"));
-        }
-        if a == *ir::VOID {
-            return Err(anyhow!("can't add void type"));
+        a.must_equal(&b)?;
+
+        let signed: Option<bool>;
+
+        match &a._type {
+            ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                ir::TypeBuiltin::Int
+                | ir::TypeBuiltin::Int8
+                | ir::TypeBuiltin::Int16
+                | ir::TypeBuiltin::Int32
+                | ir::TypeBuiltin::Int64 => {
+                    signed = Some(true);
+                }
+                ir::TypeBuiltin::Uint8
+                | ir::TypeBuiltin::Uint16
+                | ir::TypeBuiltin::Uint32
+                | ir::TypeBuiltin::Uint64
+                | ir::TypeBuiltin::Uint => {
+                    signed = Some(false);
+                }
+                ir::TypeBuiltin::String => {
+                    signed = None;
+                }
+                _type => return Err(anyhow!("cant arithmetic {_type:#?}")),
+            },
+            _type => return Err(anyhow!("cant arithmetic {_type:#?}")),
         }
 
         match arithmetic._type {
             ir::ArithmeticType::Minus => {
-                if *ir::INT == a {
-                    self.instructions.instr_minus_int();
-                    self.instructions.instr_add_i();
-                } else {
-                    return Err(anyhow!("can only minus int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_minus_i(a.size as u8),
+                    false => self.instructions.instr_minus_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Plus => {
-                if *ir::INT == a {
-                    self.instructions.instr_add_i();
-                } else if a == *ir::STRING {
-                    self.instructions.instr_add_string();
-                } else {
-                    return Err(anyhow!("can only plus int and string"));
+                match signed {
+                    Some(v) => match v {
+                        true => self.instructions.instr_add_i(a.size as u8),
+                        false => self.instructions.instr_add_u(a.size as u8),
+                    },
+                    // none is implied as string, this can change tho idk in future
+                    None => {
+                        self.instructions.instr_add_string();
+                    }
                 }
             }
             ir::ArithmeticType::Multiply => {
-                if *ir::INT == a {
-                    self.instructions.instr_multiply_i();
-                } else {
-                    return Err(anyhow!("can only multiply int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_mul_i(a.size as u8),
+                    false => self.instructions.instr_mul_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Divide => {
-                if *ir::INT == a {
-                    self.instructions.instr_divide_i();
-                } else {
-                    return Err(anyhow!("can only divide int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_div_i(a.size as u8),
+                    false => self.instructions.instr_div_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Modulo => {
-                if *ir::INT == a {
-                    self.instructions.instr_modulo_i();
-                } else {
-                    return Err(anyhow!("can only modulo int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_mod_i(a.size as u8),
+                    false => self.instructions.instr_mod_u(a.size as u8),
                 }
             }
         }
@@ -2018,7 +2237,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
             ir::LiteralType::Bool(bool) => {
                 if literal._type == *ir::BOOL {
-                    self.instructions.instr_push_i({
+                    self.instructions.instr_push_u8({
                         if *bool {
                             1
                         } else {
