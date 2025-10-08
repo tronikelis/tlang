@@ -695,7 +695,7 @@ impl Vm {
                     self.stack.increment(by);
                 }
                 Instruction::JumpIfFalse(i) => {
-                    let boolean = self.stack.pop::<isize>();
+                    let boolean = self.stack.pop::<u8>();
                     self.stack.push(boolean);
                     if boolean != 1 {
                         pc = i;
@@ -703,7 +703,7 @@ impl Vm {
                     }
                 }
                 Instruction::JumpIfTrue(i) => {
-                    let boolean = self.stack.pop::<isize>();
+                    let boolean = self.stack.pop::<u8>();
                     self.stack.push(boolean);
                     if boolean == 1 {
                         pc = i;
@@ -730,13 +730,13 @@ impl Vm {
                     self.stack.push::<u8>(if a.data == b.data { 1 } else { 0 });
                 }
                 Instruction::And => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                    let a = self.stack.pop::<u8>();
+                    let b = self.stack.pop::<u8>();
                     self.stack.push(a & b);
                 }
                 Instruction::Or => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                    let a = self.stack.pop::<u8>();
+                    let b = self.stack.pop::<u8>();
                     self.stack.push(a | b);
                 }
                 Instruction::PushSlice => {
