@@ -1074,6 +1074,9 @@ impl Vm {
     }
 
     fn cast_uint(&mut self, from: u8, to: u8) {
+        debug_assert_ne!(from, 0);
+        debug_assert_ne!(to, 0);
+
         let mut slice = self.stack.pop_size(from as usize).to_vec();
 
         if from > to {
@@ -1087,6 +1090,9 @@ impl Vm {
     }
 
     fn cast_int(&mut self, from: u8, to: u8) {
+        debug_assert_ne!(from, 0);
+        debug_assert_ne!(to, 0);
+
         let mut slice = self.stack.pop_size(from as usize).to_vec();
 
         let sign_mask = (slice.last().unwrap() & 0x80) >> 7;
@@ -1152,6 +1158,8 @@ impl Vm {
     }
 
     fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(isize, isize) -> isize) {
+        debug_assert_ne!(size, 0);
+
         let increment = align(size_of::<isize>(), self.stack.sp as usize);
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
@@ -1173,6 +1181,8 @@ impl Vm {
     }
 
     fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(usize, usize) -> usize) {
+        debug_assert_ne!(size, 0);
+
         let increment = align(size_of::<usize>(), self.stack.sp as usize);
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
