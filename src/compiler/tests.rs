@@ -77,7 +77,7 @@ fn simple_fn() -> Result<()> {
             Instruction::Copy(0, 24, 8),
             Instruction::Increment(8),
             Instruction::Copy(0, 24, 8),
-            Instruction::AddI,
+            Instruction::AddI(8),
             Instruction::Copy(24, 0, 8),
             Instruction::Reset(8),
             Instruction::Return,

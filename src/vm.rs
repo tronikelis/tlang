@@ -8,19 +8,6 @@ use std::{
     str::FromStr,
 };
 
-fn align(alignment: usize, stack_size: usize) -> usize {
-    if alignment == 0 || stack_size == 0 {
-        0
-    } else {
-        let modulo = stack_size % alignment;
-        if modulo == 0 {
-            0
-        } else {
-            alignment - modulo
-        }
-    }
-}
-
 fn is_debug() -> bool {
     env::var("DEBUG").is_ok()
 }
@@ -1160,7 +1147,7 @@ impl Vm {
     fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(isize, isize) -> isize) {
         debug_assert_ne!(size, 0);
 
-        let increment = align(size_of::<isize>(), self.stack.sp as usize);
+        let increment = self.stack.sp as usize % size_of::<usize>();
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
 
@@ -1183,7 +1170,7 @@ impl Vm {
     fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(usize, usize) -> usize) {
         debug_assert_ne!(size, 0);
 
-        let increment = align(size_of::<usize>(), self.stack.sp as usize);
+        let increment = self.stack.sp as usize % size_of::<usize>();
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
 
@@ -1297,7 +1284,8 @@ mod tests {
         assert_eq!(as8, 0x9F);
     }
 
-    fn vm_add_i() {
+    #[test]
+    fn vm_add_i32() {
         let mut vm = Vm::new(Vec::new(), StaticMemory::new());
         let old_sp = vm.stack.sp;
 
@@ -1305,7 +1293,59 @@ mod tests {
         vm.push_i32(25);
         vm.add_i(4);
 
-        assert_eq!((old_sp as usize) + 4, vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<u64>(), 35);
+        assert_eq!((old_sp as usize) - 4, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i32>(), 35);
+    }
+
+    #[test]
+    fn vm_add_i8() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i8(-3);
+        vm.push_i8(-8);
+        vm.add_i(1);
+
+        assert_eq!((old_sp as usize) - 1, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i8>(), -11);
+    }
+
+    #[test]
+    fn vm_add_i16() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i16(8);
+        vm.push_i16(-9);
+        vm.add_i(2);
+
+        assert_eq!((old_sp as usize) - 2, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i16>(), -1);
+    }
+
+    #[test]
+    fn vm_add_i() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i(-11);
+        vm.push_i(12);
+        vm.add_i(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<isize>(), 1);
+    }
+
+    #[test]
+    fn vm_minus_i() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i(-11);
+        vm.push_i(12);
+        vm.minus_i(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<isize>(), 23);
     }
 }
