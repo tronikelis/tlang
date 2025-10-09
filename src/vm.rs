@@ -1191,62 +1191,62 @@ impl Vm {
     }
 
     fn add_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| a + b);
+        self.pop_cast_i(size, |a, b| b + a);
     }
 
     fn add_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| a + b);
+        self.pop_cast_u(size, |a, b| b + a);
     }
 
     fn minus_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| a - b);
+        self.pop_cast_i(size, |a, b| b - a);
     }
 
     fn minus_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| a - b);
+        self.pop_cast_u(size, |a, b| b - a);
     }
 
     fn mul_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| a * b);
+        self.pop_cast_i(size, |a, b| b * a);
     }
 
     fn mul_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| a * b);
+        self.pop_cast_u(size, |a, b| b * a);
     }
 
     fn div_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| a / b);
+        self.pop_cast_i(size, |a, b| b / a);
     }
 
     fn div_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| a / b);
+        self.pop_cast_u(size, |a, b| b / a);
     }
 
     fn mod_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| a % b);
+        self.pop_cast_i(size, |a, b| b % a);
     }
 
     fn mod_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| a % b);
+        self.pop_cast_u(size, |a, b| b % a);
     }
 
     fn compare_gt_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| if a > b { 1 } else { 0 });
+        self.pop_cast_i(size, |a, b| if b > a { 1 } else { 0 });
         self.cast_uint(size, 1);
     }
 
     fn compare_lt_i(&mut self, size: u8) {
-        self.pop_cast_i(size, |a, b| if a < b { 1 } else { 0 });
+        self.pop_cast_i(size, |a, b| if b < a { 1 } else { 0 });
         self.cast_uint(size, 1);
     }
 
     fn compare_gt_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| if a > b { 1 } else { 0 });
+        self.pop_cast_u(size, |a, b| if b > a { 1 } else { 0 });
         self.cast_uint(size, 1);
     }
 
     fn compare_lt_u(&mut self, size: u8) {
-        self.pop_cast_u(size, |a, b| if a < b { 1 } else { 0 });
+        self.pop_cast_u(size, |a, b| if b < a { 1 } else { 0 });
         self.cast_uint(size, 1);
     }
 }
@@ -1358,7 +1358,7 @@ mod tests {
         vm.minus_i(size_of::<isize>() as u8);
 
         assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<isize>(), 23);
+        assert_eq!(vm.stack.pop::<isize>(), -23);
     }
 
     #[test]
@@ -1366,8 +1366,8 @@ mod tests {
         let mut vm = Vm::new(Vec::new(), StaticMemory::new());
         let old_sp = vm.stack.sp;
 
-        vm.push_u(5);
         vm.push_u(10);
+        vm.push_u(5);
         vm.minus_u(size_of::<isize>() as u8);
 
         assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
