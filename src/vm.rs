@@ -1144,48 +1144,48 @@ impl Vm {
         self.stack.push(v);
     }
 
-    fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(isize, isize) -> isize) {
+    fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(i64, i64) -> i64) {
         debug_assert_ne!(size, 0);
 
-        let increment = self.stack.sp as usize % size_of::<usize>();
+        let increment = self.stack.sp as usize % 8;
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
 
-        self.cast_int(size, size_of::<isize>() as u8);
-        let a: isize = self.stack.pop();
+        self.cast_int(size, 8);
+        let a: i64 = self.stack.pop();
 
         self.stack.increment(size as usize);
         self.stack
             .copy(0, (size as usize) * 2 + increment, size as usize);
-        self.cast_int(size, size_of::<isize>() as u8);
-        let b: isize = self.stack.pop();
+        self.cast_int(size, 8);
+        let b: i64 = self.stack.pop();
 
-        self.stack.push::<isize>(cb(a, b));
+        self.stack.push::<i64>(cb(a, b));
 
-        self.cast_int(size_of::<isize>() as u8, size);
+        self.cast_int(8, size);
         self.stack
             .shift(size as usize, increment + (size as usize) * 2);
     }
 
-    fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(usize, usize) -> usize) {
+    fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(u64, u64) -> u64) {
         debug_assert_ne!(size, 0);
 
-        let increment = self.stack.sp as usize % size_of::<usize>();
+        let increment = self.stack.sp as usize % 8;
         self.stack.increment(increment + size as usize);
         self.stack.copy(0, increment + size as usize, size as usize);
 
-        self.cast_int(size, size_of::<usize>() as u8);
-        let a: usize = self.stack.pop();
+        self.cast_int(size, 8);
+        let a: u64 = self.stack.pop();
 
         self.stack.increment(size as usize);
         self.stack
             .copy(0, (size as usize) * 2 + increment, size as usize);
-        self.cast_int(size, size_of::<usize>() as u8);
-        let b: usize = self.stack.pop();
+        self.cast_int(size, 8);
+        let b: u64 = self.stack.pop();
 
-        self.stack.push::<usize>(cb(a, b));
+        self.stack.push::<u64>(cb(a, b));
 
-        self.cast_int(size_of::<usize>() as u8, size);
+        self.cast_int(8, size);
         self.stack
             .shift(size as usize, increment + (size as usize) * 2);
     }
@@ -1347,5 +1347,18 @@ mod tests {
 
         assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
         assert_eq!(vm.stack.pop::<isize>(), 23);
+    }
+
+    #[test]
+    fn vm_minus_u() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_u(5);
+        vm.push_u(10);
+        vm.minus_u(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<usize>(), 5);
     }
 }
