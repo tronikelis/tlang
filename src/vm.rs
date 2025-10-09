@@ -1285,6 +1285,18 @@ mod tests {
     }
 
     #[test]
+    fn vm_cast_uint() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_u16(0xFFFF);
+        vm.cast_uint(2, 1);
+
+        assert_eq!(old_sp as usize - 1, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<u8>(), 0xFF);
+    }
+
+    #[test]
     fn vm_add_i32() {
         let mut vm = Vm::new(Vec::new(), StaticMemory::new());
         let old_sp = vm.stack.sp;
