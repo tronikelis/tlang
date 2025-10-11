@@ -266,11 +266,15 @@ pub enum Instruction {
     Shift(usize, usize),
     Reset(usize),
     PushI(isize),
+    PushI8(i8),
     PushI16(i16),
     PushI32(i32),
+    PushI64(i64),
+    PushU(usize),
     PushU8(u8),
     PushU16(u16),
     PushU32(u32),
+    PushU64(u64),
     PushSlice,
     PushSliceNewLen(usize),
     // var count, function index
@@ -279,12 +283,18 @@ pub enum Instruction {
     // index, len
     PushStatic(usize, usize),
 
-    MinusInt,
-    AddI,
     AddString,
-    MultiplyI,
-    DivideI,
-    ModuloI,
+
+    AddI(u8),
+    MinusI(u8),
+    MulI(u8),
+    DivI(u8),
+    ModI(u8),
+    AddU(u8),
+    MinusU(u8),
+    MulU(u8),
+    DivU(u8),
+    ModU(u8),
 
     Exit,
     Debug,
@@ -296,17 +306,23 @@ pub enum Instruction {
     JumpIfTrue(usize),
     JumpIfFalse(usize),
 
-    ToBoolI,
     NegateBool,
-    CompareI,
     And,
     Or,
 
-    CastIntUint,
-    CastIntInt32,
-    CastIntUint8,
-    CastUint8Int,
+    CompareEq(u8),
+    CompareEqString,
+    CompareGtI(u8),
+    CompareLtI(u8),
+    CompareGtU(u8),
+    CompareLtU(u8),
+
     CastSlicePtr,
+
+    // from, to size
+    CastUint(u8, u8),
+    // from, to size
+    CastInt(u8, u8),
 
     LibcWrite,
 
@@ -629,15 +645,17 @@ impl Vm {
             }
 
             match self.instructions[pc] {
-                Instruction::AddI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(a + b);
-                }
+                Instruction::PushI(v) => self.push_i(v),
+                Instruction::PushI8(v) => self.push_i8(v),
+                Instruction::PushI16(v) => self.push_i16(v),
+                Instruction::PushI32(v) => self.push_i32(v),
+                Instruction::PushI64(v) => self.push_i64(v),
+                Instruction::PushU(v) => self.push_u(v),
+                Instruction::PushU8(v) => self.push_u8(v),
+                Instruction::PushU16(v) => self.push_u16(v),
+                Instruction::PushU32(v) => self.push_u32(v),
+                Instruction::PushU64(v) => self.push_u64(v),
                 Instruction::Exit => return,
-                Instruction::PushI(v) => {
-                    self.stack.push(v);
-                }
                 Instruction::Debug => {
                     self.stack.debug_print();
                 }
@@ -664,7 +682,7 @@ impl Vm {
                     self.stack.increment(by);
                 }
                 Instruction::JumpIfFalse(i) => {
-                    let boolean = self.stack.pop::<isize>();
+                    let boolean = self.stack.pop::<u8>();
                     self.stack.push(boolean);
                     if boolean != 1 {
                         pc = i;
@@ -672,57 +690,41 @@ impl Vm {
                     }
                 }
                 Instruction::JumpIfTrue(i) => {
-                    let boolean = self.stack.pop::<isize>();
+                    let boolean = self.stack.pop::<u8>();
                     self.stack.push(boolean);
                     if boolean == 1 {
                         pc = i;
                         continue;
                     }
                 }
-                Instruction::ToBoolI => {
-                    let int = self.stack.pop::<isize>();
-                    if int > 0 {
-                        self.stack.push::<isize>(1);
-                    } else {
-                        self.stack.push::<isize>(0);
-                    }
-                }
                 Instruction::NegateBool => {
-                    let int = self.stack.pop::<isize>();
-                    self.stack.push(int ^ 1);
+                    let int = self.stack.pop::<u8>();
+                    self.stack.push::<u8>(int ^ 1);
                 }
-                Instruction::MinusInt => {
-                    let int = self.stack.pop::<isize>();
-                    self.stack.push(-int);
-                }
-                Instruction::CompareI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                Instruction::CompareEq(size) => {
+                    let a = self.stack.pop_size(size as usize).to_vec();
+                    let b = self.stack.pop_size(size as usize).to_vec();
                     if a == b {
-                        self.stack.push::<isize>(1);
+                        self.stack.push::<u8>(1);
                     } else {
-                        self.stack.push::<isize>(0)
+                        self.stack.push::<u8>(0)
                     }
+                }
+                Instruction::CompareEqString => {
+                    let a = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+                    let b = unsafe { &mut *self.stack.pop::<*mut Slice>() };
+
+                    self.stack.push::<u8>(if a.data == b.data { 1 } else { 0 });
                 }
                 Instruction::And => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                    let a = self.stack.pop::<u8>();
+                    let b = self.stack.pop::<u8>();
                     self.stack.push(a & b);
                 }
                 Instruction::Or => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
+                    let a = self.stack.pop::<u8>();
+                    let b = self.stack.pop::<u8>();
                     self.stack.push(a | b);
-                }
-                Instruction::DivideI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(b / a);
-                }
-                Instruction::MultiplyI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-                    self.stack.push(a * b);
                 }
                 Instruction::PushSlice => {
                     let slice = Slice::new();
@@ -762,29 +764,8 @@ impl Vm {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     self.stack.push(slice.len as isize);
                 }
-                Instruction::PushU8(v) => self.stack.push(v),
-                Instruction::PushU16(v) => self.stack.push(v),
-                Instruction::PushU32(v) => self.stack.push(v),
-                Instruction::PushI16(v) => self.stack.push(v),
-                Instruction::PushI32(v) => self.stack.push(v),
                 Instruction::PushStatic(index, len) => {
                     self.stack.push_size(self.static_memory.index(index, len));
-                }
-                Instruction::CastIntUint => {
-                    let target = self.stack.pop::<isize>();
-                    self.stack.push::<usize>(target as usize);
-                }
-                Instruction::CastIntInt32 => {
-                    let target: isize = self.stack.pop();
-                    self.stack.push::<i32>(target as i32);
-                }
-                Instruction::CastIntUint8 => {
-                    let target = self.stack.pop::<isize>();
-                    self.stack.push::<u8>(target as u8);
-                }
-                Instruction::CastUint8Int => {
-                    let target = self.stack.pop::<u8>();
-                    self.stack.push::<isize>(target as isize);
                 }
                 Instruction::CastSlicePtr => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
@@ -801,12 +782,6 @@ impl Vm {
                     self.gc
                         .add_object(GcObject::new(GcObjectData::Slice(slice)));
                     self.stack.push(slice);
-                }
-                Instruction::ModuloI => {
-                    let a = self.stack.pop::<isize>();
-                    let b = self.stack.pop::<isize>();
-
-                    self.stack.push(b % a);
                 }
                 Instruction::Shift(len, count) => {
                     self.stack.shift(len, count);
@@ -1062,11 +1037,217 @@ impl Vm {
                         self.stack.push(0 as usize);
                     }
                 }
+                Instruction::CastUint(from, to) => self.cast_uint(from, to),
+                Instruction::CastInt(from, to) => self.cast_int(from, to),
+                Instruction::AddI(v) => self.add_i(v),
+                Instruction::MinusI(v) => self.minus_i(v),
+                Instruction::MulI(v) => self.mul_i(v),
+                Instruction::DivI(v) => self.div_i(v),
+                Instruction::ModI(v) => self.mod_i(v),
+                Instruction::AddU(v) => self.add_u(v),
+                Instruction::MinusU(v) => self.minus_u(v),
+                Instruction::MulU(v) => self.mul_u(v),
+                Instruction::DivU(v) => self.div_u(v),
+                Instruction::ModU(v) => self.mod_u(v),
+                Instruction::CompareGtI(v) => self.compare_gt_i(v),
+                Instruction::CompareLtI(v) => self.compare_lt_i(v),
+                Instruction::CompareGtU(v) => self.compare_gt_u(v),
+                Instruction::CompareLtU(v) => self.compare_lt_u(v),
             }
 
             self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
+    }
+
+    fn cast_uint(&mut self, from: u8, to: u8) {
+        debug_assert_ne!(from, 0);
+        debug_assert_ne!(to, 0);
+
+        let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+        if from > to {
+            self.stack.push_size(&slice[0..(to as usize)]);
+        } else {
+            for _ in 0..(to - from) {
+                slice.push(0);
+            }
+            self.stack.push_size(&slice);
+        }
+    }
+
+    fn cast_int(&mut self, from: u8, to: u8) {
+        debug_assert_ne!(from, 0);
+        debug_assert_ne!(to, 0);
+
+        let mut slice = self.stack.pop_size(from as usize).to_vec();
+
+        let sign_mask = (slice.last().unwrap() & 0x80) >> 7;
+
+        if from > to {
+            let mut cast = (&slice[0..(to as usize)]).to_vec();
+            let msb = *cast.last().unwrap();
+            *cast.last_mut().unwrap() = if sign_mask == 1 {
+                // set last bit to 1
+                msb | 0x80
+            } else {
+                // set last bit to 0
+                msb & 0x7F
+            };
+            self.stack.push_size(&cast);
+        } else {
+            let msb = if sign_mask == 1 { 0xFF } else { 0 };
+            for _ in 0..(to - from) {
+                slice.push(msb);
+            }
+            self.stack.push_size(&slice);
+        }
+    }
+
+    fn push_i(&mut self, v: isize) {
+        self.stack.push(v);
+    }
+
+    fn push_i8(&mut self, v: i8) {
+        self.stack.push(v);
+    }
+
+    fn push_i16(&mut self, v: i16) {
+        self.stack.push(v);
+    }
+
+    fn push_i32(&mut self, v: i32) {
+        self.stack.push(v);
+    }
+
+    fn push_i64(&mut self, v: i64) {
+        self.stack.push(v);
+    }
+
+    fn push_u(&mut self, v: usize) {
+        self.stack.push(v);
+    }
+
+    fn push_u8(&mut self, v: u8) {
+        self.stack.push(v);
+    }
+
+    fn push_u16(&mut self, v: u16) {
+        self.stack.push(v);
+    }
+
+    fn push_u32(&mut self, v: u32) {
+        self.stack.push(v);
+    }
+
+    fn push_u64(&mut self, v: u64) {
+        self.stack.push(v);
+    }
+
+    fn pop_cast_i(&mut self, size: u8, cb: impl FnOnce(i64, i64) -> i64) {
+        debug_assert_ne!(size, 0);
+
+        let increment = self.stack.sp as usize % 8;
+        self.stack.increment(increment + size as usize);
+        self.stack.copy(0, increment + size as usize, size as usize);
+
+        self.cast_int(size, 8);
+        let a: i64 = self.stack.pop();
+
+        self.stack.increment(size as usize);
+        self.stack
+            .copy(0, (size as usize) * 2 + increment, size as usize);
+        self.cast_int(size, 8);
+        let b: i64 = self.stack.pop();
+
+        self.stack.push::<i64>(cb(a, b));
+
+        self.cast_int(8, size);
+        self.stack
+            .shift(size as usize, increment + (size as usize) * 2);
+    }
+
+    fn pop_cast_u(&mut self, size: u8, cb: impl FnOnce(u64, u64) -> u64) {
+        debug_assert_ne!(size, 0);
+
+        let increment = self.stack.sp as usize % 8;
+        self.stack.increment(increment + size as usize);
+        self.stack.copy(0, increment + size as usize, size as usize);
+
+        self.cast_int(size, 8);
+        let a: u64 = self.stack.pop();
+
+        self.stack.increment(size as usize);
+        self.stack
+            .copy(0, (size as usize) * 2 + increment, size as usize);
+        self.cast_int(size, 8);
+        let b: u64 = self.stack.pop();
+
+        self.stack.push::<u64>(cb(a, b));
+
+        self.cast_int(8, size);
+        self.stack
+            .shift(size as usize, increment + (size as usize) * 2);
+    }
+
+    fn add_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| b + a);
+    }
+
+    fn add_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| b + a);
+    }
+
+    fn minus_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| b - a);
+    }
+
+    fn minus_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| b - a);
+    }
+
+    fn mul_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| b * a);
+    }
+
+    fn mul_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| b * a);
+    }
+
+    fn div_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| b / a);
+    }
+
+    fn div_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| b / a);
+    }
+
+    fn mod_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| b % a);
+    }
+
+    fn mod_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| b % a);
+    }
+
+    fn compare_gt_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| if b > a { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_lt_i(&mut self, size: u8) {
+        self.pop_cast_i(size, |a, b| if b < a { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_gt_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| if b > a { 1 } else { 0 });
+        self.cast_uint(size, 1);
+    }
+
+    fn compare_lt_u(&mut self, size: u8) {
+        self.pop_cast_u(size, |a, b| if b < a { 1 } else { 0 });
+        self.cast_uint(size, 1);
     }
 }
 
@@ -1085,5 +1266,111 @@ mod tests {
 
         assert_eq!(old_sp, stack.sp);
         assert_eq!(stack.pop::<u32>(), 0xFFFFFFFF);
+    }
+
+    #[test]
+    fn vm_cast_int() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+
+        vm.push_i8(-1);
+        vm.cast_int(1, 4);
+
+        let as32: u32 = vm.stack.pop();
+        assert_eq!(as32, 0xFFFFFFFF);
+
+        vm.push_u32(0x80_00_00_1F);
+        vm.cast_int(4, 1);
+        let as8: u8 = vm.stack.pop();
+        assert_eq!(as8, 0x9F);
+    }
+
+    #[test]
+    fn vm_cast_uint() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_u16(0xFFFF);
+        vm.cast_uint(2, 1);
+
+        assert_eq!(old_sp as usize - 1, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<u8>(), 0xFF);
+    }
+
+    #[test]
+    fn vm_add_i32() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i32(10);
+        vm.push_i32(25);
+        vm.add_i(4);
+
+        assert_eq!((old_sp as usize) - 4, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i32>(), 35);
+    }
+
+    #[test]
+    fn vm_add_i8() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i8(-3);
+        vm.push_i8(-8);
+        vm.add_i(1);
+
+        assert_eq!((old_sp as usize) - 1, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i8>(), -11);
+    }
+
+    #[test]
+    fn vm_add_i16() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i16(8);
+        vm.push_i16(-9);
+        vm.add_i(2);
+
+        assert_eq!((old_sp as usize) - 2, vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<i16>(), -1);
+    }
+
+    #[test]
+    fn vm_add_i() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i(-11);
+        vm.push_i(12);
+        vm.add_i(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<isize>(), 1);
+    }
+
+    #[test]
+    fn vm_minus_i() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_i(-11);
+        vm.push_i(12);
+        vm.minus_i(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<isize>(), -23);
+    }
+
+    #[test]
+    fn vm_minus_u() {
+        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+        let old_sp = vm.stack.sp;
+
+        vm.push_u(10);
+        vm.push_u(5);
+        vm.minus_u(size_of::<isize>() as u8);
+
+        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+        assert_eq!(vm.stack.pop::<usize>(), 5);
     }
 }

@@ -91,9 +91,12 @@ impl<'a> TypeResolver<'a> {
                     "uint8" => Some(UINT8.clone()),
                     "uint16" => Some(UINT16.clone()),
                     "uint32" => Some(UINT32.clone()),
+                    "uint64" => Some(UINT64.clone()),
+                    "int" => Some(INT.clone()),
+                    "int8" => Some(INT8.clone()),
                     "int16" => Some(INT16.clone()),
                     "int32" => Some(INT32.clone()),
-                    "int" => Some(INT.clone()),
+                    "int64" => Some(INT64.clone()),
                     "bool" => Some(BOOL.clone()),
                     "string" => Some(STRING.clone()),
                     "Type" => Some(COMPILER_TYPE.clone()),
@@ -227,11 +230,23 @@ lazy_static::lazy_static! {
         alignment: 4,
         _type: TypeType::Builtin(TypeBuiltin::Uint32),
     };
+    pub static ref UINT64: Type = Type {
+        alias: Some("uint64".to_string()),
+        size: 8,
+        alignment: 8,
+        _type: TypeType::Builtin(TypeBuiltin::Uint64),
+    };
     pub static ref INT: Type = Type {
         alias: Some("int".to_string()),
         size: size_of::<isize>(),
         alignment: size_of::<isize>(),
         _type: TypeType::Builtin(TypeBuiltin::Int),
+    };
+    pub static ref INT8: Type = Type {
+        alias: Some("int8".to_string()),
+        size: 1,
+        alignment: 1,
+        _type: TypeType::Builtin(TypeBuiltin::Int8),
     };
     pub static ref INT16: Type = Type {
         alias: Some("int16".to_string()),
@@ -245,10 +260,16 @@ lazy_static::lazy_static! {
         alignment: 4,
         _type: TypeType::Builtin(TypeBuiltin::Int32),
     };
+    pub static ref INT64: Type = Type {
+        alias: Some("int64".to_string()),
+        size: 8,
+        alignment: 8,
+        _type: TypeType::Builtin(TypeBuiltin::Int64),
+    };
     pub static ref BOOL: Type = Type {
         alias: Some("bool".to_string()),
-        size: size_of::<usize>(),      // for now
-        alignment: size_of::<usize>(), // for now
+        size: 1,
+        alignment: 1,
         _type: TypeType::Builtin(TypeBuiltin::Bool),
     };
     pub static ref STRING: Type = Type {
@@ -442,9 +463,12 @@ pub enum TypeBuiltin {
     Uint8,
     Uint16,
     Uint32,
-    Int32,
-    Int16,
+    Uint64,
     Int,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
     String,
     Bool,
     Void,
@@ -1138,13 +1162,16 @@ impl<'a> IrParser<'a> {
 
                     let _type = match &_type.skip_escaped()._type {
                         TypeType::Builtin(builtin) => match builtin {
-                            TypeBuiltin::Int => INT.clone(),
                             TypeBuiltin::Uint => UINT.clone(),
                             TypeBuiltin::Uint8 => UINT8.clone(),
                             TypeBuiltin::Uint16 => UINT16.clone(),
                             TypeBuiltin::Uint32 => UINT32.clone(),
+                            TypeBuiltin::Uint64 => UINT64.clone(),
+                            TypeBuiltin::Int => INT.clone(),
+                            TypeBuiltin::Int8 => INT8.clone(),
                             TypeBuiltin::Int16 => INT16.clone(),
                             TypeBuiltin::Int32 => INT32.clone(),
+                            TypeBuiltin::Int64 => INT64.clone(),
                             TypeBuiltin::CompilerType => {
                                 return Ok(Expression::Literal(Literal {
                                     _type: INT.clone(),
