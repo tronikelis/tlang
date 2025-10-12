@@ -893,17 +893,6 @@ impl Instructions {
         self.var_stack.stack.push(VarStackItem::Reset(amount));
     }
 
-    fn instr_libc_write(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::LibcWrite));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Reset(ir::INT.size + ir::SLICE_SIZE));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT.size));
-    }
-
     fn instr_dll_open(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::FfiDllOpen));
@@ -2048,10 +2037,6 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         if let FunctionCallType::Function(function) = &call.call_type {
             match function.identifier.as_str() {
-                "libc_write" => {
-                    self.instructions.instr_libc_write();
-                    return Ok(ir::INT.clone());
-                }
                 "dll_open" => {
                     self.instructions.instr_dll_open();
                     return Ok(ir::PTR.clone());

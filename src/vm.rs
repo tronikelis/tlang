@@ -327,8 +327,6 @@ pub enum Instruction {
     // from, to size
     CastInt(u8, u8),
 
-    LibcWrite,
-
     Offset(usize),
     Alloc(usize, usize),
     Deref(usize),
@@ -803,18 +801,6 @@ impl Vm {
                 }
                 Instruction::Shift(len, count) => {
                     self.stack.shift(len, count);
-                }
-                Instruction::LibcWrite => {
-                    let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
-                    let fd = self.stack.pop::<isize>();
-                    let result = unsafe {
-                        libc::write(
-                            fd as i32,
-                            slice.data.as_ptr() as *const libc::c_void,
-                            slice.data.len(),
-                        )
-                    };
-                    self.stack.push(result as isize);
                 }
                 Instruction::Alloc(size, alignment) => {
                     let val = self.stack.pop_size(size);
