@@ -440,6 +440,21 @@ impl Stack {
         }
     }
 
+    #[cfg(test)]
+    pub fn debug(&self, sp_offset: usize) -> Vec<u8> {
+        let mut values = Vec::new();
+
+        unsafe {
+            let mut sp = self.sp.byte_offset(-(sp_offset as isize));
+            while sp < self.sp_end() {
+                values.push(*sp.cast());
+                sp = sp.byte_offset(1);
+            }
+        }
+
+        values
+    }
+
     fn copy(&mut self, dst: usize, src: usize, len: usize) {
         unsafe {
             ptr::copy_nonoverlapping(
@@ -635,7 +650,7 @@ impl Vm {
         };
     }
 
-    pub fn run(mut self) {
+    pub fn run(mut self) -> Stack {
         let mut pc = 0;
 
         loop {
@@ -655,7 +670,7 @@ impl Vm {
                 Instruction::PushU16(v) => self.push_u16(v),
                 Instruction::PushU32(v) => self.push_u32(v),
                 Instruction::PushU64(v) => self.push_u64(v),
-                Instruction::Exit => return,
+                Instruction::Exit => return self.stack,
                 Instruction::Debug => {
                     self.stack.debug_print();
                 }

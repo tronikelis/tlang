@@ -1679,7 +1679,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
-        let from = self.compile_expression_compact(&type_cast.expression, size_of::<usize>())?;
+        let from = self.compile_expression(&type_cast.expression)?;
 
         match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
