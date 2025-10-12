@@ -3,9 +3,6 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ir, vm};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug, Clone)]
 pub enum CompilerInstruction {
     Real(vm::Instruction),
@@ -484,6 +481,19 @@ impl Instructions {
             .push(VarStackItem::Increment(ir::SLICE_SIZE));
     }
 
+    fn instr_push_u(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT.alignment);
+        let uint: usize = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU(uint)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT.size));
+
+        Ok(())
+    }
+
     fn instr_push_u8(&mut self, int: usize) -> Result<()> {
         self.push_alignment(ir::UINT8.alignment);
         let uint8: u8 = int.try_into()?;
@@ -523,6 +533,19 @@ impl Instructions {
         Ok(())
     }
 
+    fn instr_push_u64(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::UINT64.alignment);
+        let uint64: u64 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushU64(uint64)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::UINT64.size));
+
+        Ok(())
+    }
+
     fn instr_push_i(&mut self, int: usize) -> Result<()> {
         self.push_alignment(ir::INT.alignment);
         let int: isize = int.try_into()?;
@@ -532,6 +555,19 @@ impl Instructions {
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::INT.size));
+
+        Ok(())
+    }
+
+    fn instr_push_i8(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT8.alignment);
+        let int8: i8 = int.try_into()?;
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::PushI8(int8)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT8.size));
 
         Ok(())
     }
@@ -562,53 +598,244 @@ impl Instructions {
         Ok(())
     }
 
-    fn instr_minus_int(&mut self) {
+    fn instr_push_i64(&mut self, int: usize) -> Result<()> {
+        self.push_alignment(ir::INT64.alignment);
+        let int64: i64 = int.try_into()?;
+
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::MinusInt));
+            .push(CompilerInstruction::Real(vm::Instruction::PushI64(int64)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::INT64.size));
+
+        Ok(())
     }
 
-    fn instr_add_i(&mut self) {
+    fn instr_add_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::AddI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::AddI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
     }
 
-    fn instr_multiply_i(&mut self) {
+    fn instr_minus_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::MultiplyI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::MinusI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
     }
 
-    fn instr_divide_i(&mut self) {
+    fn instr_mul_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::DivideI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::MulI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
     }
 
-    fn instr_modulo_i(&mut self) {
+    fn instr_div_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::ModuloI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::DivI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
     }
 
-    fn instr_to_bool(&mut self) {
+    fn instr_mod_i(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::ToBoolI));
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
+            .push(CompilerInstruction::Real(vm::Instruction::ModI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_add_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::AddU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_minus_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::MinusU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mul_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::MulU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_div_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::DivU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_mod_u(&mut self, mut size: u8) {
+        if size == 0 {
+            size = size_of::<usize>() as u8;
+        }
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::ModU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize));
+    }
+
+    fn instr_compare_eq(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareEq(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::BOOL.size));
     }
 
-    fn instr_compare_i(&mut self) {
+    fn instr_compare_eq_string(&mut self) {
         self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CompareI));
+            .push(CompilerInstruction::Real(vm::Instruction::CompareEqString));
         self.var_stack
             .stack
-            .push(VarStackItem::Reset(ir::INT.size * 2));
+            .push(VarStackItem::Reset(ir::SLICE_SIZE * 2));
         self.var_stack
             .stack
             .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_gt_i(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareGtI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_lt_i(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareLtI(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_gt_u(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareGtU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_compare_lt_u(&mut self, size: u8) {
+        debug_assert_ne!(size, 0);
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CompareLtU(size)));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(size as usize * 2));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::BOOL.size));
+    }
+
+    fn instr_cast_int(&mut self, mut from: u8, mut to: u8) {
+        if from == to {
+            return;
+        }
+        if from == 0 {
+            from = size_of::<usize>() as u8;
+        }
+        if to == 0 {
+            to = size_of::<usize>() as u8;
+        }
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CastInt(
+                from, to,
+            )));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(from as usize));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(to as usize));
+    }
+
+    fn instr_cast_uint(&mut self, mut from: u8, mut to: u8) {
+        if from == to {
+            return;
+        }
+        if from == 0 {
+            from = size_of::<usize>() as u8;
+        }
+        if to == 0 {
+            to = size_of::<usize>() as u8;
+        }
+
+        self.stack_instructions
+            .push(CompilerInstruction::Real(vm::Instruction::CastUint(
+                from, to,
+            )));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Reset(from as usize));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(to as usize));
     }
 
     fn instr_add_string(&mut self) {
@@ -636,48 +863,9 @@ impl Instructions {
             )));
     }
 
-    // align before calling this
-    fn instr_cast_int_uint8(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint8));
-
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::UINT8.size));
-    }
-
-    // align before calling this
-    fn instr_cast_uint8_int(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastUint8Int));
-
-        self.var_stack
-            .stack
-            .push(VarStackItem::Reset(ir::UINT8.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT.size));
-    }
-
     fn instr_cast_slice_ptr(&mut self) {
         self.stack_instructions
             .push(CompilerInstruction::Real(vm::Instruction::CastSlicePtr));
-    }
-
-    fn instr_cast_int_uint(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntUint));
-    }
-
-    fn instr_cast_int_int32(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::CastIntInt32));
-
-        self.var_stack.stack.push(VarStackItem::Reset(ir::INT.size));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT32.size));
     }
 
     fn instr_debug(&mut self) {
@@ -703,17 +891,6 @@ impl Instructions {
                 size, amount,
             )));
         self.var_stack.stack.push(VarStackItem::Reset(amount));
-    }
-
-    fn instr_libc_write(&mut self) {
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::LibcWrite));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Reset(ir::INT.size + ir::SLICE_SIZE));
-        self.var_stack
-            .stack
-            .push(VarStackItem::Increment(ir::INT.size));
     }
 
     fn instr_dll_open(&mut self) {
@@ -1353,10 +1530,54 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         let exp = self.compile_expression(&infix.expression)?;
         match infix._type {
             ir::InfixType::Plus => {}
-            ir::InfixType::Minus => {
-                self.instructions.instr_minus_int();
-            }
+            ir::InfixType::Minus => match &exp._type {
+                ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                    ir::TypeBuiltin::Uint => {
+                        self.instructions.instr_push_u(0)?;
+                        self.instructions.instr_minus_u(0);
+                    }
+                    ir::TypeBuiltin::Uint8 => {
+                        self.instructions.instr_push_u8(0)?;
+                        self.instructions.instr_minus_u(1);
+                    }
+                    ir::TypeBuiltin::Uint16 => {
+                        self.instructions.instr_push_u16(0)?;
+                        self.instructions.instr_minus_u(2);
+                    }
+                    ir::TypeBuiltin::Uint32 => {
+                        self.instructions.instr_push_u32(0)?;
+                        self.instructions.instr_minus_u(4);
+                    }
+                    ir::TypeBuiltin::Uint64 => {
+                        self.instructions.instr_push_u64(0)?;
+                        self.instructions.instr_minus_u(8);
+                    }
+                    ir::TypeBuiltin::Int => {
+                        self.instructions.instr_push_i(0)?;
+                        self.instructions.instr_minus_i(0);
+                    }
+                    ir::TypeBuiltin::Int8 => {
+                        self.instructions.instr_push_i8(0)?;
+                        self.instructions.instr_minus_i(1);
+                    }
+                    ir::TypeBuiltin::Int16 => {
+                        self.instructions.instr_push_i16(0)?;
+                        self.instructions.instr_minus_i(2);
+                    }
+                    ir::TypeBuiltin::Int32 => {
+                        self.instructions.instr_push_i32(0)?;
+                        self.instructions.instr_minus_i(4);
+                    }
+                    ir::TypeBuiltin::Int64 => {
+                        self.instructions.instr_push_i64(0)?;
+                        self.instructions.instr_minus_i(8);
+                    }
+                    _type => return Err(anyhow!("compile_infix: {_type:#?}")),
+                },
+                _type => return Err(anyhow!("compile_infix: {_type:#?}")),
+            },
         }
+
         Ok(exp)
     }
 
@@ -1365,46 +1586,77 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
         let b: ir::Type;
 
         match compare.compare_type {
-            // last item on the stack is smaller
             ir::CompareType::Gt => {
-                b = self.compile_expression(&compare.left)?;
-                a = self.compile_expression(&compare.right)?;
-            }
-            // last item on the stack is bigger
-            ir::CompareType::Lt => {
-                b = self.compile_expression(&compare.right)?;
                 a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
+            }
+            ir::CompareType::Lt => {
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
             }
             // dont matter
             ir::CompareType::Equals | ir::CompareType::NotEquals => {
-                a = self.compile_expression(&compare.right)?;
-                b = self.compile_expression(&compare.left)?;
+                a = self.compile_expression(&compare.left)?;
+                b = self.compile_expression_compact(&compare.right, a.alignment)?;
             }
         };
 
-        if a._type != b._type {
-            return Err(anyhow!("can't compare different types"));
-        }
-        if a != *ir::BOOL && a != *ir::INT {
-            return Err(anyhow!("can only compare int/bool"));
+        a.must_equal(&b)?;
+
+        let signed: Option<bool>;
+
+        match &a._type {
+            ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                ir::TypeBuiltin::Int
+                | ir::TypeBuiltin::Int8
+                | ir::TypeBuiltin::Int16
+                | ir::TypeBuiltin::Int32
+                | ir::TypeBuiltin::Int64 => {
+                    signed = Some(true);
+                }
+                ir::TypeBuiltin::Uint8
+                | ir::TypeBuiltin::Uint16
+                | ir::TypeBuiltin::Uint32
+                | ir::TypeBuiltin::Uint64
+                | ir::TypeBuiltin::Uint => {
+                    signed = Some(false);
+                }
+                ir::TypeBuiltin::Bool | ir::TypeBuiltin::String => {
+                    signed = None;
+                }
+                _type => return Err(anyhow!("cant compare {_type:#?}")),
+            },
+            _type => return Err(anyhow!("cant compare {_type:#?}")),
         }
 
         match compare.compare_type {
-            ir::CompareType::Gt | ir::CompareType::Lt => {
-                // a = -a
-                self.instructions.instr_minus_int();
-
-                // a + b
-                self.instructions.instr_add_i();
-
-                // >0:1 <0:0
-                self.instructions.instr_to_bool();
-            }
-            ir::CompareType::Equals => {
-                self.instructions.instr_compare_i();
-            }
+            ir::CompareType::Lt => match signed.ok_or(anyhow!("cant compare non numbers"))? {
+                true => self.instructions.instr_compare_lt_i(a.size as u8),
+                false => self.instructions.instr_compare_lt_u(a.size as u8),
+            },
+            ir::CompareType::Gt => match signed.ok_or(anyhow!("cant compare non numbers"))? {
+                true => self.instructions.instr_compare_gt_i(a.size as u8),
+                false => self.instructions.instr_compare_gt_u(a.size as u8),
+            },
+            ir::CompareType::Equals => match &a._type {
+                ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                    ir::TypeBuiltin::String => self.instructions.instr_compare_eq_string(),
+                    _ => {
+                        self.instructions.instr_compare_eq(a.size as u8);
+                    }
+                },
+                _ => unreachable!(),
+            },
             ir::CompareType::NotEquals => {
-                self.instructions.instr_compare_i();
+                match &a._type {
+                    ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                        ir::TypeBuiltin::String => self.instructions.instr_compare_eq_string(),
+                        _ => {
+                            self.instructions.instr_compare_eq(a.size as u8);
+                        }
+                    },
+                    _ => unreachable!(),
+                }
                 self.instructions.instr_negate_bool();
             }
         }
@@ -1413,71 +1665,185 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     }
 
     fn compile_type_cast(&mut self, type_cast: &ir::TypeCast) -> Result<ir::Type> {
-        self.instructions.push_alignment(type_cast._type.alignment);
-
         let from = self.compile_expression(&type_cast.expression)?;
 
-        // there should be a better way to do this
         match from._type.clone() {
             ir::TypeType::Builtin(builtin) => match builtin {
-                ir::TypeBuiltin::Int => match &type_cast._type._type {
-                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Uint8 => {
-                            self.instructions.instr_cast_int_uint8();
-                        }
-                        ir::TypeBuiltin::Uint => {
-                            self.instructions.instr_cast_int_uint();
-                        }
-                        ir::TypeBuiltin::Int32 => {
-                            self.instructions.instr_cast_int_int32();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                },
                 ir::TypeBuiltin::Uint8 => match &type_cast._type._type {
                     ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Int => {
-                            self.instructions.instr_cast_uint8_int();
-                        }
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(1, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(1, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(1, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(1, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(1, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(1, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(1, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(1, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(1, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
                     },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Uint16 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(2, 1),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(2, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(2, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(2, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(2, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(2, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(2, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(2, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(2, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Uint32 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(4, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(4, 2),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(4, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(4, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(4, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(4, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(4, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(4, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(4, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Uint64 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(8, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(8, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(8, 4),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(8, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(8, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(8, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(8, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(8, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(8, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int8 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(1, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(1, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(1, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(1, 8),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(1, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(1, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(1, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(1, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(1, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int16 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(2, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(2, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(2, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(2, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(2, 1),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(2, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(2, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(2, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(2, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int32 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(4, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(4, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(4, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(4, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(4, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(4, 2),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(4, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(4, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(4, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int64 => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(8, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(8, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(8, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(8, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(8, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(8, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(8, 4),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_int(8, 0),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(8, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Int => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(0, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(0, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(0, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(0, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_int(0, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_int(0, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_int(0, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_int(0, 8),
+                        ir::TypeBuiltin::Uint => self.instructions.instr_cast_uint(0, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+                ir::TypeBuiltin::Uint => match &type_cast._type._type {
+                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                        ir::TypeBuiltin::Uint8 => self.instructions.instr_cast_uint(0, 1),
+                        ir::TypeBuiltin::Uint16 => self.instructions.instr_cast_uint(0, 2),
+                        ir::TypeBuiltin::Uint32 => self.instructions.instr_cast_uint(0, 4),
+                        ir::TypeBuiltin::Uint64 => self.instructions.instr_cast_uint(0, 8),
+                        ir::TypeBuiltin::Int8 => self.instructions.instr_cast_uint(0, 1),
+                        ir::TypeBuiltin::Int16 => self.instructions.instr_cast_uint(0, 2),
+                        ir::TypeBuiltin::Int32 => self.instructions.instr_cast_uint(0, 4),
+                        ir::TypeBuiltin::Int64 => self.instructions.instr_cast_uint(0, 8),
+                        ir::TypeBuiltin::Int => self.instructions.instr_cast_uint(0, 0),
+                        _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                    },
+                    _type => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
+
+                ir::TypeBuiltin::String => match &type_cast._type._type {
+                    ir::TypeType::Slice(slice_item) => {
+                        slice_item.must_equal(&ir::UINT8)?;
+                    }
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
                 ir::TypeBuiltin::Ptr => match &type_cast._type._type {
-                    ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                        ir::TypeBuiltin::Uint => {}
-                        _ => return Err(anyhow!("compile_type_cast: cant cast")),
-                    },
                     ir::TypeType::Address(_) => {}
-                    _type => {
-                        return Err(anyhow!(
-                            "compile_type_cast: cant cast from: {from:#?}, to: {:#?}",
-                            _type,
-                        ))
-                    }
-                },
-                ir::TypeBuiltin::String => match &type_cast._type._type {
-                    ir::TypeType::Slice(item) => {
-                        if **item != *ir::UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
                     _ => return Err(anyhow!("compile_type_cast: cant cast")),
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            ir::TypeType::Slice(item_target) => match &type_cast._type._type {
+            ir::TypeType::Variadic(variadic_item) => match &type_cast._type._type {
+                ir::TypeType::Slice(slice_item) => {
+                    slice_item.must_equal(&variadic_item)?;
+                }
+                _ => return Err(anyhow!("compile_type_cast: cant cast")),
+            },
+            ir::TypeType::Slice(slice_item) => match &type_cast._type._type {
+                ir::TypeType::Variadic(variadic_item) => {
+                    slice_item.must_equal(variadic_item)?;
+                }
                 ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
-                    ir::TypeBuiltin::String => {
-                        if *item_target != *ir::UINT8 {
-                            return Err(anyhow!(
-                                "compile_type_cast: can only cast string to uint8[]"
-                            ));
-                        }
-                    }
+                    ir::TypeBuiltin::Uint8 => {}
                     ir::TypeBuiltin::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
                     }
@@ -1485,14 +1851,11 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
-            ir::TypeType::Variadic(item_target) => match &type_cast._type._type {
-                ir::TypeType::Slice(item_dest) => {
-                    if item_target != *item_dest {
-                        return Err(anyhow!(
-                            "compile_type_cast: cant cast variadic into slice different types"
-                        ));
-                    }
-                }
+            ir::TypeType::Address(_) => match &type_cast._type._type {
+                ir::TypeType::Builtin(builtin_dest) => match builtin_dest {
+                    ir::TypeBuiltin::Ptr => {}
+                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
             _ => return Err(anyhow!("compile_type_cast: cant cast")),
@@ -1674,10 +2037,6 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
         if let FunctionCallType::Function(function) = &call.call_type {
             match function.identifier.as_str() {
-                "libc_write" => {
-                    self.instructions.instr_libc_write();
-                    return Ok(ir::INT.clone());
-                }
                 "dll_open" => {
                     self.instructions.instr_dll_open();
                     return Ok(ir::PTR.clone());
@@ -1759,52 +2118,71 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
 
     fn compile_arithmetic(&mut self, arithmetic: &ir::Arithmetic) -> Result<ir::Type> {
         let a = self.compile_expression(&arithmetic.left)?;
-        let b = self.compile_expression(&arithmetic.right)?;
+        let b = self.compile_expression_compact(&arithmetic.right, a.alignment)?;
 
-        if a != b {
-            return Err(anyhow!("can't add different types"));
-        }
-        if a == *ir::VOID {
-            return Err(anyhow!("can't add void type"));
+        a.must_equal(&b)?;
+
+        let signed: Option<bool>;
+
+        match &a._type {
+            ir::TypeType::Builtin(type_builtin) => match type_builtin {
+                ir::TypeBuiltin::Int
+                | ir::TypeBuiltin::Int8
+                | ir::TypeBuiltin::Int16
+                | ir::TypeBuiltin::Int32
+                | ir::TypeBuiltin::Int64 => {
+                    signed = Some(true);
+                }
+                ir::TypeBuiltin::Uint8
+                | ir::TypeBuiltin::Uint16
+                | ir::TypeBuiltin::Uint32
+                | ir::TypeBuiltin::Uint64
+                | ir::TypeBuiltin::Uint => {
+                    signed = Some(false);
+                }
+                ir::TypeBuiltin::String => {
+                    signed = None;
+                }
+                _type => return Err(anyhow!("cant arithmetic {_type:#?}")),
+            },
+            _type => return Err(anyhow!("cant arithmetic {_type:#?}")),
         }
 
         match arithmetic._type {
             ir::ArithmeticType::Minus => {
-                if *ir::INT == a {
-                    self.instructions.instr_minus_int();
-                    self.instructions.instr_add_i();
-                } else {
-                    return Err(anyhow!("can only minus int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_minus_i(a.size as u8),
+                    false => self.instructions.instr_minus_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Plus => {
-                if *ir::INT == a {
-                    self.instructions.instr_add_i();
-                } else if a == *ir::STRING {
-                    self.instructions.instr_add_string();
-                } else {
-                    return Err(anyhow!("can only plus int and string"));
+                match signed {
+                    Some(v) => match v {
+                        true => self.instructions.instr_add_i(a.size as u8),
+                        false => self.instructions.instr_add_u(a.size as u8),
+                    },
+                    // none is implied as string, this can change tho idk in future
+                    None => {
+                        self.instructions.instr_add_string();
+                    }
                 }
             }
             ir::ArithmeticType::Multiply => {
-                if *ir::INT == a {
-                    self.instructions.instr_multiply_i();
-                } else {
-                    return Err(anyhow!("can only multiply int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_mul_i(a.size as u8),
+                    false => self.instructions.instr_mul_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Divide => {
-                if *ir::INT == a {
-                    self.instructions.instr_divide_i();
-                } else {
-                    return Err(anyhow!("can only divide int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_div_i(a.size as u8),
+                    false => self.instructions.instr_div_u(a.size as u8),
                 }
             }
             ir::ArithmeticType::Modulo => {
-                if *ir::INT == a {
-                    self.instructions.instr_modulo_i();
-                } else {
-                    return Err(anyhow!("can only modulo int"));
+                match signed.ok_or(anyhow!("cant do arithmetic on non numbers"))? {
+                    true => self.instructions.instr_mod_i(a.size as u8),
+                    false => self.instructions.instr_mod_u(a.size as u8),
                 }
             }
         }
@@ -1815,25 +2193,33 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
     fn compile_literal(&mut self, literal: &ir::Literal) -> Result<ir::Type> {
         match &literal.literal_type {
             ir::LiteralType::Int(int) => {
-                if literal._type == *ir::UINT8 {
-                    self.instructions.instr_push_u8(*int)?;
-                } else if literal._type == *ir::INT {
+                if literal._type == *ir::INT {
                     self.instructions.instr_push_i(*int)?;
-                } else if literal._type == *ir::UINT16 {
-                    self.instructions.instr_push_u16(*int)?;
-                } else if literal._type == *ir::UINT32 {
-                    self.instructions.instr_push_u32(*int)?;
+                } else if literal._type == *ir::INT8 {
+                    self.instructions.instr_push_i8(*int)?;
                 } else if literal._type == *ir::INT16 {
                     self.instructions.instr_push_i16(*int)?;
                 } else if literal._type == *ir::INT32 {
                     self.instructions.instr_push_i32(*int)?;
+                } else if literal._type == *ir::INT64 {
+                    self.instructions.instr_push_i64(*int)?;
+                } else if literal._type == *ir::UINT {
+                    self.instructions.instr_push_u(*int)?;
+                } else if literal._type == *ir::UINT8 {
+                    self.instructions.instr_push_u8(*int)?;
+                } else if literal._type == *ir::UINT16 {
+                    self.instructions.instr_push_u16(*int)?;
+                } else if literal._type == *ir::UINT32 {
+                    self.instructions.instr_push_u32(*int)?;
+                } else if literal._type == *ir::UINT64 {
+                    self.instructions.instr_push_u64(*int)?;
                 } else {
                     return Err(anyhow!("can't cast int to {:#?}", literal._type));
                 }
             }
             ir::LiteralType::Bool(bool) => {
                 if literal._type == *ir::BOOL {
-                    self.instructions.instr_push_i({
+                    self.instructions.instr_push_u8({
                         if *bool {
                             1
                         } else {

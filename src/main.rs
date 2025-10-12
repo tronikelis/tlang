@@ -9,19 +9,6 @@ mod linker;
 fn main() {
     let code = String::from(
         "
-                type bool _
-                type int _
-                type int32 _
-                type int16 _
-                type ptr _
-                type string _
-                type uint _
-                type uint8 _
-                type uint16 _
-                type uint32 _
-                type void _
-                type Type _
-
                 fn libc_write(fd int, slice uint8[]) int {}
                 fn len(slice Type) int {}
                 fn append(slice Type, value Type) void {}
