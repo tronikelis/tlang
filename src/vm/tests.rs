@@ -2,8 +2,7 @@ use anyhow::Result;
 use pretty_assertions::assert_eq;
 
 use super::*;
-use crate::{ast, lexer, linker, vm};
-use vm::Instruction;
+use crate::{ast, compiler, ir, lexer, linker};
 
 enum StackBuilderItem {
     Increment(Vec<u8>),
@@ -51,7 +50,7 @@ impl StackBuilder {
         })
     }
 
-    fn assert_eq(self, stack: &vm::Stack) {
+    fn assert_eq(self, stack: &Stack) {
         let mut right = stack.debug(self.len());
         assert_eq!(self.len(), right.len());
 
@@ -102,12 +101,12 @@ const BUILTIN: &str = r"
 
 ";
 
-fn compile_test_code(code: &str) -> Result<Vec<vm::Instruction>> {
+fn compile_test_code(code: &str) -> Result<Vec<Instruction>> {
     let tokens = lexer::Lexer::new(&code).run()?;
     let ast = ast::Ast::new(&tokens)?;
     let ir = ir::Ir::new(&ast)?;
 
-    let compiled = compile(ir)?;
+    let compiled = compiler::compile(ir)?;
     let linked = linker::link(compiled.functions)?;
 
     Ok(linked)
@@ -399,14 +398,15 @@ fn cast_int_uint() -> Result<()> {
         ",
     );
 
-    let stack = vm::Vm::new(compile_test_code(&code)?, vm::StaticMemory::new()).run();
+    let mut vm = Vm::new(compile_test_code(&code)?, StaticMemory::new());
+    vm.run();
 
     StackBuilder::new()
         .push(25 as i8)
         .increment(7)
         .push(25 as isize)
         .push(25 as usize)
-        .assert_eq(&stack);
+        .assert_eq(&vm.stack);
 
     Ok(())
 }
@@ -427,7 +427,8 @@ fn arithmetic() -> Result<()> {
         ",
     );
 
-    let stack = vm::Vm::new(compile_test_code(&code)?, vm::StaticMemory::new()).run();
+    let mut vm = Vm::new(compile_test_code(&code)?, StaticMemory::new());
+    vm.run();
 
     StackBuilder::new()
         .push(25 as i8)
@@ -437,7 +438,125 @@ fn arithmetic() -> Result<()> {
         .push(1 as u32)
         .push(29 as u32)
         .push(30 as u32)
-        .assert_eq(&stack);
+        .assert_eq(&vm.stack);
 
     Ok(())
+}
+
+#[test]
+fn stack_shift_works() {
+    let mut stack = Stack::new(256);
+    stack.increment(4);
+    let old_sp = stack.sp;
+    stack.push(0xFFFFFFFF as u32);
+    stack.shift(4, 4);
+
+    assert_eq!(old_sp, stack.sp);
+    assert_eq!(stack.pop::<u32>(), 0xFFFFFFFF);
+}
+
+#[test]
+fn vm_cast_int() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+
+    vm.push_i8(-1);
+    vm.cast_int(1, 4);
+
+    let as32: u32 = vm.stack.pop();
+    assert_eq!(as32, 0xFFFFFFFF);
+
+    vm.push_u32(0x80_00_00_1F);
+    vm.cast_int(4, 1);
+    let as8: u8 = vm.stack.pop();
+    assert_eq!(as8, 0x9F);
+}
+
+#[test]
+fn vm_cast_uint() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_u16(0xFFFF);
+    vm.cast_uint(2, 1);
+
+    assert_eq!(old_sp as usize - 1, vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<u8>(), 0xFF);
+}
+
+#[test]
+fn vm_add_i32() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_i32(10);
+    vm.push_i32(25);
+    vm.add_i(4);
+
+    assert_eq!((old_sp as usize) - 4, vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<i32>(), 35);
+}
+
+#[test]
+fn vm_add_i8() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_i8(-3);
+    vm.push_i8(-8);
+    vm.add_i(1);
+
+    assert_eq!((old_sp as usize) - 1, vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<i8>(), -11);
+}
+
+#[test]
+fn vm_add_i16() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_i16(8);
+    vm.push_i16(-9);
+    vm.add_i(2);
+
+    assert_eq!((old_sp as usize) - 2, vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<i16>(), -1);
+}
+
+#[test]
+fn vm_add_i() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_i(-11);
+    vm.push_i(12);
+    vm.add_i(size_of::<isize>() as u8);
+
+    assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<isize>(), 1);
+}
+
+#[test]
+fn vm_minus_i() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_i(-11);
+    vm.push_i(12);
+    vm.minus_i(size_of::<isize>() as u8);
+
+    assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<isize>(), -23);
+}
+
+#[test]
+fn vm_minus_u() {
+    let mut vm = Vm::new(Vec::new(), StaticMemory::new());
+    let old_sp = vm.stack.sp;
+
+    vm.push_u(10);
+    vm.push_u(5);
+    vm.minus_u(size_of::<isize>() as u8);
+
+    assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
+    assert_eq!(vm.stack.pop::<usize>(), 5);
 }

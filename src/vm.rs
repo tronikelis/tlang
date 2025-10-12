@@ -8,6 +8,9 @@ use std::{
     str::FromStr,
 };
 
+#[cfg(test)]
+mod tests;
+
 fn is_debug() -> bool {
     env::var("DEBUG").is_ok()
 }
@@ -441,7 +444,7 @@ impl Stack {
     }
 
     #[cfg(test)]
-    pub fn debug(&self, sp_offset: usize) -> Vec<u8> {
+    fn debug(&self, sp_offset: usize) -> Vec<u8> {
         let mut values = Vec::new();
 
         unsafe {
@@ -650,7 +653,7 @@ impl Vm {
         };
     }
 
-    pub fn run(mut self) -> Stack {
+    pub fn run(&mut self) {
         let mut pc = 0;
 
         loop {
@@ -670,7 +673,7 @@ impl Vm {
                 Instruction::PushU16(v) => self.push_u16(v),
                 Instruction::PushU32(v) => self.push_u32(v),
                 Instruction::PushU64(v) => self.push_u64(v),
-                Instruction::Exit => return self.stack,
+                Instruction::Exit => return,
                 Instruction::Debug => {
                     self.stack.debug_print();
                 }
@@ -1263,129 +1266,5 @@ impl Vm {
     fn compare_lt_u(&mut self, size: u8) {
         self.pop_cast_u(size, |a, b| if b < a { 1 } else { 0 });
         self.cast_uint(size, 1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn stack_shift_works() {
-        let mut stack = Stack::new(256);
-        stack.increment(4);
-        let old_sp = stack.sp;
-        stack.push(0xFFFFFFFF as u32);
-        stack.shift(4, 4);
-
-        assert_eq!(old_sp, stack.sp);
-        assert_eq!(stack.pop::<u32>(), 0xFFFFFFFF);
-    }
-
-    #[test]
-    fn vm_cast_int() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-
-        vm.push_i8(-1);
-        vm.cast_int(1, 4);
-
-        let as32: u32 = vm.stack.pop();
-        assert_eq!(as32, 0xFFFFFFFF);
-
-        vm.push_u32(0x80_00_00_1F);
-        vm.cast_int(4, 1);
-        let as8: u8 = vm.stack.pop();
-        assert_eq!(as8, 0x9F);
-    }
-
-    #[test]
-    fn vm_cast_uint() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_u16(0xFFFF);
-        vm.cast_uint(2, 1);
-
-        assert_eq!(old_sp as usize - 1, vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<u8>(), 0xFF);
-    }
-
-    #[test]
-    fn vm_add_i32() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_i32(10);
-        vm.push_i32(25);
-        vm.add_i(4);
-
-        assert_eq!((old_sp as usize) - 4, vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<i32>(), 35);
-    }
-
-    #[test]
-    fn vm_add_i8() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_i8(-3);
-        vm.push_i8(-8);
-        vm.add_i(1);
-
-        assert_eq!((old_sp as usize) - 1, vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<i8>(), -11);
-    }
-
-    #[test]
-    fn vm_add_i16() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_i16(8);
-        vm.push_i16(-9);
-        vm.add_i(2);
-
-        assert_eq!((old_sp as usize) - 2, vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<i16>(), -1);
-    }
-
-    #[test]
-    fn vm_add_i() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_i(-11);
-        vm.push_i(12);
-        vm.add_i(size_of::<isize>() as u8);
-
-        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<isize>(), 1);
-    }
-
-    #[test]
-    fn vm_minus_i() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_i(-11);
-        vm.push_i(12);
-        vm.minus_i(size_of::<isize>() as u8);
-
-        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<isize>(), -23);
-    }
-
-    #[test]
-    fn vm_minus_u() {
-        let mut vm = Vm::new(Vec::new(), StaticMemory::new());
-        let old_sp = vm.stack.sp;
-
-        vm.push_u(10);
-        vm.push_u(5);
-        vm.minus_u(size_of::<isize>() as u8);
-
-        assert_eq!((old_sp as usize) - size_of::<isize>(), vm.stack.sp as usize);
-        assert_eq!(vm.stack.pop::<usize>(), 5);
     }
 }

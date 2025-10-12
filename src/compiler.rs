@@ -3,9 +3,6 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ir, vm};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug, Clone)]
 pub enum CompilerInstruction {
     Real(vm::Instruction),
