@@ -133,7 +133,7 @@ impl<'a> TypeResolver<'a> {
                 self.resolve_with_alias(&inner, Some(inner_alias))
             }
             ast::Type::Slice(_type) => {
-                let nested = self.resolve_with_alias(_type, None)?;
+                let nested = self.resolve(_type)?;
                 Ok(Type {
                     alias: alias.map(|v| v.to_string()),
                     size: SLICE_SIZE,
@@ -142,7 +142,7 @@ impl<'a> TypeResolver<'a> {
                 })
             }
             ast::Type::Variadic(_type) => {
-                let nested = self.resolve_with_alias(_type, None)?;
+                let nested = self.resolve(_type)?;
                 Ok(Type {
                     alias: alias.map(|v| v.to_string()),
                     size: size_of::<usize>(),
@@ -156,7 +156,7 @@ impl<'a> TypeResolver<'a> {
                 let mut highest_alignment: usize = 0;
 
                 for var in &type_struct.fields {
-                    let resolved = self.resolve_with_alias(&var._type, None)?;
+                    let resolved = self.resolve(&var._type)?;
                     if resolved.alignment > highest_alignment {
                         highest_alignment = resolved.alignment;
                     }
@@ -181,7 +181,7 @@ impl<'a> TypeResolver<'a> {
                 })
             }
             ast::Type::Address(_type) => {
-                let nested = self.resolve_with_alias(_type, None)?;
+                let nested = self.resolve(_type)?;
                 Ok(Type {
                     alias: alias.map(|v| v.to_string()),
                     size: PTR_SIZE,
