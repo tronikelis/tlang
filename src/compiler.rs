@@ -846,14 +846,15 @@ impl Instructions {
             .push(VarStackItem::Reset(ir::STRING.size));
     }
 
-    fn instr_push_static(&mut self, index: usize, size: usize, alignment: usize) {
-        self.push_alignment(alignment);
+    fn instr_push_static_string(&mut self, index: usize) {
+        self.push_alignment(ir::STRING.alignment);
 
-        self.stack_instructions
-            .push(CompilerInstruction::Real(vm::Instruction::PushStatic(
-                index, size,
-            )));
-        self.var_stack.stack.push(VarStackItem::Increment(size));
+        self.stack_instructions.push(CompilerInstruction::Real(
+            vm::Instruction::PushStaticString(index),
+        ));
+        self.var_stack
+            .stack
+            .push(VarStackItem::Increment(ir::STRING.size));
     }
 
     fn instr_copy(&mut self, dst: usize, src: usize, size: usize) {
@@ -2232,8 +2233,7 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
             }
             ir::LiteralType::String(string) => {
                 let index = self.static_memory.borrow_mut().push_string_slice(&string);
-                self.instructions
-                    .instr_push_static(index, ir::SLICE_SIZE, ir::SLICE_SIZE);
+                self.instructions.instr_push_static_string(index);
             }
         }
 

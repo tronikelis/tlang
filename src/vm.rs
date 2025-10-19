@@ -8,6 +8,8 @@ use std::{
     str::FromStr,
 };
 
+use anyhow::Result;
+
 #[cfg(test)]
 mod tests;
 
@@ -283,8 +285,8 @@ pub enum Instruction {
     // var count, function index
     PushClosure(usize, usize),
 
-    // index, len
-    PushStatic(usize, usize),
+    // index
+    PushStaticString(usize),
 
     AddString,
 
@@ -485,19 +487,14 @@ impl StaticMemory {
     }
 
     pub fn push_string_slice(&mut self, string: &str) -> usize {
-        let slice = Slice::from_string(string);
-        let as_raw: [u8; size_of::<*mut Slice>()] = unsafe { mem::transmute(slice) };
-        self.push(&as_raw)
+        let c_string = CString::new(string).unwrap();
+        self.push(c_string.as_bytes_with_nul())
     }
 
-    pub fn push(&mut self, val: &[u8]) -> usize {
+    fn push(&mut self, val: &[u8]) -> usize {
         let old_len = self.data.len();
         self.data.extend_from_slice(val);
         old_len
-    }
-
-    fn index(&self, index: usize, len: usize) -> &[u8] {
-        &self.data[index..(index + len)]
     }
 }
 
@@ -632,6 +629,15 @@ impl Drop for AnyVec {
             };
         }
     }
+}
+
+unsafe fn cstring_ptr_to_string(mut ptr: *const u8) -> Result<String> {
+    let mut vec = Vec::new();
+    while *ptr != 0 {
+        vec.push(*ptr);
+        ptr = ptr.byte_offset(1);
+    }
+    Ok(CString::new(vec)?.into_string()?)
 }
 
 pub struct Vm {
@@ -779,9 +785,6 @@ impl Vm {
                 Instruction::SliceLen => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
                     self.stack.push(slice.len as isize);
-                }
-                Instruction::PushStatic(index, len) => {
-                    self.stack.push_size(self.static_memory.index(index, len));
                 }
                 Instruction::CastSlicePtr => {
                     let slice = unsafe { &mut *self.stack.pop::<*mut Slice>() };
@@ -1057,11 +1060,24 @@ impl Vm {
                 Instruction::CompareLtI(v) => self.compare_lt_i(v),
                 Instruction::CompareGtU(v) => self.compare_gt_u(v),
                 Instruction::CompareLtU(v) => self.compare_lt_u(v),
+                Instruction::PushStaticString(v) => self.push_static_string(v),
             }
 
             self.gc.run(self.stack.sp, self.stack.sp_end());
             pc += 1;
         }
+    }
+
+    fn push_static_string(&mut self, index: usize) {
+        let string = unsafe {
+            cstring_ptr_to_string(self.static_memory.data.as_ptr().byte_offset(index as isize))
+                .unwrap()
+        };
+
+        let slice = Slice::from_string(&string);
+        self.gc
+            .add_object(GcObject::new(GcObjectData::Slice(slice)));
+        self.stack.push(slice);
     }
 
     fn cast_uint(&mut self, from: u8, to: u8) {
