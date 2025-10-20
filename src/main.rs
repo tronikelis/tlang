@@ -1,10 +1,4 @@
-mod vm;
-
-mod ast;
-mod compiler;
-mod ir;
-mod lexer;
-mod linker;
+use tlang::{ast, compiler, ir, lexer, linker, vm};
 
 fn main() {
     let code = String::from(
