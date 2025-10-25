@@ -548,7 +548,7 @@ impl Instructions {
         Self(instructions)
     }
 
-    pub unsafe fn to_binary(self) -> Vec<u8> {
+    pub fn to_binary(self) -> Vec<u8> {
         let mut binary = Vec::<u8>::new();
 
         push_bytes!(binary, self.0.len());

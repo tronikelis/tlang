@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "tlang_shared_vm"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 libc = "0.2.174"

@@ -76,5 +76,8 @@ fn main() {
     let linked_with_index = linked.iter().enumerate().collect::<Vec<_>>();
     println!("{linked_with_index:#?}");
 
-    vm::Vm::new(linked, compiled.static_memory).run();
+    let binary = vm::Instructions::new(linked).to_binary();
+    println!("{:#?}", unsafe {
+        vm::Instructions::from_binary(binary.as_ptr()).0
+    });
 }
