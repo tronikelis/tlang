@@ -13,6 +13,29 @@ use anyhow::Result;
 #[cfg(test)]
 mod tests;
 
+macro_rules! pop_bytes {
+    ($type:ident, $ptr:expr) => {{
+        let mut arr: [u8; size_of::<$type>()] = [0; size_of::<$type>()];
+        let slice = slice::from_raw_parts(*$ptr, size_of::<$type>());
+        for (i, v) in slice.iter().enumerate() {
+            arr[i] = *v;
+        }
+        *$ptr = $ptr.byte_offset(size_of::<$type>() as isize);
+        $type::from_le_bytes(arr)
+    }};
+}
+
+macro_rules! push_bytes {
+    ($container:expr, $($expr:expr),*) => {{
+        $({
+            $expr
+                .to_le_bytes()
+                .into_iter()
+                .for_each(|v| $container.push(v))
+        })*
+    }};
+}
+
 fn is_debug() -> bool {
     env::var("DEBUG").is_ok()
 }
@@ -346,6 +369,271 @@ impl Instruction {
             _ => {}
         }
     }
+
+    fn to_num(&self) -> InstructionNum {
+        match self {
+            Self::FfiCreate => InstructionNum::FfiCreate,
+            Self::FfiDllOpen => InstructionNum::FfiDllOpen,
+            Self::FfiCall => InstructionNum::FfiCall,
+            Self::SliceLen => InstructionNum::SliceLen,
+            Self::PushSlice => InstructionNum::PushSlice,
+            Self::AddString => InstructionNum::AddString,
+            Self::Exit => InstructionNum::Exit,
+            Self::Debug => InstructionNum::Debug,
+            Self::JumpAndLinkClosure => InstructionNum::JumpAndLinkClosure,
+            Self::Return => InstructionNum::Return,
+            Self::NegateBool => InstructionNum::NegateBool,
+            Self::And => InstructionNum::And,
+            Self::Or => InstructionNum::Or,
+            Self::CompareEqString => InstructionNum::CompareEqString,
+            Self::CastSlicePtr => InstructionNum::CastSlicePtr,
+            Self::AddI(_) => InstructionNum::AddI,
+            Self::AddU(_) => InstructionNum::AddU,
+            Self::CompareEq(_) => InstructionNum::CompareEq,
+            Self::CompareGtI(_) => InstructionNum::CompareGtI,
+            Self::CompareGtU(_) => InstructionNum::CompareGtU,
+            Self::CompareLtI(_) => InstructionNum::CompareLtI,
+            Self::CompareLtU(_) => InstructionNum::CompareLtU,
+            Self::Deref(_) => InstructionNum::Deref,
+            Self::DerefAssign(_) => InstructionNum::DerefAssign,
+            Self::DivI(_) => InstructionNum::DivI,
+            Self::DivU(_) => InstructionNum::DivU,
+            Self::Increment(_) => InstructionNum::Increment,
+            Self::Jump(_) => InstructionNum::Jump,
+            Self::JumpAndLink(_) => InstructionNum::JumpAndLink,
+            Self::JumpIfFalse(_) => InstructionNum::JumpIfFalse,
+            Self::JumpIfTrue(_) => InstructionNum::JumpIfTrue,
+            Self::MinusI(_) => InstructionNum::MinusI,
+            Self::MinusU(_) => InstructionNum::MinusU,
+            Self::ModI(_) => InstructionNum::ModI,
+            Self::ModU(_) => InstructionNum::ModU,
+            Self::MulI(_) => InstructionNum::MulI,
+            Self::MulU(_) => InstructionNum::MulU,
+            Self::Offset(_) => InstructionNum::Offset,
+            Self::PushI(_) => InstructionNum::PushI,
+            Self::PushI16(_) => InstructionNum::PushI16,
+            Self::PushI32(_) => InstructionNum::PushI32,
+            Self::PushI64(_) => InstructionNum::PushI64,
+            Self::PushI8(_) => InstructionNum::PushI8,
+            Self::PushSliceNewLen(_) => InstructionNum::PushSliceNewLen,
+            Self::PushStaticString(_) => InstructionNum::PushStaticString,
+            Self::PushU(_) => InstructionNum::PushU,
+            Self::PushU16(_) => InstructionNum::PushU16,
+            Self::PushU32(_) => InstructionNum::PushU32,
+            Self::PushU64(_) => InstructionNum::PushU64,
+            Self::PushU8(_) => InstructionNum::PushU8,
+            Self::Reset(_) => InstructionNum::Reset,
+            Self::SliceAppend(_) => InstructionNum::SliceAppend,
+            Self::SliceIndexGet(_) => InstructionNum::SliceIndexGet,
+            Self::SliceIndexSet(_) => InstructionNum::SliceIndexSet,
+            Self::Alloc(_, _) => InstructionNum::Alloc,
+            Self::CastInt(_, _) => InstructionNum::CastInt,
+            Self::CastUint(_, _) => InstructionNum::CastUint,
+            Self::PushClosure(_, _) => InstructionNum::PushClosure,
+            Self::Shift(_, _) => InstructionNum::Shift,
+            Self::Copy(_, _, _) => InstructionNum::Copy,
+        }
+    }
+}
+
+pub struct Instructions(pub Vec<Instruction>);
+
+impl Instructions {
+    pub fn new(instructions: Vec<Instruction>) -> Self {
+        Self(instructions)
+    }
+
+    pub unsafe fn from_binary(mut ptr: *const u8) -> Self {
+        let len = pop_bytes!(usize, &mut ptr);
+
+        let mut instructions = Vec::<Instruction>::new();
+
+        for _ in 0..len {
+            let num: InstructionNum = mem::transmute(pop_bytes!(u8, &mut ptr));
+            instructions.push(match num {
+                InstructionNum::FfiCreate => Instruction::FfiCreate,
+                InstructionNum::FfiDllOpen => Instruction::FfiDllOpen,
+                InstructionNum::FfiCall => Instruction::FfiCall,
+                InstructionNum::SliceLen => Instruction::SliceLen,
+                InstructionNum::PushSlice => Instruction::PushSlice,
+                InstructionNum::AddString => Instruction::AddString,
+                InstructionNum::Exit => Instruction::Exit,
+                InstructionNum::Debug => Instruction::Debug,
+                InstructionNum::JumpAndLinkClosure => Instruction::JumpAndLinkClosure,
+                InstructionNum::Return => Instruction::Return,
+                InstructionNum::NegateBool => Instruction::NegateBool,
+                InstructionNum::And => Instruction::And,
+                InstructionNum::Or => Instruction::Or,
+                InstructionNum::CompareEqString => Instruction::CompareEqString,
+                InstructionNum::CastSlicePtr => Instruction::CastSlicePtr,
+                InstructionNum::PushI => Instruction::PushI(pop_bytes!(isize, &mut ptr)),
+                InstructionNum::PushI8 => Instruction::PushI8(pop_bytes!(i8, &mut ptr)),
+                InstructionNum::PushI16 => Instruction::PushI16(pop_bytes!(i16, &mut ptr)),
+                InstructionNum::PushI32 => Instruction::PushI32(pop_bytes!(i32, &mut ptr)),
+                InstructionNum::PushI64 => Instruction::PushI64(pop_bytes!(i64, &mut ptr)),
+                InstructionNum::PushU => Instruction::PushU(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::PushU8 => Instruction::PushU8(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::PushU16 => Instruction::PushU16(pop_bytes!(u16, &mut ptr)),
+                InstructionNum::PushU32 => Instruction::PushU32(pop_bytes!(u32, &mut ptr)),
+                InstructionNum::PushU64 => Instruction::PushU64(pop_bytes!(u64, &mut ptr)),
+                InstructionNum::SliceAppend => {
+                    Instruction::SliceAppend(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::SliceIndexGet => {
+                    Instruction::SliceIndexGet(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::SliceIndexSet => {
+                    Instruction::SliceIndexSet(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::Increment => Instruction::Increment(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::Copy => Instruction::Copy(
+                    pop_bytes!(usize, &mut ptr),
+                    pop_bytes!(usize, &mut ptr),
+                    pop_bytes!(usize, &mut ptr),
+                ),
+                InstructionNum::Shift => {
+                    Instruction::Shift(pop_bytes!(usize, &mut ptr), pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::Reset => Instruction::Reset(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::PushSliceNewLen => {
+                    Instruction::PushSliceNewLen(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::PushClosure => Instruction::PushClosure(
+                    pop_bytes!(usize, &mut ptr),
+                    pop_bytes!(usize, &mut ptr),
+                ),
+                InstructionNum::PushStaticString => {
+                    Instruction::PushStaticString(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::AddI => Instruction::AddI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::MinusI => Instruction::MinusI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::MulI => Instruction::MulI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::DivI => Instruction::DivI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::ModI => Instruction::ModI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::AddU => Instruction::AddU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::MinusU => Instruction::MinusU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::MulU => Instruction::MulU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::DivU => Instruction::DivU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::ModU => Instruction::ModU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::JumpAndLink => {
+                    Instruction::JumpAndLink(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::Jump => Instruction::Jump(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::JumpIfTrue => Instruction::JumpIfTrue(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::JumpIfFalse => {
+                    Instruction::JumpIfFalse(pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::CompareEq => Instruction::CompareEq(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::CompareGtI => Instruction::CompareGtI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::CompareLtI => Instruction::CompareLtI(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::CompareGtU => Instruction::CompareGtU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::CompareLtU => Instruction::CompareLtU(pop_bytes!(u8, &mut ptr)),
+                InstructionNum::CastUint => {
+                    Instruction::CastUint(pop_bytes!(u8, &mut ptr), pop_bytes!(u8, &mut ptr))
+                }
+                InstructionNum::CastInt => {
+                    Instruction::CastInt(pop_bytes!(u8, &mut ptr), pop_bytes!(u8, &mut ptr))
+                }
+                InstructionNum::Offset => Instruction::Offset(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::Alloc => {
+                    Instruction::Alloc(pop_bytes!(usize, &mut ptr), pop_bytes!(usize, &mut ptr))
+                }
+                InstructionNum::Deref => Instruction::Deref(pop_bytes!(usize, &mut ptr)),
+                InstructionNum::DerefAssign => {
+                    Instruction::DerefAssign(pop_bytes!(usize, &mut ptr))
+                }
+            });
+        }
+
+        Self(instructions)
+    }
+
+    pub unsafe fn to_binary(self) -> Vec<u8> {
+        let mut binary = Vec::<u8>::new();
+
+        push_bytes!(binary, self.0.len());
+
+        for v in self.0 {
+            binary.push(v.to_num().to_u8());
+            match v {
+                Instruction::FfiCreate
+                | Instruction::FfiDllOpen
+                | Instruction::FfiCall
+                | Instruction::And
+                | Instruction::Or
+                | Instruction::PushSlice
+                | Instruction::AddString
+                | Instruction::Exit
+                | Instruction::Debug
+                | Instruction::Return
+                | Instruction::JumpAndLinkClosure
+                | Instruction::CompareEqString
+                | Instruction::CastSlicePtr
+                | Instruction::NegateBool
+                | Instruction::SliceLen => {
+                    // no args
+                }
+
+                Instruction::PushI(v) => push_bytes!(binary, v),
+                Instruction::PushI8(v) => push_bytes!(binary, v),
+                Instruction::PushI16(v) => push_bytes!(binary, v),
+                Instruction::PushI32(v) => push_bytes!(binary, v),
+                Instruction::PushI64(v) => push_bytes!(binary, v),
+                Instruction::PushU(v) => push_bytes!(binary, v),
+                Instruction::PushU8(v) => push_bytes!(binary, v),
+                Instruction::PushU16(v) => push_bytes!(binary, v),
+                Instruction::PushU32(v) => push_bytes!(binary, v),
+                Instruction::PushU64(v) => push_bytes!(binary, v),
+
+                Instruction::AddI(v)
+                | Instruction::MinusI(v)
+                | Instruction::MulI(v)
+                | Instruction::DivI(v)
+                | Instruction::ModI(v)
+                | Instruction::AddU(v)
+                | Instruction::MinusU(v)
+                | Instruction::MulU(v)
+                | Instruction::DivU(v)
+                | Instruction::CompareEq(v)
+                | Instruction::CompareGtI(v)
+                | Instruction::CompareLtI(v)
+                | Instruction::CompareGtU(v)
+                | Instruction::CompareLtU(v)
+                | Instruction::ModU(v) => push_bytes!(binary, v),
+
+                Instruction::SliceAppend(v)
+                | Instruction::SliceIndexGet(v)
+                | Instruction::SliceIndexSet(v)
+                | Instruction::Reset(v)
+                | Instruction::PushSliceNewLen(v)
+                | Instruction::PushStaticString(v)
+                | Instruction::JumpAndLink(v)
+                | Instruction::Jump(v)
+                | Instruction::JumpIfTrue(v)
+                | Instruction::JumpIfFalse(v)
+                | Instruction::Offset(v)
+                | Instruction::Deref(v)
+                | Instruction::DerefAssign(v)
+                | Instruction::Increment(v) => push_bytes!(binary, v),
+
+                Instruction::CastUint(v1, v2) | Instruction::CastInt(v1, v2) => {
+                    push_bytes!(binary, v1, v2);
+                }
+
+                Instruction::Shift(v1, v2)
+                | Instruction::PushClosure(v1, v2)
+                | Instruction::Alloc(v1, v2) => {
+                    push_bytes!(binary, v1, v2);
+                }
+
+                Instruction::Copy(v1, v2, v3) => {
+                    push_bytes!(binary, v1, v2, v3);
+                }
+            }
+        }
+
+        binary
+    }
 }
 
 pub struct Stack {
@@ -496,6 +784,19 @@ impl StaticMemory {
         self.data.extend_from_slice(val);
         old_len
     }
+
+    pub unsafe fn from_binary(mut ptr: *const u8, len: usize) -> Self {
+        let mut data = Vec::<u8>::with_capacity(len);
+        for _ in 0..len {
+            data.push(*ptr);
+            ptr = ptr.byte_offset(1);
+        }
+        Self { data }
+    }
+
+    pub fn get_data(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 #[derive(Debug)]
@@ -638,6 +939,76 @@ unsafe fn cstring_ptr_to_string(mut ptr: *const u8) -> Result<String> {
         ptr = ptr.byte_offset(1);
     }
     Ok(CString::new(vec)?.into_string()?)
+}
+
+#[repr(u8)]
+enum InstructionNum {
+    FfiCreate,
+    FfiDllOpen,
+    FfiCall,
+    SliceLen,
+    SliceAppend,
+    SliceIndexGet,
+    SliceIndexSet,
+    Increment,
+    Copy,
+    Shift,
+    Reset,
+    PushI,
+    PushI8,
+    PushI16,
+    PushI32,
+    PushI64,
+    PushU,
+    PushU8,
+    PushU16,
+    PushU32,
+    PushU64,
+    PushSlice,
+    PushSliceNewLen,
+    PushClosure,
+    PushStaticString,
+    AddString,
+    AddI,
+    MinusI,
+    MulI,
+    DivI,
+    ModI,
+    AddU,
+    MinusU,
+    MulU,
+    DivU,
+    ModU,
+    Exit,
+    Debug,
+    JumpAndLink,
+    JumpAndLinkClosure,
+    Jump,
+    Return,
+    JumpIfTrue,
+    JumpIfFalse,
+    NegateBool,
+    And,
+    Or,
+    CompareEq,
+    CompareEqString,
+    CompareGtI,
+    CompareLtI,
+    CompareGtU,
+    CompareLtU,
+    CastSlicePtr,
+    CastUint,
+    CastInt,
+    Offset,
+    Alloc,
+    Deref,
+    DerefAssign,
+}
+
+impl InstructionNum {
+    fn to_u8(self) -> u8 {
+        unsafe { mem::transmute(self) }
+    }
 }
 
 pub struct Vm {

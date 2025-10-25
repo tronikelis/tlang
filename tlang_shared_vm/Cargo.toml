@@ -1,0 +1,12 @@
+[package]
+name = "tlang_shared_vm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tlang_shared_vm"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+libc = "0.2.174"
+tlang = { path = "../tlang" }
