@@ -1,4 +1,4 @@
-int tlang_run_vm(const void* instructions, const void* static_memory,
+int tlang_run_vm(const char* instructions, const char* static_memory,
                  const int static_memory_len);
 
 extern const char instructions[];
