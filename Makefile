@@ -19,7 +19,7 @@ std/main.so: std/main.c
 
 .PHONY: test_tlang_lib
 test_tlang_lib:
-	cd tlang && cargo test
+	export RUSTFLAGS=-Awarnings && cd tlang && cargo test
 
 .PHONY: test
 test: test_tlang_lib
