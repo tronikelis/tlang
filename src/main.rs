@@ -1,10 +1,6 @@
-mod vm;
+use tlang::{ast, compiler, ir, lexer, linker, vm};
 
-mod ast;
-mod compiler;
-mod ir;
-mod lexer;
-mod linker;
+mod cgen;
 
 fn main() {
     let code = String::from(
@@ -55,6 +51,7 @@ fn main() {
                 }
 
                 fn main() void {
+                    std_write(1, \"sup from binary\\n\" as uint8[])
                     let socket int32 = std_tcp_listen(\"127.0.0.1\", 8080)
                     let conn TcpConn = std_tcp_accept(socket)
                     for {
@@ -82,5 +79,26 @@ fn main() {
     let linked_with_index = linked.iter().enumerate().collect::<Vec<_>>();
     println!("{linked_with_index:#?}");
 
-    vm::Vm::new(linked, compiled.static_memory).run();
+    let static_memory_len = compiled.static_memory.data.len();
+
+    cgen::gen_instructions_c_file(
+        vm::Instructions::new(linked),
+        "./build/instructions.c",
+        "instructions",
+    )
+    .unwrap();
+
+    cgen::gen_static_memory_c_file(
+        compiled.static_memory,
+        "./build/static_memory.c",
+        "static_memory",
+    )
+    .unwrap();
+
+    cgen::gen_static_memory_len_c_file(
+        static_memory_len,
+        "./build/static_memory_len.c",
+        "static_memory_len",
+    )
+    .unwrap();
 }

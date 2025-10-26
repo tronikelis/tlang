@@ -1,5 +1,7 @@
-/target
 *.so
+*.out
 compile_commands.json
-/.cache
+.cache
+target/
+build/
 
