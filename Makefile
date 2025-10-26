@@ -17,6 +17,13 @@ build: vm cgen
 std/main.so: std/main.c
 	clang -shared -o std/main.so std/main.c
 
+.PHONY: test_tlang_lib
+test_tlang_lib:
+	cd tlang && cargo test
+
+.PHONY: test
+test: test_tlang_lib
+
 .PHONY: clean
 clean:
 	rm -rf std/*.so
