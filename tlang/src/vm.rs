@@ -766,7 +766,7 @@ impl Stack {
 
 #[derive(Debug, Clone)]
 pub struct StaticMemory {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 impl StaticMemory {
