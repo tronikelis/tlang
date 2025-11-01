@@ -65,7 +65,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tlang_bin"
+name = "tlangc"
 version = "0.1.0"
 dependencies = [
  "anyhow",

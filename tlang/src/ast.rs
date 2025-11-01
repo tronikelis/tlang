@@ -1025,8 +1025,8 @@ impl<'a> TokenParser<'a> {
                     lexer::Token::POpen => {
                         left = Expression::Call(Box::new(self.parse_call(left)?));
                     }
-                    lexer::Token::COpen => {
-                        if let Expression::Type(_type) = left {
+                    lexer::Token::COpen => match left {
+                        Expression::Type(_type) => {
                             // variants:
                             // struct init
                             // slice init
@@ -1057,8 +1057,10 @@ impl<'a> TokenParser<'a> {
                                     ))
                                 }
                             }
-                        };
-                    }
+                        }
+                        _ => break,
+                    },
+
                     lexer::Token::Dot => {
                         self.iter.next();
                         let lexer::Token::Identifier(identifier) = self.iter.peek_err(0)?.clone()
