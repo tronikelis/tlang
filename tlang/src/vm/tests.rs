@@ -77,7 +77,6 @@ impl StackBuilder {
 }
 
 const BUILTIN: &str = r"
-    fn libc_write(fd int, slice uint8[]) int {}
     fn len(slice Type) int {}
     fn append(slice Type, value Type) void {}
     fn new(typ Type, args Type...) Type {}
@@ -120,11 +119,10 @@ fn simple_fn() -> Result<()> {
         vec![
             Instruction::PushI(25),
             Instruction::PushI(20),
-            Instruction::JumpAndLink(13),
+            Instruction::JumpAndLink(12),
             Instruction::Reset(8),
             Instruction::Reset(8),
             Instruction::Exit,
-            Instruction::Return,
             Instruction::Return,
             Instruction::Return,
             Instruction::Return,
@@ -193,7 +191,6 @@ fn dot_access() -> Result<()> {
             Instruction::Return,
             Instruction::Return,
             Instruction::Return,
-            Instruction::Return,
         ],
         compile_test_code(&code)?
     );
@@ -226,7 +223,6 @@ fn fn_call() -> Result<()> {
             Instruction::Reset(16,),
             Instruction::Debug,
             Instruction::Exit,
-            Instruction::Return,
             Instruction::Return,
             Instruction::Return,
             Instruction::Return,
@@ -304,7 +300,6 @@ fn fn_call_dot_access() -> Result<()> {
             Instruction::Return,
             Instruction::Return,
             Instruction::Return,
-            Instruction::Return,
         ],
         compile_test_code(&code)?
     );
@@ -359,7 +354,6 @@ fn builtin_slice_new() -> Result<()> {
             Instruction::Debug,
             Instruction::Reset(40,),
             Instruction::Exit,
-            Instruction::Return,
             Instruction::Return,
             Instruction::Return,
             Instruction::Return,

@@ -1,10 +1,10 @@
 [package]
-name = "tlang_shared_vm"
+name = "tlang_static_vm"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "tlang_shared_vm"
+name = "tlang_static_vm"
 crate-type = ["staticlib"]
 
 [dependencies]

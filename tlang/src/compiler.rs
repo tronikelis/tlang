@@ -1848,7 +1848,8 @@ impl<'a, 'b> ExpressionCompiler<'a, 'b> {
                     ir::TypeBuiltin::Ptr => {
                         self.instructions.instr_cast_slice_ptr();
                     }
-                    _ => return Err(anyhow!("compile_type_cast: cant cast")),
+                    ir::TypeBuiltin::String => {}
+                    _ => return Err(anyhow!("compile_type_cast: cant cast, {builtin_dest:#?}")),
                 },
                 _ => return Err(anyhow!("compile_type_cast: cant cast")),
             },
