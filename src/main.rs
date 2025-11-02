@@ -5,7 +5,6 @@ use tlang::{ast, compiler, ir, lexer, linker, vm};
 mod cgen;
 
 const STD_FUNCTIONS: &str = r#"
-    fn libc_write(fd int, slice uint8[]) int {}
     fn len(slice Type) int {}
     fn append(slice Type, value Type) void {}
     fn new(typ Type, args Type...) Type {}
