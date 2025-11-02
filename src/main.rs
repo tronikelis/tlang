@@ -1,8 +1,42 @@
+use anyhow::Result;
 use std::{env, fs, process};
 
 use tlang::{ast, compiler, ir, lexer, linker, vm};
 
 mod cgen;
+
+#[derive(Debug)]
+struct TmpDir {
+    pub path: String,
+}
+
+impl TmpDir {
+    fn new() -> Result<Self> {
+        let mut buffer: [u8; 16] = [0; 16];
+        rand::fill(&mut buffer);
+
+        let hex =
+            buffer
+                .iter()
+                .map(|v| format!("{:02X}", v))
+                .fold(String::new(), |mut acc, curr| {
+                    acc.push_str(&curr);
+                    return acc;
+                });
+
+        let path = format!("/tmp/{hex}");
+
+        fs::create_dir(&path)?;
+
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 
 const STD_FUNCTIONS: &str = r#"
     fn len(slice Type) int {}
@@ -65,24 +99,26 @@ fn main() {
     let static_memory_len = compiled.static_memory.data.len();
     let linked = linker::link(compiled.functions).unwrap();
 
+    let tmp_dir = TmpDir::new().unwrap();
+
     println!("cgen");
     cgen::gen_instructions_c_file(
         vm::Instructions::new(linked),
-        &format!("{lib_dir}/instructions.c"),
+        &format!("{}/instructions.c", tmp_dir.path),
         "instructions",
     )
     .unwrap();
 
     cgen::gen_static_memory_c_file(
         compiled.static_memory,
-        &format!("{lib_dir}/static_memory.c"),
+        &format!("{}/static_memory.c", tmp_dir.path),
         "static_memory",
     )
     .unwrap();
 
     cgen::gen_static_memory_len_c_file(
         static_memory_len,
-        &format!("{lib_dir}/static_memory_len.c"),
+        &format!("{}/static_memory_len.c", tmp_dir.path),
         "static_memory_len",
     )
     .unwrap();
@@ -91,10 +127,10 @@ fn main() {
     let clang = process::Command::new("clang")
         .current_dir(lib_dir)
         .args([
+            &format!("{}/instructions.c", tmp_dir.path),
+            &format!("{}/static_memory.c", tmp_dir.path),
+            &format!("{}/static_memory_len.c", tmp_dir.path),
             "run.c",
-            "instructions.c",
-            "static_memory.c",
-            "static_memory_len.c",
             "vm.a",
             "-o",
             &out_file,
