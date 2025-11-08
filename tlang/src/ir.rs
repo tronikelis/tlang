@@ -870,10 +870,9 @@ impl Expression {
                 _ => Err(anyhow!("deref non address type")),
             },
             Self::Address(expression) => Ok(Type::create_address(expression._type(variables)?)),
-            // only INT can add for now
-            Self::Arithmetic(_arithmetic) => Ok(INT.clone()),
+            Self::Arithmetic(arithmetic) => arithmetic.left._type(variables),
             Self::AndOr(_and_or) => Ok(BOOL.clone()),
-            Self::Infix(_infix) => Ok(INT.clone()),
+            Self::Infix(infix) => infix.expression._type(variables),
             Self::Negate(_expression) => Ok(BOOL.clone()),
             Self::Function(exp_function) => Ok(exp_function._type.clone()),
             Self::ToClosure(expression) => {
@@ -1473,19 +1472,17 @@ impl<'a> IrParser<'a> {
         &mut self,
         declaration: &ast::VariableDeclaration,
     ) -> Result<VariableDeclaration> {
-        let expression = self.get_expression(
-            &declaration.expression,
-            declaration
-                ._type
-                .as_ref()
-                .map(|v| self.type_resolver.resolve(v))
-                .transpose()?
-                .as_ref(),
-        )?;
+        let expected_type = declaration
+            ._type
+            .as_ref()
+            .map(|v| self.type_resolver.resolve(v))
+            .transpose()?;
+
+        let expression = self.get_expression(&declaration.expression, expected_type.as_ref())?;
 
         let variable = Rc::new(RefCell::new(Variable {
             identifier: declaration.identifier.clone(),
-            _type: expression._type(&self.variables)?,
+            _type: expected_type.unwrap_or(expression._type(&self.variables)?),
         }));
         self.variables
             .stack
