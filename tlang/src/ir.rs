@@ -3,6 +3,65 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{ast, lexer};
 
+macro_rules! type_manual_match {
+    (
+        $a_exp:expr => $a_path:path => $aa_path:path,
+        $b_exp:expr => any,
+        $action:stmt
+     ) => {{
+        if let $a_path(v) = &$a_exp {
+            if let $aa_path = v {
+                $action
+            }
+        }
+        if let $a_path(v) = &$b_exp {
+            if let $aa_path = v {
+                $action
+            }
+        }
+    }};
+    (
+        $a_exp:expr => $a_path:path => $aa_path:path,
+        $b_exp:expr => $bb_path:path,
+        $action:stmt
+     ) => {{
+        if let $a_path(v) = &$a_exp {
+            if let $aa_path = v {
+                if let $bb_path = &$b_exp {
+                    $action
+                }
+            }
+        }
+        if let $a_path(v) = &$b_exp {
+            if let $aa_path = v {
+                if let $bb_path = &$a_exp {
+                    $action
+                }
+            }
+        }
+    }};
+    (
+        $a_exp:expr => $a_path:path => $aa_path:path,
+        $b_exp:expr => $bb_path:path[],
+        $action:stmt
+     ) => {{
+        if let $a_path(v) = &$a_exp {
+            if let $aa_path = v {
+                if let $bb_path(_) = &$b_exp {
+                    $action
+                }
+            }
+        }
+        if let $a_path(v) = &$b_exp {
+            if let $aa_path = v {
+                if let $bb_path(_) = &$a_exp {
+                    $action
+                }
+            }
+        }
+    }};
+}
+
 pub fn align(alignment: usize, stack_size: usize) -> usize {
     if alignment == 0 || stack_size == 0 {
         0
@@ -623,45 +682,32 @@ impl Type {
     }
 
     pub fn equals(&self, other: &Self) -> bool {
-        // this actually should be reverse:
-        // must_equal() { match self.equals() { true => Ok, false => Err } }
-        //
-        self.must_equal(other).is_ok()
+        type_manual_match!(
+            self._type => TypeType::Builtin => TypeBuiltin::Nil,
+            other._type => TypeType::Address[],
+            return true
+        );
+        type_manual_match!(
+            self._type => TypeType::Builtin => TypeBuiltin::Ptr,
+            other._type => TypeType::Address[],
+            return true
+        );
+        type_manual_match!(
+            self._type => TypeType::Builtin => TypeBuiltin::CompilerType,
+            other._type => any,
+            return true
+        );
+
+        self.id() == other.id()
     }
 
     pub fn must_equal(&self, other: &Self) -> Result<()> {
-        // todo: need a better way to do this, also the other way around
-        if let TypeType::Builtin(builtin) = &self._type {
-            if let TypeBuiltin::Nil = builtin {
-                if let TypeType::Address(_) = &other._type {
-                    return Ok(());
-                }
-            }
-        }
-
-        // todo: need a better way to do this
-        if let TypeType::Builtin(builtin) = &self._type {
-            if let TypeBuiltin::Ptr = builtin {
-                if let TypeType::Address(_) = &other._type {
-                    return Ok(());
-                }
-            }
-        }
-        if let TypeType::Address(_) = &self._type {
-            if let TypeType::Builtin(builtin) = &other._type {
-                if let TypeBuiltin::Ptr = builtin {
-                    return Ok(());
-                }
-            }
-        }
-
-        let s_id = self.id();
-        let o_id = other.id();
-
-        match s_id == o_id {
+        match self.equals(other) {
             true => Ok(()),
             false => Err(anyhow!(
-                "equals: {self:#?} != {other:#?}, id {s_id} != {o_id}"
+                "equals: {self:#?} != {other:#?}, id {} != {}",
+                self.id(),
+                other.id(),
             )),
         }
     }
@@ -824,10 +870,9 @@ impl Expression {
                 _ => Err(anyhow!("deref non address type")),
             },
             Self::Address(expression) => Ok(Type::create_address(expression._type(variables)?)),
-            // only INT can add for now
-            Self::Arithmetic(_arithmetic) => Ok(INT.clone()),
+            Self::Arithmetic(arithmetic) => arithmetic.left._type(variables),
             Self::AndOr(_and_or) => Ok(BOOL.clone()),
-            Self::Infix(_infix) => Ok(INT.clone()),
+            Self::Infix(infix) => infix.expression._type(variables),
             Self::Negate(_expression) => Ok(BOOL.clone()),
             Self::Function(exp_function) => Ok(exp_function._type.clone()),
             Self::ToClosure(expression) => {
@@ -1427,19 +1472,25 @@ impl<'a> IrParser<'a> {
         &mut self,
         declaration: &ast::VariableDeclaration,
     ) -> Result<VariableDeclaration> {
-        let variable = Rc::new(RefCell::new(Variable::from_ast(
-            &declaration.variable,
-            &self.type_resolver,
-        )?));
+        let expected_type = declaration
+            ._type
+            .as_ref()
+            .map(|v| self.type_resolver.resolve(v))
+            .transpose()?;
+
+        let expression = self.get_expression(&declaration.expression, expected_type.as_ref())?;
+
+        let variable = Rc::new(RefCell::new(Variable {
+            identifier: declaration.identifier.clone(),
+            _type: expected_type.unwrap_or(expression._type(&self.variables)?),
+        }));
         self.variables
             .stack
             .push(VariableItem::Variable(variable.clone()));
 
-        let expected_type = variable.borrow()._type.clone();
-
         Ok(VariableDeclaration {
             variable,
-            expression: self.get_expression(&declaration.expression, Some(&expected_type))?,
+            expression,
         })
     }
 

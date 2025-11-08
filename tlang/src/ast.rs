@@ -5,7 +5,8 @@ use crate::lexer;
 
 #[derive(Debug, Clone)]
 pub struct VariableDeclaration {
-    pub variable: Variable,
+    pub _type: Option<Type>,
+    pub identifier: String,
     pub expression: Expression,
 }
 
@@ -1149,7 +1150,10 @@ impl<'a> TokenParser<'a> {
 
         let identifier = self.parse_identifier()?;
 
-        let _type = self.parse_type()?;
+        let _type = match self.iter.peek_err(0)? {
+            lexer::Token::Equals => None,
+            _ => Some(self.parse_type()?),
+        };
 
         self.iter.expect(lexer::Token::Equals)?;
         self.iter.next();
@@ -1157,7 +1161,8 @@ impl<'a> TokenParser<'a> {
         let expression = self.parse_expression()?;
 
         Ok(VariableDeclaration {
-            variable: Variable { identifier, _type },
+            _type,
+            identifier,
             expression,
         })
     }
