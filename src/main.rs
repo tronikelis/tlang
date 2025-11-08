@@ -97,6 +97,7 @@ fn main() {
     println!("compiling");
     let compiled = compiler::compile(ir).unwrap();
     let static_memory_len = compiled.static_memory.data.len();
+    println!("linking");
     let linked = linker::link(compiled.functions).unwrap();
 
     let tmp_dir = TmpDir::new().unwrap();
@@ -123,7 +124,7 @@ fn main() {
     )
     .unwrap();
 
-    println!("linking with clang");
+    println!("building binary with clang");
     let clang = process::Command::new("clang")
         .current_dir(lib_dir)
         .args([
